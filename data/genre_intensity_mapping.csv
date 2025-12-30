@@ -1,0 +1,769 @@
+#,meta-genre,genre,intensity clustering
+1,7,opera,0.65
+2,7,choral,0.5995
+3,7,chamber music,0.5495
+4,1,psytrance,0.8195
+5,2,rockabilly,0.18
+6,2,black metal,0.9495
+7,13,avant-garde,0.85
+8,9,bhajan,0.25
+9,3,traditional music,0.2
+10,12,dancehall,0.3495
+11,12,riddim,0.7
+12,1,progressive house,0.4795
+13,9,devotional,0.3
+14,1,afro house,0.419
+15,1,drum and bass,0.746
+16,1,breakbeat,0.6195
+17,2,hardcore punk,0.878
+18,3,celtic,0.3
+19,13,experimental,0.9
+20,9,christian hip hop,0.5495
+21,1,tech house,0.4495
+22,1,amapiano,0.379
+23,1,hard techno,0.799
+24,2,death metal,0.97
+25,1,hardcore,0.8485
+26,4,tango,0.2495
+27,1,trance,0.5995
+28,1,minimal techno,0.6785
+29,6,hyperpop,0.72
+30,5,underground hip hop,0.646
+31,2,sludge metal,0.92
+32,9,gospel,0.2
+33,1,jungle,0.73
+34,1,progressive trance,0.645
+35,2,industrial,0.8695
+36,3,polka,0.15
+37,4,flamenco,0.298
+38,2,progressive rock,0.5195
+39,13,drone,0.92
+40,1,ambient,0.12
+41,2,shoegaze,0.579
+42,2,doom metal,0.8985
+43,1,melodic techno,0.548
+44,13,lullaby,0.099
+45,2,stoner rock,0.746
+46,2,grindcore,0.98
+47,1,synthwave,0.348
+48,2,post-punk,0.619
+49,2,post-rock,0.5
+50,1,organic house,0.2995
+51,1,darkwave,0.3995
+52,1,ebm,0.7785
+53,6,schlager,0.18
+54,13,comedy,0.0495
+55,4,forró,0.395
+56,6,c-pop,0.442
+57,6,vocaloid,0.68
+58,5,j-rap,0.745
+59,1,dubstep,0.719
+60,2,deathcore,0.96
+61,4,zouk,0.3475
+62,2,power pop,0.22
+63,12,dub,0.4995
+64,10,bluegrass,0.2495
+65,1,melodic house,0.4005
+66,1,dark ambient,0.2
+67,8,big band,0.3
+68,12,ska,0.1995
+69,12,soca,0.45
+70,1,idm,0.8495
+71,2,progressive metal,0.778
+72,7,neoclassical,0.699
+73,1,dub techno,0.578
+74,4,cumbia,0.497
+75,8,free jazz,0.82
+76,3,raï,0.3975
+77,1,acid techno,0.83
+78,2,space rock,0.5475
+79,5,drill,0.878
+80,8,latin jazz,0.6495
+81,1,cold wave,0.38
+82,4,bolero,0.2
+83,8,ragtime,0.15
+84,1,nu disco,0.32
+85,3,medieval,0.348
+86,13,lo-fi,0.149
+87,3,dangdut,0.4975
+88,5,boom bap,0.349
+89,13,spoken word,0.8
+90,1,italo disco,0.279
+91,2,thrash metal,0.8165
+92,12,ragga,0.5995
+93,3,kizomba,0.2495
+94,2,metalcore,0.847
+95,1,liquid funk,0.646
+96,13,children's music,0.08
+97,2,garage rock,0.4485
+98,1,italo dance,0.3005
+99,6,mandopop,0.417
+100,2,math rock,0.679
+101,2,blues rock,0.3795
+102,1,indie dance,0.519
+103,4,dembow,0.7455
+104,8,blues,0.35
+105,2,psychobilly,0.6965
+106,1,tribal house,0.499
+107,3,malay,0.5475
+108,8,jazz fusion,0.749
+109,1,gabber,0.919
+110,1,hard house,0.7795
+111,9,ccm,0.3995
+112,4,brega,0.546
+113,1,gqom,0.8
+114,2,screamo,0.8995
+115,4,latin house,0.596
+116,6,swedish ballads,0.22
+117,1,speedcore,0.98
+118,4,latin hip hop,0.6965
+119,7,minimalism,0.7495
+120,6,v-pop,0.474
+121,2,post-hardcore,0.798
+122,9,african gospel,0.349
+123,1,breakcore,0.95
+124,1,uk garage,0.549
+125,3,bhangra,0.5935
+126,2,noise rock,0.779
+127,5,lo-fi beats,0.25
+128,11,doo-wop,0.15
+129,3,gufeng,0.6425
+130,1,downtempo,0.18
+131,3,chanson,0.3985
+132,2,melodic hardcore,0.8295
+133,1,future bass,0.647
+134,10,singer-songwriter,0.2985
+135,1,tekno,0.87
+136,12,rocksteady,0.3995
+137,3,afrobeat,0.6965
+138,8,smooth jazz,0.2495
+139,1,hardstyle,0.879
+140,3,russelåter,0.28
+141,1,deep house,0.349
+142,2,skate punk,0.8175
+143,2,ska punk,0.747
+144,4,brazilian hip hop,0.7195
+145,6,thai pop,0.378
+146,4,samba,0.299
+147,13,lounge,0.15
+148,2,melodic death metal,0.879
+149,1,funky house,0.381
+150,6,kayokyoku,0.319
+151,7,orchestra,0.7505
+152,6,synthpop,0.418
+153,8,vocal jazz,0.2
+154,2,surf rock,0.2495
+155,13,new age,0.18
+156,9,christian rock,0.5995
+157,2,j-rock,0.58
+158,8,nu jazz,0.68
+159,2,speed metal,0.848
+160,6,anime,0.4945
+161,2,midwest emo,0.644
+162,8,swing music,0.22
+163,5,turkish hip hop,0.777
+164,12,reggae,0.25
+165,7,classical piano,0.6005
+166,6,opm,0.475
+167,12,roots reggae,0.3
+168,1,bass house,0.72
+169,13,exotica,0.1
+170,2,djent,0.9005
+171,1,acid house,0.52
+172,5,phonk,0.817
+173,9,gregorian chant,0.4005
+174,7,requiem,0.68
+175,4,brazilian trap,0.7985
+176,4,salsa,0.442
+177,1,trip hop,0.25
+178,2,album rock,0.3495
+179,6,turkish pop,0.419
+180,2,power metal,0.748
+181,10,americana,0.347
+182,12,calypso,0.2005
+183,1,bass music,0.7805
+184,3,arabesk,0.6435
+185,10,folk,0.2995
+186,11,northern soul,0.4475
+187,4,corrido,0.645
+188,2,nu metal,0.7195
+189,1,glitch,0.88
+190,1,frenchcore,0.96
+191,5,horrorcore,0.9185
+192,4,mexican hip hop,0.7465
+193,3,afropop,0.5945
+194,5,chinese hip hop,0.7185
+195,2,psychedelic rock,0.62
+196,5,dark trap,0.847
+197,4,norteño,0.547
+198,3,afrobeats,0.6445
+199,3,kuduro,0.78
+200,2,deathrock,0.8305
+201,1,happy hardcore,0.747
+202,3,indian indie,0.58
+203,2,arena rock,0.399
+204,4,nova mpb,0.3795
+205,1,future house,0.5
+206,1,vaporwave,0.4505
+207,7,classical,0.5505
+208,1,bassline,0.801
+209,6,iskelmä,0.2
+210,1,hi-nrg,0.35
+211,4,brega funk,0.6795
+212,3,highlife,0.4985
+213,4,cumbia sonidera,0.597
+214,9,sufi,0.498
+215,5,k-rap,0.818
+216,5,freestyle,0.399
+217,9,cedm,0.649
+218,6,k-ballad,0.28
+219,1,big room,0.648
+220,1,lo-fi house,0.28
+221,5,desi hip hop,0.778
+222,4,bossa nova,0.2505
+223,1,techno,0.6985
+224,13,musicals,0.2495
+225,2,dream pop,0.4495
+226,9,christian country,0.449
+227,4,son cubano,0.3485
+228,3,laïko,0.448
+229,4,guaracha,0.498
+230,12,lovers rock,0.3505
+231,4,piseiro,0.6975
+232,6,finnish pop,0.32
+233,10,folk punk,0.7485
+234,2,krautrock,0.645
+235,3,oyun havasi,0.5955
+236,3,huayno,0.3995
+237,10,alt country,0.498
+238,6,schlagerparty,0.2495
+239,5,grime,0.848
+240,3,japanese indie,0.5485
+241,6,t-pop,0.443
+242,3,luk thung,0.4995
+243,1,disco house,0.42
+244,1,chicago house,0.4805
+245,6,indonesian pop,0.397
+246,9,gospel r&b,0.38
+247,5,g-funk,0.35
+248,8,jazz,0.4995
+249,3,enka,0.349
+250,1,deathstep,0.92
+251,4,latin indie,0.598
+252,10,country blues,0.4485
+253,8,jazz funk,0.6505
+254,9,qawwali,0.6005
+255,6,french pop,0.379
+256,1,witch house,0.8205
+257,2,melodic metal,0.799
+258,8,brazilian jazz,0.6985
+259,3,manele,0.7475
+260,1,eurodance,0.351
+261,4,mambo,0.396
+262,4,timba,0.548
+263,4,merengue,0.3
+264,2,symphonic metal,0.8185
+265,2,finnish rock,0.598
+266,9,pentecostal,0.499
+267,4,funk carioca,0.8195
+268,8,jazz beats,0.5495
+269,2,slowcore,0.5205
+270,5,miami bass,0.746
+271,1,chillwave,0.22
+272,5,german hip hop,0.779
+273,9,southern gospel,0.32
+274,2,pop punk,0.68
+275,4,tejano,0.443
+276,3,fado,0.4005
+277,5,finnish hip hop,0.7195
+278,5,drift phonk,0.879
+279,4,folklore argentino,0.3495
+280,2,punk,0.8
+281,5,emo rap,0.7205
+282,5,jazz rap,0.5995
+283,10,neofolk,0.6495
+284,5,portuguese hip hop,0.747
+285,2,gothic metal,0.8705
+286,5,pinoy hip hop,0.78
+287,1,hardcore techno,0.881
+288,3,rumba congolaise,0.5495
+289,9,worship,0.45
+290,4,mariachi,0.397
+291,9,christian,0.5
+292,10,dansband,0.348
+293,1,jazz house,0.579
+294,11,afro soul,0.646
+295,8,acid jazz,0.6
+296,1,space music,0.15
+297,1,electro house,0.6205
+298,4,bachata,0.3805
+299,2,brazilian rock,0.646
+300,10,indie folk,0.398
+301,1,moombahton,0.6795
+302,6,marathi pop,0.476
+303,8,boogie-woogie,0.2505
+304,4,vallenato,0.499
+305,6,kannada pop,0.42
+306,1,footwork,0.8505
+307,6,tamil pop,0.444
+308,6,cantopop,0.398
+309,5,uk drill,0.8995
+310,4,chicha,0.646
+311,2,argentine rock,0.621
+312,3,khaleeji,0.6975
+313,6,city pop,0.3485
+314,3,entehno,0.449
+315,3,sea shanties,0.2505
+316,1,drumstep,0.7815
+317,9,sholawat,0.35
+318,13,private school piano,0.1995
+319,2,groove metal,0.78
+320,4,pagode,0.3505
+321,2,folk metal,0.8195
+322,4,tropical music,0.444
+323,2,jangle pop,0.4195
+324,6,malayalam pop,0.477
+325,1,g-house,0.6805
+326,4,rkt,0.7475
+327,6,german pop,0.38
+328,2,industrial metal,0.9015
+329,4,seresta,0.301
+330,9,brazilian evangelical music,0.5505
+331,8,french jazz,0.6995
+332,10,gothic country,0.7495
+333,6,taiwanese pop,0.421
+334,3,ghazal,0.5965
+335,9,christian pop,0.48
+336,2,rap metal,0.88
+337,5,norwegian hip hop,0.7215
+338,6,shibuya-kei,0.5485
+339,4,ranchera,0.3515
+340,5,memphis rap,0.4
+341,1,slap house,0.58
+342,3,chinese indie,0.6455
+343,6,telugu pop,0.445
+344,4,trova,0.398
+345,4,cha cha cha,0.302
+346,6,j-pop,0.5495
+347,1,jersey club,0.748
+348,3,hindi indie,0.5975
+349,4,arrocha,0.647
+350,4,sierreño,0.648
+351,8,hard bop,0.75
+352,8,bebop,0.8
+353,11,chinese r&b,0.647
+354,4,cumbia norteña,0.599
+355,2,emocore,0.849
+356,3,shatta,0.6985
+357,5,cloud rap,0.647
+358,2,southern rock,0.4505
+359,2,visual kei,0.781
+360,6,nederpop,0.3495
+361,8,cool jazz,0.3995
+362,6,norwegian pop,0.381
+363,6,haryanvi pop,0.4955
+364,5,alté,0.748
+365,11,j-r&b,0.597
+366,1,hypertechno,0.921
+367,2,k-rock,0.6975
+368,2,art rock,0.581
+369,2,proto-punk,0.749
+370,6,disco polo,0.2505
+371,2,heavy metal,0.801
+372,3,neomelodico,0.6465
+373,3,tamil indie,0.5985
+374,10,red dirt,0.499
+375,5,arabic rap,0.819
+376,1,melbourne bounce,0.581
+377,2,acid rock,0.647
+378,1,chillstep,0.281
+379,10,texas country,0.55
+380,1,electroclash,0.749
+381,8,modern blues,0.45
+382,5,hindi hip hop,0.781
+383,4,grupera,0.3525
+384,3,mahraganat,0.799
+385,4,brazilian phonk,0.8495
+386,4,norteño-sax,0.6
+387,4,axé,0.445
+388,9,pop worship,0.42
+389,5,bounce,0.648
+390,3,gujarati garba,0.5505
+391,1,uk funky,0.649
+392,3,indonesian indie,0.5995
+393,3,batak,0.5005
+394,5,new york drill,0.9195
+395,1,french house,0.521
+396,10,folk rock,0.5
+397,1,melodic bass,0.6815
+398,6,malay pop,0.446
+399,5,italian trap,0.82
+400,6,punjabi pop,0.5505
+401,3,canzone napoletana,0.4015
+402,2,mexican rock,0.648
+403,8,soul jazz,0.5505
+404,3,lagu jawa,0.5015
+405,6,tollywood,0.478
+406,4,reggaeton chileno,0.7485
+407,10,honky tonk,0.349
+408,5,nerdcore,0.4495
+409,1,3 step,0.65
+410,10,country rock,0.4495
+411,1,tropical house,0.352
+412,10,newgrass,0.399
+413,3,epadunk,0.7485
+414,1,vinahouse,0.6995
+415,2,new wave,0.5485
+416,1,electro swing,0.421
+417,11,neo soul,0.648
+418,4,flamenco pop,0.446
+419,2,indorock,0.3
+420,2,roots rock,0.4
+421,9,christian folk,0.501
+422,10,folk pop,0.35
+423,4,funk de bh,0.7785
+424,3,hiplife,0.6995
+425,2,indie rock,0.5495
+426,9,christian alternative rock,0.65
+427,4,champeta,0.649
+428,6,bhojpuri pop,0.4965
+429,6,psychedelic pop,0.479
+430,1,funkot,0.8515
+431,5,west coast hip hop,0.4505
+432,5,southern hip hop,0.5
+433,4,turreo,0.7995
+434,4,brazilian funk,0.7795
+435,4,brazilian bass,0.7495
+436,4,música mexicana,0.549
+437,6,bangla pop,0.447
+438,3,lagu timur,0.5515
+439,2,glam metal,0.649
+440,6,mollywood,0.48
+441,3,gnawa,0.6005
+442,1,big beat,0.7005
+443,3,mizrahi,0.6475
+444,3,pinoy indie,0.6485
+445,4,spanish-language reggae,0.5
+446,4,sertanejo tradicional,0.399
+447,5,anime rap,0.6795
+448,4,chilean trap,0.7805
+449,2,industrial rock,0.85
+450,10,country hip hop,0.7
+451,13,christmas,0.101
+452,4,cuarteto,0.447
+453,4,neoperreo,0.7505
+454,2,symphonic rock,0.599
+455,3,afroswing,0.68
+456,6,baroque pop,0.481
+457,4,corridos bélicos,0.6985
+458,5,punjabi hip hop,0.821
+459,11,funk,0.5485
+460,3,bongo flava,0.6495
+461,2,alternative metal,0.75
+462,13,dark cabaret,0.749
+463,5,tamil hip hop,0.782
+464,1,dansktop,0.6005
+465,3,maluku,0.5525
+466,4,sertanejo,0.501
+467,6,italian singer-songwriter,0.448
+468,12,reggae rock,0.6005
+469,8,classic blues,0.4005
+470,4,mpb,0.448
+471,3,afropiano,0.6015
+472,11,boogie,0.4485
+473,5,vietnamese hip hop,0.749
+474,2,celtic rock,0.5505
+475,3,azonto,0.7005
+476,5,hardcore hip hop,0.849
+477,11,soul blues,0.4985
+478,6,p-pop,0.4975
+479,6,gujarati pop,0.482
+480,6,neue deutsche welle,0.399
+481,11,go-go,0.649
+482,4,funk consciente,0.7515
+483,7,japanese classical,0.7
+484,5,alternative hip hop,0.649
+485,3,taiwanese indie,0.6025
+486,5,hyphy,0.65
+487,4,pagode baiano,0.4
+488,6,indie pop,0.483
+489,4,banda,0.449
+490,4,reggaeton mexa,0.7525
+491,4,corridos tumbados,0.7815
+492,4,latin alternative,0.65
+493,2,anatolian rock,0.6985
+494,2,pinoy rock,0.65
+495,4,trap latino,0.8005
+496,1,j-dance,0.651
+497,5,moroccan rap,0.7965
+498,2,grunge,0.751
+499,11,pinoy r&b,0.598
+500,4,salsa romantica,0.42
+501,2,chinese rock,0.6995
+502,13,bacardi,0.0505
+503,2,glam rock,0.6
+504,2,indie punk,0.752
+505,11,new jack swing,0.5495
+506,4,nueva trova,0.502
+507,6,variété française,0.4
+508,3,phleng phuea chiwit,0.6505
+509,3,mexican indie,0.6515
+510,6,french indie pop,0.449
+511,5,thai hip hop,0.7975
+512,8,jazz blues,0.5005
+513,11,funk rock,0.65
+514,2,post-grunge,0.651
+515,2,thai rock,0.7005
+516,4,argentine trap,0.8205
+517,5,trap funk,0.75
+518,3,southern thai music,0.5025
+519,6,sandalwood,0.484
+520,4,duranguense,0.45
+521,2,emo pop,0.7015
+522,4,latin rock,0.6995
+523,5,east coast hip hop,0.401
+524,2,electronic rock,0.7205
+525,5,gangster rap,0.751
+526,10,traditional country,0.2505
+527,3,moroccan chaabi,0.6035
+528,4,urbano latino,0.7535
+529,5,experimental hip hop,0.9205
+530,5,meme rap,0.6805
+531,11,post-disco,0.4995
+532,6,bedroom pop,0.422
+533,1,indie electronic,0.582
+534,2,hard rock,0.753
+535,4,rock urbano,0.7005
+536,6,kollywood,0.4985
+537,4,latin folk,0.401
+538,11,funk melody,0.599
+539,4,rock en español,0.651
+540,6,malaysian pop,0.45
+541,5,malay rap,0.822
+542,11,philly soul,0.4495
+543,4,sertanejo universitário,0.55
+544,5,malayalam hip hop,0.7985
+545,2,rap rock,0.8205
+546,6,tamil dance,0.4995
+547,6,brazilian pop,0.451
+548,4,tecnobrega,0.7015
+549,5,rage rap,0.88
+550,1,edm trap,0.75
+551,6,bubblegum pop,0.3
+552,11,retro soul,0.5505
+553,4,chilean mambo,0.451
+554,2,medieval metal,0.851
+555,5,melodic rap,0.651
+556,2,acoustic rock,0.4205
+557,6,chamber pop,0.485
+558,1,rally house,0.652
+559,4,flamenco urbano,0.652
+560,3,gengetone,0.8
+561,3,punta,0.35
+562,5,hip house,0.6995
+563,4,latin r&b,0.601
+564,11,alternative r&b,0.699
+565,6,bollywood,0.5515
+566,10,acoustic folk,0.351
+567,6,acoustic pop,0.401
+568,6,alternative pop,0.452
+569,4,punto guajiro,0.402
+570,11,indie r&b,0.651
+571,6,pop urbaine,0.5005
+572,3,vietnamese bolero,0.45
+573,11,motown,0.3495
+574,5,aussie drill,0.85
+575,3,vietnam indie,0.6045
+576,5,egyptian hip hop,0.823
+577,6,europop,0.3505
+578,12,kompa,0.4005
+579,3,desi,0.6525
+580,6,electropop,0.423
+581,1,stutter house,0.7015
+582,6,art pop,0.52
+583,1,nightcore,0.751
+584,4,electro corridos,0.7545
+585,5,crunk,0.652
+586,13,easy listening,0.151
+587,1,new rave,0.721
+588,5,brooklyn drill,0.881
+589,11,disco,0.4505
+590,6,desi pop,0.5015
+591,1,baltimore club,0.752
+592,2,pirate metal,0.8215
+593,2,madchester,0.5515
+594,4,latin pop,0.551
+595,5,punk rap,0.7995
+596,3,kundiman,0.451
+597,4,latin dance,0.602
+598,8,indie jazz,0.7005
+599,6,egyptian pop,0.486
+600,4,agronejo,0.653
+601,12,nz reggae,0.5005
+602,2,bisrock,0.7025
+603,6,moroccan pop,0.453
+604,2,pinoy alternative,0.652
+605,4,mexican ska,0.552
+606,3,karadeniz folk,0.6055
+607,8,ethiopian jazz,0.751
+608,4,chamamé,0.403
+609,6,colombian pop,0.454
+610,3,harana,0.351
+611,6,k-pop,0.6
+612,2,britpop,0.5525
+613,3,singeli,0.801
+614,3,budots,0.7495
+615,6,pop rock,0.402
+616,2,rock and roll,0.2505
+617,1,electronica,0.55
+618,2,emo,0.754
+619,3,asakaa,0.85
+620,4,forro tradicional,0.452
+621,2,modern rock,0.601
+622,5,pop rap,0.55
+623,11,funk pop,0.6
+624,11,smooth r&b,0.4
+625,11,pop r&b,0.5005
+626,11,quiet storm,0.3505
+627,5,sexy drill,0.783
+628,2,alternative rock,0.602
+629,3,koplo,0.6535
+630,2,metal,0.802
+631,5,trap,0.752
+632,4,forró tradicional,0.453
+633,6,hindi pop,0.5025
+634,9,afro adura,0.451
+635,13,soundtrack,0.2005
+636,4,reggaeton,0.7025
+637,9,brazilian gospel,0.502
+638,10,country,0.3005
+639,1,alternative dance,0.653
+640,13,japanese vgm,0.75
+641,2,stoner metal,0.881
+642,1,house,0.501
+643,4,popular colombian music,0.553
+644,6,soft pop,0.321
+645,11,smooth soul,0.4515
+646,5,french rap,0.8005
+647,4,sad sierreño,0.6805
+648,9,villancicos,0.351
+649,2,soft rock,0.2
+650,11,pop soul,0.48
+651,1,electronic,0.551
+652,3,native american music,0.4025
+653,4,pop urbano,0.603
+654,5,thai trap,0.851
+655,10,acoustic country,0.352
+656,10,pop country,0.4
+657,6,dance pop,0.455
+658,4,latin afrobeat,0.7035
+659,4,bachata pop,0.454
+660,2,aor,0.3805
+661,5,lo-fi hip hop,0.3
+662,5,vietnamese lo-fi,0.28
+663,3,algerian chaabi,0.6545
+664,1,philly club,0.753
+665,6,bhojiwood,0.5035
+666,3,egyptian shaabi,0.7015
+667,13,adult standards,0.2505
+668,3,fújì,0.7505
+669,6,thai indie pop,0.456
+670,2,gothic rock,0.8225
+671,2,mathcore,0.9505
+672,3,hollands,0.352
+673,11,soul,0.5015
+674,2,horror punk,0.8235
+675,1,electro,0.654
+676,1,edm,0.655
+677,10,traditional folk,0.3015
+678,3,german indie,0.6065
+679,13,indie,0.55
+680,5,trap metal,0.9215
+681,4,son jarocho,0.404
+682,13,ballroom vogue,0.751
+683,10,cajun,0.4505
+684,2,classic rock,0.3505
+685,2,jam band,0.4515
+686,7,orchestral,0.701
+687,5,arabic hip hop,0.852
+688,4,latin afrobeats,0.7205
+689,3,maskandi,0.6555
+690,3,techengue,0.7025
+691,2,riot grrrl,0.852
+692,4,murga,0.503
+693,10,zydeco,0.501
+694,4,latin folklore,0.455
+695,4,electrocumbia,0.654
+696,2,neo-psychedelic,0.653
+697,2,drone metal,0.93
+698,11,r&b,0.5515
+699,4,candombe,0.456
+700,4,latin,0.554
+701,5,hip hop,0.6005
+702,4,funk bruxaria,0.8015
+703,6,retro pop,0.382
+704,5,trap soul,0.7005
+705,4,folclor andino,0.405
+706,2,egg punk,0.882
+707,6,swedish pop,0.3515
+708,2,thai indie rock,0.654
+709,5,dansk rap,0.753
+710,2,rock,0.401
+711,11,classic soul,0.4525
+712,4,salsa choke,0.655
+713,1,afro tech,0.754
+714,2,yacht rock,0.28
+715,2,norsk rock,0.655
+716,2,celtic punk,0.782
+717,10,southern gothic,0.7505
+718,5,uk grime,0.853
+719,10,anti-folk,0.7515
+720,2,queercore,0.853
+721,3,coupé décalé,0.7035
+722,11,uk r&b,0.601
+723,13,lo-fi indie,0.35
+724,10,outlaw country,0.6505
+725,3,ndombolo,0.7515
+726,11,dark r&b,0.75
+727,10,classic country,0.353
+728,5,rap ivoire,0.8015
+729,3,chanson québécoise,0.452
+730,5,rap,0.653
+731,5,chicago drill,0.9005
+732,5,hipdut,0.754
+733,11,afro r&b,0.7
+734,3,bikutsi,0.7525
+735,13,noise music,0.95
+736,11,french r&b,0.602
+737,2,indonesian rock,0.7035
+738,5,old school hip hop,0.351
+739,11,indonesian r&b,0.603
+740,11,contemporary r&b,0.652
+741,4,dembow belico,0.8505
+742,9,rap chrétien,0.651
+743,5,rap québécois,0.755
+744,6,pop québécoise,0.457
+745,11,canto r&b,0.653
+746,6,dansk pop,0.403
+747,4,latin country,0.604
+748,4,traditional forró,0.457
+749,10,folk québécois,0.4515
+750,3,kagok,0.6565
+751,6,pop,0.458
+752,6,pop kreatif,0.5045
+753,2,rock quebecois,0.656
+754,8,indonesian jazz,0.7015
+755,1,dance,0.552
+756,11,indie soul,0.654
+757,10,ambient folk,0.401
+758,5,ghanaian hip hop,0.8025
+759,3,indie québécois,0.6575
+760,5,indonesian hip hop,0.8035
+761,4,folclor llanero,0.458
+762,11,electro r&b,0.701
+763,5,new orleans bounce,0.654
+764,2,indonesian indie rock,0.681
+765,5,nigerian drill,0.882
+766,10,cajun music,0.502
+767,10,country singer-songwriter,0.402
+768,6,german indie pop,0.5055

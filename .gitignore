@@ -1,0 +1,44 @@
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+
+# Keep data and vector directories but not their contents
+# (except for .gitkeep)
+data/databases/*
+!data/databases/.gitkeep
+data/vectors/*
+!data/vectors/.gitkeep
+
+# Large data files - too big to store on GitHub
+*.bin
+*.sqlite3
+*.json
+
+# Playlists - user-generated content
+playlists/
+
+# Environment variables
+.env
+.venv
+ENV/
+
+# Editor/IDE files
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Specific files to exclude
+services/
