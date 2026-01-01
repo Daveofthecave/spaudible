@@ -31,10 +31,13 @@ class VectorOpsGPU:
         )
     
     def masked_cosine_similarity_batch(self, query: np.ndarray, vectors: torch.Tensor) -> np.ndarray:
-        # Convert query to PyTorch tensor
-        query_t = torch.tensor(query, dtype=self.DTYPE, device=self.device)
+        # Convert query to PyTorch tensor if needed
+        if not isinstance(query, torch.Tensor):
+            query_t = torch.tensor(query, dtype=self.DTYPE, device=self.device)
+        else:
+            query_t = query
         
-        # Expand query to match batch size
+        # Ensure query has the correct shape
         if query_t.ndim == 1:
             query_t = query_t.unsqueeze(0).expand(vectors.shape[0], -1)
         

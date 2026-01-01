@@ -32,8 +32,14 @@ class ChunkedSearch:
         # Initialize GPU operations if available
         if self.use_gpu and torch.cuda.is_available():
             try:
-                self.gpu_ops = VectorOpsGPU()
-                print("  ✅ GPU acceleration enabled")
+                # Check available VRAM
+                free_vram = torch.cuda.mem_get_info()[0]
+                if free_vram < 500_000_000:  # Less than 500MB
+                    print("  ⚠️  Low VRAM available, disabling GPU acceleration")
+                    self.use_gpu = False
+                else:
+                    self.gpu_ops = VectorOpsGPU()
+                    print("  ✅ GPU acceleration enabled")
             except Exception as e:
                 print(f"  ⚠️ GPU initialization failed: {e}")
                 self.gpu_ops = None              
@@ -62,8 +68,19 @@ class ChunkedSearch:
         Returns:
             Tuple of (indices, similarities)
         """
-        # If no GPU is available, execute the CPU-based version of this search
-        if not self.use_gpu:
+        # If GPU is available and initialized, use GPU path
+        if self.use_gpu and self.gpu_ops:
+            return self._gpu_sequential_scan(
+                query_vector,
+                vector_source,
+                total_vectors,
+                vector_ops,
+                top_k,
+                max_vectors,
+                progress_callback,
+                **kwargs
+            )
+        else:
             return self._cpu_sequential_scan(
                 query_vector,
                 vector_source,
@@ -75,6 +92,18 @@ class ChunkedSearch:
                 **kwargs
             )
 
+    def _gpu_sequential_scan(self,
+                             query_vector: np.ndarray,
+                             vector_source: Callable[[int, int], np.ndarray],
+                             total_vectors: int,
+                             vector_ops: VectorOps,
+                             top_k: int = 10,
+                             max_vectors: Optional[int] = None,
+                             progress_callback = None,
+                             **kwargs) -> Tuple[List[int], List[float]]:
+        """
+        GPU-optimized sequential scan implementation.
+        """
         if query_vector.shape != (self.VECTOR_DIMENSIONS,):
             raise ValueError(f"Query vector must be {self.VECTOR_DIMENSIONS}D")
         
@@ -88,7 +117,7 @@ class ChunkedSearch:
         # Initialize progress bar
         start_time = self._init_progress_bar(
             vectors_to_scan,
-            f"🔍 Sequentially scanning {vectors_to_scan:,} vectors in {num_chunks} chunks...\n"
+            f"🔍 Sequentially scanning {vectors_to_scan:,} vectors in {num_chunks} chunks (GPU)...\n"
         )
         last_update = start_time
 
@@ -104,26 +133,13 @@ class ChunkedSearch:
 
             # Time data transfer
             transfer_start = time.time()
-            vectors = vector_source(chunk_start, actual_chunk_size) # Read vectors for this chunk
+            vectors = vector_source(chunk_start, actual_chunk_size)
             transfer_time = time.time() - transfer_start
             total_transfer_time += transfer_time
 
-            # Check if vectors are GPU tensors
-            is_gpu_tensor = isinstance(vectors, torch.Tensor)
-
-            # Start computation stopwatch
+            # Compute similarities on GPU
             compute_start = time.time()
-            
-            # GPU acceleration for large batches
-            if self.gpu_ops and actual_chunk_size > 50000 and is_gpu_tensor:
-                similarities = self.gpu_ops.masked_cosine_similarity_batch(query_vector, vectors)
-            else:
-                # Convert GPU tensor to NumPy if needed
-                if is_gpu_tensor:
-                    vectors = vectors.cpu().numpy()
-                similarities = vector_ops.masked_cosine_similarity_batch(query_vector, vectors)
-            
-            # Stop computation stopwatch
+            similarities = self.gpu_ops.masked_cosine_similarity_batch(query_vector, vectors)
             compute_time = time.time() - compute_start
             total_compute_time += compute_time
             total_vectors_processed += actual_chunk_size
@@ -152,7 +168,7 @@ class ChunkedSearch:
         
         # Finalize progress bar
         self._complete_progress_bar(vectors_to_scan, vectors_to_scan, start_time)
-        print(f"\n✅ Sequential scan complete")
+        print(f"\n✅ Sequential scan complete (GPU)")
 
         # Calculate performance metrics
         transfer_bytes = total_vectors_processed * 128  # 32 dimensions * 4 bytes

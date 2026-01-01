@@ -5,6 +5,7 @@ Vector math operations for similarity calculations.
 import numpy as np
 from numba import njit, prange
 from typing import List
+import torch
 from .weight_layers import WeightLayers
 
 class VectorOps:
@@ -62,11 +63,21 @@ class VectorOps:
         
         return similarities
 
-    def masked_cosine_similarity_batch(self, query: np.ndarray, vectors: np.ndarray) -> np.ndarray:
+    def masked_cosine_similarity_batch(self, query: np.ndarray, vectors) -> np.ndarray:
         """
         Compute masked cosine similarity between query and batch of vectors
         with feature weighting
+        
+        Handles both NumPy arrays and PyTorch tensors efficiently
         """      
+        # Convert PyTorch tensors to NumPy arrays if needed
+        if isinstance(vectors, torch.Tensor):
+            # Only convert if necessary - GPU tensors need conversion
+            if vectors.is_cuda:
+                vectors = vectors.cpu().numpy()
+            else:
+                vectors = vectors.numpy()
+            
         # Handle single query vector by broadcasting to batch size
         if query.ndim == 1:
             query = np.tile(query, (vectors.shape[0], 1))

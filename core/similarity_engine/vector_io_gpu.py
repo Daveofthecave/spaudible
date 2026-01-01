@@ -2,18 +2,18 @@
 import torch
 import numpy as np
 from pathlib import Path
+from core.utilities.gpu_utils import recommend_max_batch_size
 
 class VectorReaderGPU:
-    """GPU-optimized vector reader with direct CUDA loading."""
+    """GPU-optimized vector reader with VRAM-aware batch sizing."""
     
     VECTOR_DIMENSIONS = 32
     BYTES_PER_VECTOR = 128  # 32 * 4 bytes
     DTYPE = torch.float32
     
-    def __init__(self, vectors_path: str, device="cuda", max_gpu_mb=2048):
+    def __init__(self, vectors_path: str, device="cuda", max_gpu_mb=None):
         self.vectors_path = Path(vectors_path)
         self.device = device
-        self.max_gpu_mb = max_gpu_mb  # Max GPU memory to use (MB)
         
         if not self.vectors_path.exists():
             raise FileNotFoundError(f"Vector file not found: {self.vectors_path}")
@@ -22,9 +22,8 @@ class VectorReaderGPU:
         self.file_size = self.vectors_path.stat().st_size
         self.total_vectors = self.file_size // self.BYTES_PER_VECTOR
         
-        # Calculate max vectors per batch based on GPU memory
-        bytes_per_vector = 32 * 4  # 32 floats * 4 bytes each
-        self.max_batch_size = int((max_gpu_mb * 1024**2) / bytes_per_vector)
+        # Auto-configure batch size based on VRAM
+        self.max_batch_size = self._calculate_max_batch_size(max_gpu_mb)
         
         # Memory map on CPU
         self.mmap_cpu = torch.from_file(
@@ -32,6 +31,21 @@ class VectorReaderGPU:
             size=self.total_vectors * self.VECTOR_DIMENSIONS,
             dtype=self.DTYPE
         ).reshape(self.total_vectors, self.VECTOR_DIMENSIONS)
+    
+    def _calculate_max_batch_size(self, max_gpu_mb):
+        """Calculate optimal batch size based on available VRAM."""
+        if max_gpu_mb is None:
+            # Auto-detect VRAM
+            max_batch = recommend_max_batch_size(
+                vector_dim=self.VECTOR_DIMENSIONS,
+                dtype_size=4,  # float32 = 4 bytes
+                safety_factor=0.8
+            )
+            return max_batch
+        
+        # Use manual configuration
+        bytes_per_vector = 32 * 4
+        return int((max_gpu_mb * 1024**2) / bytes_per_vector)
     
     def read_chunk(self, start_idx: int, num_vectors: int) -> torch.Tensor:
         """Read chunk and transfer to GPU."""

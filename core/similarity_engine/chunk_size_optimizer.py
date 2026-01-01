@@ -1,7 +1,9 @@
 # core/similarity_engine/chunk_size_optimizer.py
 import time
 import numpy as np
+import torch
 from .vector_math import VectorOps
+from core.utilities.gpu_utils import recommend_max_batch_size
 
 class ChunkSizeOptimizer:
     """Dynamically determines optimal chunk size for CPU processing"""
@@ -11,8 +13,7 @@ class ChunkSizeOptimizer:
     def __init__(self, vector_reader, sample_size=500_000):
         self.reader = vector_reader
         self.sample_size = min(sample_size, vector_reader.get_total_vectors())
-        self.candidates = [20_000, 50_000, 75_000, 100_000, 150_000, 
-                           200_000, 250_000, 300_000, 500_000]
+        self.candidates = self._generate_candidates()
 
         # Use global optimal size if available
         if ChunkSizeOptimizer._global_optimal_chunk_size:
@@ -21,6 +22,25 @@ class ChunkSizeOptimizer:
         else:
             self.best_size = 100_000  # Default fallback
             self.optimized = False
+        
+    def _generate_candidates(self):
+        """Generate candidate chunk sizes based on available resources."""
+        # Start with base candidates
+        candidates = [10_000, 50_000, 100_000, 200_000, 500_000, 1_000_000]
+        
+        # Add larger candidates if GPU available
+        if torch.cuda.is_available():
+            max_batch = recommend_max_batch_size()
+            if max_batch > 1_000_000:
+                # Add larger chunks scaled to VRAM capacity
+                step = max(1_000_000, max_batch // 10)
+                for size in range(step, max_batch + step, step):
+                    if size <= max_batch:
+                        candidates.append(size)
+        
+        # Sort and deduplicate
+        candidates = sorted(set(candidates))
+        return candidates
         
     def optimize(self):
         """Run optimization benchmark"""
@@ -33,16 +53,24 @@ class ChunkSizeOptimizer:
         results = []
         
         for size in self.candidates:
+            # Skip sizes larger than total vectors
+            if size > self.reader.get_total_vectors():
+                continue
+                
             # Warmup
             self.run_test(vector_ops, query_vector, size, warmup=True)
             
             # Timed test
             speed = self.run_test(vector_ops, query_vector, size)
             results.append((size, speed))
-            print(f"   Chunk {size:7,}: {speed/1e6:.2f}M vec/sec")
+            print(f"   Chunk {size:12,}: {speed/1e6:.2f}M vec/sec")
         
         # Find fastest candidate
-        self.best_size = max(results, key=lambda x: x[1])[0]
+        if results:
+            self.best_size = max(results, key=lambda x: x[1])[0]
+        else:
+            self.best_size = 100_000
+            
         self.optimized = True
 
         # Store in class-level cache for future instances
@@ -66,3 +94,4 @@ class ChunkSizeOptimizer:
             start_idx = (start_idx + read_size) % self.reader.get_total_vectors()
             
         return processed / (time.time() - start_time)
+        
