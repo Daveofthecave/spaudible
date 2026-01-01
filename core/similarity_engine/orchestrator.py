@@ -1,15 +1,19 @@
 # core/similarity_engine/orchestrator.py
-import time
 import numpy as np
+import time
+import torch
 from config import PathConfig
 from core.vectorization.canonical_track_resolver import build_canonical_vector
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional, Union, Callable
-from .vector_io import VectorReader
-from .vector_math import VectorOps
-from .vector_comparer import ChunkedSearch
-from .metadata_service import MetadataManager
+from .chunk_size_optimizer import ChunkSizeOptimizer
 from .index_manager import IndexManager
+from .metadata_service import MetadataManager
+from .vector_comparer import ChunkedSearch
+from .vector_io import VectorReader
+from .vector_io_gpu import VectorReaderGPU
+from .vector_math import VectorOps
+from .chunk_size_optimizer import ChunkSizeOptimizer
 
 class SearchOrchestrator:
     """High-level coordinator for similarity search operations."""
@@ -18,7 +22,10 @@ class SearchOrchestrator:
                  vectors_path: Optional[str] = None,
                  index_path: Optional[str] = None,
                  metadata_db: Optional[str] = None,
-                 chunk_size: int = 20_000):
+                 chunk_size: int = 100_000_000,
+                 use_gpu: bool = True,
+                 max_gpu_mb: int = 2048,
+                 **kwargs):
         """
         Initialize the search orchestrator.
         
@@ -27,19 +34,58 @@ class SearchOrchestrator:
             index_path: Path to track_index.bin (default: from PathConfig)
             metadata_db: Path to metadata database
             chunk_size: Chunk size for vector processing
-        """
+        """    
+        self.chunk_size = chunk_size
+        self.use_gpu = use_gpu
+        self.max_gpu_mb = max_gpu_mb
+
+        # Validate GPU availability
+        self._is_gpu_available(verbose=True)
+
         # Set default paths if not provided
         vectors_path = vectors_path or str(PathConfig.get_vector_file())
-        index_path = index_path or str(PathConfig.get_index_file())
-        
+        index_path = index_path or str(PathConfig.get_index_file())        
+
         # Initialize components
-        self.vector_reader = VectorReader(vectors_path)
+        self.vector_reader = self._init_vector_reader(vectors_path)
         self.vector_ops = VectorOps()
         self.index_manager = IndexManager(index_path)
         self.metadata_manager = MetadataManager(metadata_db)
-        self.chunked_search = ChunkedSearch(chunk_size)
+
+        # For CPU mode: Initialize optimizer
+        self.chunk_size_optimizer = None
+        if not self.use_gpu:
+            self.chunk_size_optimizer = ChunkSizeOptimizer(self.vector_reader)
+            self.chunk_size = self.chunk_size_optimizer.optimize()
+        
+        # Pass self.use_gpu to ChunkedSearch
+        self.chunked_search = ChunkedSearch(self.chunk_size, use_gpu=self.use_gpu)
         
         self.total_vectors = self.vector_reader.get_total_vectors()
+
+    def _is_gpu_available(self, verbose: bool = False):
+        """Validate GPU availability and adjust chunk size"""
+        if self.use_gpu and torch.cuda.is_available():
+            if verbose: 
+                print("  ✅ GPU acceleration available")
+            return True
+        else:
+            if verbose: 
+                print("⚠️  GPU acceleration unavailable; falling back on CPU...")
+            self.use_gpu = False
+            # Reduce chunk size for CPU mode
+            self.chunk_size = min(self.chunk_size, 200_000)
+            return False
+
+    def _init_vector_reader(self, vectors_path: str):
+        """Initialize vector reader with GPU support if available"""
+        if self._is_gpu_available():
+            try:
+                return VectorReaderGPU(vectors_path, max_gpu_mb=self.max_gpu_mb)
+            except ImportError:
+                return VectorReader(vectors_path)
+        else:
+            return VectorReader(vectors_path)        
     
     def _vector_source(self, start_idx: int, num_vectors: int) -> np.ndarray:
         """Wrapper for vector reader."""
@@ -72,7 +118,7 @@ class SearchOrchestrator:
         else:
             query_np = query_vector
         
-        # Execute search algorithm
+        # Execute chosen search algorithm
         if search_mode == "sequential":
             indices, similarities = self.chunked_search.sequential_scan(
                 query_np,

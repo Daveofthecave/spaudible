@@ -24,6 +24,9 @@ data/vectors/*
 # Playlists - user-generated content
 playlists/
 
+# Benchmarks - testing stuff
+benchmarks/
+
 # Environment variables
 .env
 .venv

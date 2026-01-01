@@ -31,8 +31,8 @@ class WeightLayers:
             1.0,  # popularity
             1.0,  # artist_followers
             # Genre weights
-            1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 
-            1.2, 1.2, 1.2, 1.2, 1.2, 1.2
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0
         ], dtype=np.float32)
         
         # Availability boost factor for present attributes

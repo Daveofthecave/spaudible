@@ -105,7 +105,8 @@ def _search_by_track_id(track_id: str) -> str:
             vectors_path=str(PathConfig.get_vector_file()),
             index_path=str(PathConfig.get_index_file()),
             metadata_db=get_metadata_db_path(),
-            chunk_size=20_000
+            chunk_size=100_000_000,
+            use_gpu=True
         )
 
         search_mode = "sequential"
