@@ -29,6 +29,14 @@ class VectorReader:
         # Calculate total vectors
         file_size = self.vectors_path.stat().st_size
         self.total_vectors = file_size // self.BYTES_PER_VECTOR
+
+        # Memory map the file
+        self.mmap = np.memmap(
+            self.vectors_path,
+            dtype=self.DTYPE,
+            mode='r',
+            shape=(self.total_vectors, self.VECTOR_DIMENSIONS)
+        )
         
         # print(f"   Vector Reader Initialized:")
         # print(f"     Total track vectors: {self.total_vectors:,}")
@@ -46,14 +54,8 @@ class VectorReader:
             NumPy array of shape (num_vectors, 32)
         """
         with open(self.vectors_path, 'rb') as f:
-            offset = start_idx * self.BYTES_PER_VECTOR
-            f.seek(offset)
-            
-            bytes_to_read = num_vectors * self.BYTES_PER_VECTOR
-            chunk_bytes = f.read(bytes_to_read)
-            
-            # Convert to NumPy array efficiently
-            return np.frombuffer(chunk_bytes, dtype=self.DTYPE).reshape(-1, self.VECTOR_DIMENSIONS)
+            # User memory mapping
+            return self.mmap[start_idx:start_idx+num_vectors]
     
     def get_total_vectors(self) -> int:
         """Get total number of vectors in the file."""

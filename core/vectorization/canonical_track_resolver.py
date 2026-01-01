@@ -1,3 +1,4 @@
+# core/vectorization/canonical_track_resolver.py
 import os
 import sqlite3
 from config import PathConfig

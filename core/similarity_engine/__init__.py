@@ -7,11 +7,13 @@ from .vector_io import VectorReader
 from .vector_math import VectorOps
 from .metadata_service import MetadataManager
 from .index_manager import IndexManager
+from .weight_layers import WeightLayers
 
 __all__ = [
     'ChunkedSearch',
     'VectorReader',
     'VectorOps',
     'MetadataManager',
-    'IndexManager'
+    'IndexManager',
+    'WeightLayers'
 ]

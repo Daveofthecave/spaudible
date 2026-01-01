@@ -9,7 +9,7 @@ def clear_screen():
 
 def print_header(title):
     """Print a clean header with title."""
-    width = 60
+    width = 65
     print("\n" + "═" * width)
     print(f"  {title}")
     print("═" * width)

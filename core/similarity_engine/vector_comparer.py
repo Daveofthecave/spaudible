@@ -2,18 +2,19 @@
 """
 Chunked similarity search algorithms.
 """
+import numpy as np
 import random
 import time
+import sys
 from typing import List, Tuple, Optional, Callable
-import numpy as np
-
+from .vector_math import VectorOps
 
 class ChunkedSearch:
     """Search algorithms for finding similar vectors."""
     
     VECTOR_DIMENSIONS = 32
     
-    def __init__(self, chunk_size: int = 100_000):
+    def __init__(self, chunk_size: int = 20_000):
         """
         Initialize chunked search.
         
@@ -21,19 +22,19 @@ class ChunkedSearch:
             chunk_size: Number of vectors to process in one chunk
         """
         self.chunk_size = chunk_size
-        # print(f"     Using Chunked Search (chunk_size = {chunk_size:,})")
+        self.progress_bar_width = 50
     
     def sequential_scan(self,
                         query_vector: np.ndarray,
                         vector_source: Callable[[int, int], np.ndarray],
                         total_vectors: int,
-                        vector_ops,
+                        vector_ops: VectorOps,
                         top_k: int = 10,
                         max_vectors: Optional[int] = None,
                         progress_callback = None,
                         **kwargs) -> Tuple[List[int], List[float]]:
         """
-        Perform sequential scan search.
+        Perform a sequential scan of the vector cache.
         
         Args:
             query_vector: Query vector (32D numpy array)
@@ -56,9 +57,13 @@ class ChunkedSearch:
         
         vectors_to_scan = total_vectors if max_vectors is None else min(max_vectors, total_vectors)
         num_chunks = (vectors_to_scan + self.chunk_size - 1) // self.chunk_size
-        
-        print(f"🔍 Sequential scan of {vectors_to_scan:,} vectors in {num_chunks} chunks...")
-        start_time = time.time()
+
+        # Initialize progress bar
+        start_time = self._init_progress_bar(
+            vectors_to_scan,
+            f"🔍 Sequentially scanning {vectors_to_scan:,} vectors in {num_chunks} chunks...\n"
+        )
+        last_update = start_time     
         
         for chunk_idx in range(num_chunks):
             chunk_start = chunk_idx * self.chunk_size
@@ -69,7 +74,7 @@ class ChunkedSearch:
             vectors = vector_source(chunk_start, actual_chunk_size)
             
             # Compute similarities
-            similarities = vector_ops.cosine_similarity_batch(query_vector, vectors)
+            similarities = vector_ops.masked_cosine_similarity_batch(query_vector, vectors)
             
             # Update top-k for this chunk
             if actual_chunk_size > 0:
@@ -87,38 +92,27 @@ class ChunkedSearch:
                 
                 top_similarities = combined_similarities[top_indices_in_combined]
                 top_indices = combined_indices[top_indices_in_combined]
-            
-            # Progress update
-            if progress_callback:
-                progress = ((chunk_idx + 1) / num_chunks) * 100
-                progress_callback(progress)
-            
-            if chunk_idx % 10 == 0 or chunk_idx == num_chunks - 1:
-                elapsed = time.time() - start_time
-                rate = chunk_end / elapsed if elapsed > 0 else 0
-                print(f"   Processed {chunk_end:,} vectors - {rate:,.0f} vec/sec")
+                
+            # Update progress bar
+            last_update = self._update_progress_bar(
+                chunk_end, vectors_to_scan, start_time, last_update
+            )
         
-        # Sort results
-        sorted_indices = np.argsort(-top_similarities)
-        top_similarities = top_similarities[sorted_indices]
-        top_indices = top_indices[sorted_indices]
-        
-        search_time = time.time() - start_time
-        avg_speed = vectors_to_scan / search_time
-        print(f"\n✅ Sequential scan complete in {search_time:.3f} seconds")
-        print(f"   Average speed: {avg_speed:,.0f} vectors/second")
-        
+        # Finalize progress bar
+        self._complete_progress_bar(vectors_to_scan, vectors_to_scan, start_time)
+        print(f"\n✅ Sequential scan complete")
+
         return top_indices.tolist(), top_similarities.tolist()
     
     def random_chunk_search(self,
                            query_vector: np.ndarray,
                            vector_source: Callable[[int, int], np.ndarray],
                            total_vectors: int,
-                           vector_ops,
+                           vector_ops: VectorOps,
                            num_chunks: int = 100,
                            top_k: int = 10) -> Tuple[List[int], List[float]]:
         """
-        Search by sampling random chunks.
+        Scan the vector cache by sampling random chunks.
         
         Args:
             query_vector: Query vector (32D numpy array)
@@ -138,8 +132,12 @@ class ChunkedSearch:
         top_similarities = np.full(top_k, -1.0, dtype=np.float32)
         top_indices = np.full(top_k, -1, dtype=np.int64)
         
-        print(f"   Random chunk search ({num_chunks} chunks, {num_chunks * self.chunk_size:,} total vectors)...")
-        start_time = time.time()
+        # Initialize progress bar
+        start_time = self._init_progress_bar(
+            total_to_process,
+            f"Random chunk search ({num_chunks} chunks, {total_to_process:,} total vectors"
+        )
+        last_update = start_time
         
         for chunk_idx in range(num_chunks):
             # Pick a random chunk start
@@ -152,7 +150,7 @@ class ChunkedSearch:
             vectors = vector_source(chunk_start, actual_chunk_size)
             
             # Compute similarities
-            similarities = vector_ops.cosine_similarity_batch(query_vector, vectors)
+            similarities = vector_ops.masked_cosine_similarity_batch(query_vector, vectors)
             
             # Update top-k for this chunk
             if actual_chunk_size > 0:
@@ -171,37 +169,35 @@ class ChunkedSearch:
                 top_similarities = combined_similarities[top_indices_in_combined]
                 top_indices = combined_indices[top_indices_in_combined]
             
-            # Progress update
-            if chunk_idx % 10 == 0 and chunk_idx > 0:
-                elapsed = time.time() - start_time
-                vectors_processed = (chunk_idx + 1) * self.chunk_size
-                rate = vectors_processed / elapsed if elapsed > 0 else 0
-                print(f"   Sampled {chunk_idx + 1}/{num_chunks} chunks - {rate:,.0f} vec/sec")
+            # Update progress bar
+            processed = (chunk_idx + 1) * self.chunk_size
+            last_update = self._update_progress_bar(
+                processed, total_to_process, start_time, last_update
+            )
         
         # Sort results
         sorted_indices = np.argsort(-top_similarities)
         top_similarities = top_similarities[sorted_indices]
         top_indices = top_indices[sorted_indices]
         
-        search_time = time.time() - start_time
-        total_vectors_processed = num_chunks * self.chunk_size
-        avg_speed = total_vectors_processed / search_time
-        print(f"   Random chunk search completed in {search_time:.3f} seconds")
-        print(f"   Average speed: {avg_speed:,.0f} vectors/second")
-        
+        # Finalize progress bar
+        self._complete_progress_bar(total_to_process, total_to_process, start_time)
+        print(f"\n✅ Random chunk search complete")
+
         return top_indices.tolist(), top_similarities.tolist()
     
     def progressive_search(self,
                           query_vector: np.ndarray,
                           vector_source: Callable[[int, int], np.ndarray],
                           total_vectors: int,
-                          vector_ops,
+                          vector_ops: VectorOps,
                           min_chunks: int = 1,
                           max_chunks: int = 100,
                           quality_threshold: float = 0.95,
                           top_k: int = 10) -> Tuple[List[int], List[float]]:
         """
-        Progressive search until quality threshold reached.
+        Perform a progressive search on the vector cache 
+        until the desired quality threshold is reached.
         
         Args:
             query_vector: Query vector (32D numpy array)
@@ -245,3 +241,79 @@ class ChunkedSearch:
         
         print(f"⚠️  Max chunks reached, returning best found")
         return best_indices, best_similarities
+
+    def _format_time(self, seconds: float) -> str:
+        """Format time in human-readable units."""
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        elif seconds < 3600:
+            minutes = seconds // 60
+            seconds = seconds % 60
+            return f"{int(minutes)}m {int(seconds)}s"
+        else:
+            hours = seconds // 3600
+            minutes = (seconds % 3600) // 60
+            return f"{int(hours)}h {int(minutes)}m"
+    
+    def _init_progress_bar(self, total_vectors: int, description: str):
+        """Initialize the progress bar display."""
+        print(f"{description}")
+        print(f"  [{'░' * self.progress_bar_width}] 0.0%")
+        print(f"   Speed: -- vectors/second | ETA: --")
+        sys.stdout.flush()
+        return time.time()
+    
+    def _update_progress_bar(self, processed: int, total: int, start_time: float, last_update: float):
+        """
+        Update the progress bar display.
+        Returns the current time if updated, otherwise returns last_update.
+        """
+        current_time = time.time()
+        if current_time - last_update < 0.5:
+            return last_update
+        
+        elapsed = current_time - start_time
+        percent = processed / total
+        
+        # Calculate speed and ETA
+        speed = processed / elapsed if elapsed > 0 else 0
+        remaining = total - processed
+        eta = remaining / speed if speed > 0 else 0
+        
+        # Format speed and ETA
+        speed_str = f"{speed/1e6:.2f}M" if speed > 1e6 else f"{speed/1e3:.1f}K"
+        eta_str = self._format_time(eta)
+        
+        # Update progress bar
+        filled = int(self.progress_bar_width * percent)
+        bar = '█' * filled + '░' * (self.progress_bar_width - filled)
+        
+        # Move cursor up and rewrite lines
+        sys.stdout.write("\033[2A")  # Move up two lines
+        sys.stdout.write("\033[K")   # Clear line
+        sys.stdout.write(f"  [{bar}] {percent:.1%}\n")
+        sys.stdout.write(f"   Speed: {speed_str} vectors/second | ETA: {eta_str}\n")
+        sys.stdout.flush()
+        
+        return current_time
+    
+    def _complete_progress_bar(self, processed: int, total: int, start_time: float):
+        """Display final progress bar with summary statistics."""
+        elapsed = time.time() - start_time
+        avg_speed = total / elapsed
+        
+        # Move cursor up for final update
+        sys.stdout.write("\033[2A")
+        sys.stdout.write("\033[K")
+        sys.stdout.write(f"  [{'█' * self.progress_bar_width}] 100.0%\n")
+        
+        # Format speed appropriately
+        if avg_speed > 1e6:
+            speed_str = f"{avg_speed/1e6:.2f}M"
+        elif avg_speed > 1e3:
+            speed_str = f"{avg_speed/1e3:.1f}K"
+        else:
+            speed_str = f"{avg_speed:.0f}"
+            
+        sys.stdout.write(f"   Average speed: {speed_str} vectors/second | Total time: {self._format_time(elapsed)}\n")
+        sys.stdout.flush()

@@ -105,7 +105,7 @@ def _search_by_track_id(track_id: str) -> str:
             vectors_path=str(PathConfig.get_vector_file()),
             index_path=str(PathConfig.get_index_file()),
             metadata_db=get_metadata_db_path(),
-            chunk_size=100_000
+            chunk_size=20_000
         )
 
         search_mode = "sequential"
@@ -137,7 +137,7 @@ def _search_by_track_id(track_id: str) -> str:
             print("\n  ❌ No similar tracks found.")
         else:
             print(f"\n  ✅ Found {len(results)} similar tracks in {format_elapsed_time(search_time)}:")
-            print("  " + "─" * 60)
+            print("  " + "─" * (65 - 2))
             
             for i, result in enumerate(results, 1):
                 if len(result) == 3:
@@ -211,3 +211,4 @@ def _handle_unknown_input(user_input: str) -> str:
     print("  • Audio file: /path/to/song.mp3")
     print("  • Search: 'Mr. Brightside The Killers'")
     return "main_menu"
+    

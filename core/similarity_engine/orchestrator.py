@@ -12,13 +12,13 @@ from .metadata_service import MetadataManager
 from .index_manager import IndexManager
 
 class SearchOrchestrator:
-    """High-level orchestrator for similarity search operations."""
+    """High-level coordinator for similarity search operations."""
     
     def __init__(self,
                  vectors_path: Optional[str] = None,
                  index_path: Optional[str] = None,
                  metadata_db: Optional[str] = None,
-                 chunk_size: int = 100_000):
+                 chunk_size: int = 20_000):
         """
         Initialize the search orchestrator.
         
