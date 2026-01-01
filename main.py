@@ -57,7 +57,7 @@ def main():
             current_screen = next_screen
             
         elif current_screen == "exit":
-            print("\n" + "═" * 60)
+            print("\n" + "═" * 65)
             print("  Thank you for using Spaudible!")
             print("  Exiting in 2 seconds...")
             time.sleep(2)

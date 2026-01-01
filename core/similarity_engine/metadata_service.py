@@ -1,13 +1,13 @@
 # core/similarity_engine/metadata_service.py
 """
-Handle track metadata from Spotify databases.
+Enrich track IDs with human-readable metadata from the Spotify databases
 """
 import sqlite3
 from typing import Dict, List, Optional
 from pathlib import Path
 
 class MetadataManager:
-    """Manage track metadata from SQLite databases."""
+    """Manages metadata fetched from the Spotify databases."""
     
     def __init__(self, metadata_db: Optional[str] = None):
         """

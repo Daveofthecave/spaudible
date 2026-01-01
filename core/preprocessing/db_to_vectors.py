@@ -7,7 +7,7 @@ from .vector_exporter import VectorWriter
 from .progress import ProgressTracker
 
 class DatabaseReader:
-    """Efficient reader for Spotify SQLite databases."""
+    """Efficient, memory-mapped reader for Spotify SQLite databases."""
     
     def __init__(self, main_db_path, audio_db_path):
         self.main_db_path = main_db_path
@@ -169,9 +169,9 @@ class PreprocessingEngine:
     
     def run(self):
         """Run the full preprocessing pipeline."""
-        print("\n" + "═" * 60)
+        print("\n" + "═" * 65)
         print("  🚀 Starting Database Preprocessing")
-        print("═" * 60)
+        print("═" * 65)
         
         # Validate databases exist
         if not Path(self.main_db_path).exists():
