@@ -54,7 +54,7 @@ def extract_playlist_id(input_str: str) -> Optional[str]:
     return None
 
 def save_playlist(results: List[Tuple], playlist_name: str) -> str:
-    """Save search results as a playlist JSON file."""
+    """Save search results as a playlist JSON file with proper serialization."""
     os.makedirs("playlists", exist_ok=True)
     playlist_data = {
         "name": playlist_name,
@@ -65,6 +65,9 @@ def save_playlist(results: List[Tuple], playlist_name: str) -> str:
     for result in results:
         if len(result) == 3:
             track_id, similarity, metadata = result
+            # Convert numpy float32 to native Python float
+            similarity = float(similarity)
+            
             track_info = {
                 "track_id": track_id,
                 "similarity": similarity,
@@ -75,6 +78,9 @@ def save_playlist(results: List[Tuple], playlist_name: str) -> str:
             }
         else:
             track_id, similarity = result
+            # Convert numpy float32 to native Python float
+            similarity = float(similarity)
+            
             track_info = {
                 "track_id": track_id,
                 "similarity": similarity,

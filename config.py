@@ -1,5 +1,8 @@
 # config.py
-VERSION = "0.1.1"
+VERSION = "0.1.3"
+AUTO_OPTIMIZE_CHUNK_SIZE = True
+VRAM_SAFETY_FACTOR = 0.9 # What percentage of available VRAM to use
+
 import os
 from pathlib import Path
 
@@ -42,4 +45,11 @@ class PathConfig:
             cls.get_vector_file(),
             cls.get_index_file(),
             cls.get_metadata_file()
-        ]    
+        ]
+
+    def get_gpu_config():
+        return {
+            "enabled": True,
+            "half_precision": False,
+            "max_batch_size": 5_000_000  # ~2GB for FP32
+        }       

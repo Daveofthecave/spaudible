@@ -53,9 +53,9 @@ class VectorReader:
         Returns:
             NumPy array of shape (num_vectors, 32)
         """
-        with open(self.vectors_path, 'rb') as f:
-            # User memory mapping
-            return self.mmap[start_idx:start_idx+num_vectors]
+
+        # User memory mapping
+        return self.mmap[start_idx:start_idx+num_vectors]
     
     def get_total_vectors(self) -> int:
         """Get total number of vectors in the file."""

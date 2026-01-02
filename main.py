@@ -1,23 +1,36 @@
 # main.py
+import json
 import os
 import sys
 import time
+import torch
+from config import PathConfig
 from pathlib import Path
-import json
 from ui.cli.console_utils import clear_screen
 from ui.cli.menu_system.database_check import screen_database_check
 from ui.cli.menu_system.preprocessing_prompt import screen_preprocessing_prompt
 from ui.cli.menu_system.preprocessing_screen import screen_preprocessing
 from ui.cli.menu_system.processing_complete import screen_processing_complete
 from ui.cli.menu_system.main_menu import screen_main_menu
-from config import PathConfig
+
+os.environ['PYTORCH_ALLOC_CONF'] = 'expandable_segments:True'
 
 def is_setup_complete():
     """Check if all required files exist."""
     required_files = PathConfig.all_required_files()
     return all(file.exists() for file in required_files)
 
+def get_gpu_info():
+    """Get GPU information if available"""
+    if torch.cuda.is_available():
+        device = torch.cuda.get_device_name(0)
+        mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        return f"GPU: {device} ({mem:.1f}GB VRAM)"
+    return "No GPU detected"    
+
 def main():
+    print(f"\n  System Info: {get_gpu_info()}")
+
     if is_setup_complete():
         current_screen = "main_menu"
     else:

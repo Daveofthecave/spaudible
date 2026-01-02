@@ -4,10 +4,12 @@ Similarity Engine Package
 """
 from .vector_comparer import ChunkedSearch
 from .vector_io import VectorReader
+from .vector_io_gpu import VectorReaderGPU
 from .vector_math import VectorOps
 from .metadata_service import MetadataManager
 from .index_manager import IndexManager
 from .weight_layers import WeightLayers
+from .chunk_size_optimizer import ChunkSizeOptimizer
 
 __all__ = [
     'ChunkedSearch',
@@ -15,5 +17,6 @@ __all__ = [
     'VectorOps',
     'MetadataManager',
     'IndexManager',
-    'WeightLayers'
+    'WeightLayers',
+    'ChunkSizeOptimizer'
 ]
