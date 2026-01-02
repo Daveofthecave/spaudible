@@ -1,7 +1,7 @@
 # config.py
 VERSION = "0.1.3"
 AUTO_OPTIMIZE_CHUNK_SIZE = True
-VRAM_SAFETY_FACTOR = 0.9 # What percentage of available VRAM to use
+VRAM_SAFETY_FACTOR = 0.85 # What percentage of available VRAM to use
 
 import os
 from pathlib import Path

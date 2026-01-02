@@ -50,15 +50,17 @@ class ChunkedSearch:
         else:
             self.device = "cpu"  # Ensure device is set for CPU mode      
     
-    def sequential_scan(self,
-                        query_vector: np.ndarray,
-                        vector_source: Callable[[int, int], np.ndarray],
-                        total_vectors: int,
-                        vector_ops: VectorOps,
-                        top_k: int = 10,
-                        max_vectors: Optional[int] = None,
-                        progress_callback = None,
-                        **kwargs) -> Tuple[List[int], List[float]]:
+    def sequential_scan(
+        self,
+        query_vector: np.ndarray,
+        vector_source: Callable[[int, int], np.ndarray],
+        total_vectors: int,
+        vector_ops: VectorOps,
+        top_k: int = 10,
+        max_vectors: Optional[int] = None,
+        show_progress: bool = True,
+        **kwargs
+    ) -> Tuple[List[int], List[float]]:
         """
         Perform a sequential scan of the vector cache.
         
@@ -69,7 +71,8 @@ class ChunkedSearch:
             vector_ops: Vector operations instance
             top_k: Number of top results to return
             max_vectors: Maximum vectors to scan (None = all)
-            progress_callback: Optional progress callback
+            show_progress: Whether to display progress bars
+            **kwargs: Additional search parameters
             
         Returns:
             Tuple of (indices, similarities)
@@ -81,9 +84,9 @@ class ChunkedSearch:
                 vector_source,
                 total_vectors,
                 vector_ops,
-                top_k,
-                max_vectors,
-                progress_callback,
+                top_k=top_k,
+                max_vectors=max_vectors,
+                show_progress=show_progress,
                 **kwargs
             )
         else:
@@ -92,21 +95,23 @@ class ChunkedSearch:
                 vector_source,
                 total_vectors,
                 vector_ops,
-                top_k,
-                max_vectors,
-                progress_callback,
+                top_k=top_k,
+                max_vectors=max_vectors,
+                show_progress=show_progress,
                 **kwargs
             )
 
-    def _gpu_sequential_scan(self,
-                             query_vector: np.ndarray,
-                             vector_source: Callable[[int, int], np.ndarray],
-                             total_vectors: int,
-                             vector_ops: VectorOps,
-                             top_k: int = 10,
-                             max_vectors: Optional[int] = None,
-                             progress_callback = None,
-                             **kwargs) -> Tuple[List[int], List[float]]:
+    def _gpu_sequential_scan(
+        self,
+        query_vector: np.ndarray,
+        vector_source: Callable[[int, int], np.ndarray],
+        total_vectors: int,
+        vector_ops: VectorOps,
+        top_k: int = 10,
+        max_vectors: Optional[int] = None,
+        show_progress: bool = True,
+        **kwargs
+    ) -> Tuple[List[int], List[float]]:
         """
         GPU-optimized sequential scan implementation with GLOBAL top-k tracking
         """
@@ -121,12 +126,14 @@ class ChunkedSearch:
         num_chunks = (vectors_to_scan + self.chunk_size - 1) // self.chunk_size
 
         # Initialize progress bar
-        start_time = self._init_progress_bar(
-            vectors_to_scan,
-            f"🔍 Sequentially scanning {vectors_to_scan:,} vectors in {num_chunks} chunks (GPU)...\n"
-        )
+        start_time = time.time()
         last_update = start_time
-
+        if show_progress:
+            self._init_progress_bar(
+                vectors_to_scan,
+                f"🔍 Sequentially scanning {vectors_to_scan:,} vectors in {num_chunks} chunks (GPU)...\n"
+            )
+        
         # Performance monitoring
         total_transfer_time = 0.0
         total_compute_time = 0.0
@@ -176,33 +183,36 @@ class ChunkedSearch:
                 
                 # Update progress
                 processed_vectors += actual_sub_size
-                last_update = self._update_progress_bar(
-                    processed_vectors, 
-                    vectors_to_scan, 
-                    start_time, 
-                    last_update
-                )
+                if show_progress:
+                    last_update = self._update_progress_bar(
+                        processed_vectors, 
+                        vectors_to_scan, 
+                        start_time, 
+                        last_update
+                    )
                 
                 # Move to next sub-batch
                 chunk_start += actual_sub_size
                 remaining_in_chunk -= actual_sub_size
         
-        # Finalize progress bar
-        self._complete_progress_bar(vectors_to_scan, vectors_to_scan, start_time)
-        print(f"\n✅ Sequential scan complete (GPU)")
+        if show_progress:
+            self._complete_progress_bar(vectors_to_scan, vectors_to_scan, start_time)
+            print(f"\n✅ Sequential scan complete (GPU)")
 
         # Return CPU arrays
         return top_indices.cpu().numpy(), top_similarities.cpu().numpy()
 
-    def _cpu_sequential_scan(self,
-                             query_vector: np.ndarray,
-                             vector_source: Callable[[int, int], np.ndarray],
-                             total_vectors: int,
-                             vector_ops: VectorOps,
-                             top_k: int = 10,
-                             max_vectors: Optional[int] = None,
-                             progress_callback = None,
-                             **kwargs) -> Tuple[List[int], List[float]]:
+    def _cpu_sequential_scan(
+        self,
+        query_vector: np.ndarray,
+        vector_source: Callable[[int, int], np.ndarray],
+        total_vectors: int,
+        vector_ops: VectorOps,
+        top_k: int = 10,
+        max_vectors: Optional[int] = None,
+        show_progress: bool = True,
+        **kwargs
+    ) -> Tuple[List[int], List[float]]:
         """
         Pure CPU implementation with GLOBAL top-k tracking
         """
@@ -217,11 +227,13 @@ class ChunkedSearch:
         num_chunks = (vectors_to_scan + self.chunk_size - 1) // self.chunk_size
 
         # Initialize progress bar
-        start_time = self._init_progress_bar(
-            vectors_to_scan,
-            f"🔍 Sequentially scanning {vectors_to_scan:,} vectors in {num_chunks} chunks...\n"
-        )
-        last_update = start_time     
+        start_time = time.time()
+        last_update = start_time
+        if show_progress:
+            self._init_progress_bar(
+                vectors_to_scan,
+                f"🔍 Sequentially scanning {vectors_to_scan:,} vectors in {num_chunks} chunks...\n"
+            )
         
         for chunk_idx in range(num_chunks):
             chunk_start = chunk_idx * self.chunk_size
@@ -240,7 +252,7 @@ class ChunkedSearch:
                 chunk_top_k = min(top_k, actual_chunk_size)
                 chunk_top_indices = np.argpartition(-similarities, chunk_top_k)[:chunk_top_k]
                 
-                # Combine with global top-k
+                # Combine with current top-k
                 combined_similarities = np.concatenate([top_similarities, similarities[chunk_top_indices]])
                 combined_indices = np.concatenate([top_indices, chunk_top_indices + chunk_start])
                 
@@ -250,17 +262,19 @@ class ChunkedSearch:
                 
                 top_similarities = combined_similarities[top_indices_in_combined]
                 top_indices = combined_indices[top_indices_in_combined]
-                
+            
             # Update progress bar
-            last_update = self._update_progress_bar(
-                chunk_end, vectors_to_scan, start_time, last_update
-            )
+            if show_progress:
+                last_update = self._update_progress_bar(
+                    chunk_end, vectors_to_scan, start_time, last_update
+                )
         
-        # Finalize progress bar
-        self._complete_progress_bar(vectors_to_scan, vectors_to_scan, start_time)
-        print(f"\n✅ Sequential scan complete")
+        if show_progress:
+            self._complete_progress_bar(vectors_to_scan, vectors_to_scan, start_time)
+            print(f"\n✅ Sequential scan complete")
 
         return top_indices.tolist(), top_similarities.tolist()
+
     def random_chunk_search(self,
                            query_vector: np.ndarray,
                            vector_source: Callable[[int, int], np.ndarray],
