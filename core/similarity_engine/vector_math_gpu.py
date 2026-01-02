@@ -10,24 +10,25 @@ class VectorOpsGPU:
     DTYPE = torch.float32
     
     def __init__(self, device="cuda"):
-        self.device = device
+        self.device_str = device  # Store as string
+        self.device = torch.device(device)  # Create device object
         self.weight_layers = WeightLayers()
         self.baseline_weights = torch.tensor(
             self.weight_layers.baseline_weights, 
             dtype=self.DTYPE,
-            device=device
+            device=self.device
         )
-        self.genre_mask = torch.zeros(32, dtype=torch.bool, device=device)
+        self.genre_mask = torch.zeros(32, dtype=torch.bool, device=self.device)
         self.genre_mask[19:32] = True  # Dimensions 20-32 (0-indexed 19-31)
         self.availability_boost = torch.tensor(
             self.weight_layers.availability_boost,
             dtype=self.DTYPE,
-            device=device
+            device=self.device
         )
         self.genre_reduction = torch.tensor(
             self.weight_layers.genre_reduction,
             dtype=self.DTYPE,
-            device=device
+            device=self.device
         )
     
     def masked_cosine_similarity_batch(self, query: np.ndarray, vectors: torch.Tensor) -> np.ndarray:
@@ -73,5 +74,9 @@ class VectorOpsGPU:
         # Avoid division by zero
         sim = dot / (norm_query * norm_vectors + 1e-9)
         sim[torch.isnan(sim)] = 0
+        
+        # Synchronize GPU before returning
+        if self.device_str == 'cuda':  # Check device string
+            torch.cuda.synchronize()
         
         return sim.cpu().numpy()

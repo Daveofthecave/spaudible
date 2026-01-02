@@ -13,7 +13,6 @@ from .vector_comparer import ChunkedSearch
 from .vector_io import VectorReader
 from .vector_io_gpu import VectorReaderGPU
 from .vector_math import VectorOps
-from .chunk_size_optimizer import ChunkSizeOptimizer
 from core.utilities.gpu_utils import get_gpu_info, recommend_max_batch_size
 
 class SearchOrchestrator:
@@ -28,7 +27,7 @@ class SearchOrchestrator:
                  metadata_db: Optional[str] = None,
                  chunk_size: int = 100_000_000,
                  use_gpu: bool = True,
-                 max_gpu_mb: int = 2048,
+                 max_gpu_mb: int = 2048, # originally 2048
                  skip_benchmark: bool = False,
                  **kwargs):
         """
@@ -60,6 +59,11 @@ class SearchOrchestrator:
         self.vector_ops = VectorOps()
         self.index_manager = IndexManager(index_path)
         self.metadata_manager = MetadataManager(metadata_db)
+        
+        # Get max batch size from vector reader
+        max_batch_size = None
+        if hasattr(self.vector_reader, 'get_max_batch_size'):
+            max_batch_size = self.vector_reader.get_max_batch_size()
 
         # Run auto-benchmark if not skipped and not done yet
         if not self.skip_benchmark and SearchOrchestrator._benchmark_results is None:
@@ -76,8 +80,12 @@ class SearchOrchestrator:
             self.chunk_size_optimizer = ChunkSizeOptimizer(self.vector_reader)
             self.chunk_size = self.chunk_size_optimizer.optimize()
         
-        # Pass self.use_gpu to ChunkedSearch
-        self.chunked_search = ChunkedSearch(self.chunk_size, use_gpu=self.use_gpu)
+        # Pass self.use_gpu and max_batch_size to ChunkedSearch
+        self.chunked_search = ChunkedSearch(
+            self.chunk_size, 
+            use_gpu=self.use_gpu,
+            max_batch_size=max_batch_size  # Pass max batch size here
+        )
         
         self.total_vectors = self.vector_reader.get_total_vectors()
 
@@ -283,11 +291,28 @@ class SearchOrchestrator:
         self.metadata_manager.close()
 
     def run_performance_test(self, query_vector, num_vectors):
-        """Run a performance test with current configuration"""
-        start_time = time.time()
+        """Run a performance test with CUDA-synchronized timing"""
+        # Warm-up run
+        self.search(
+            query_vector,
+            search_mode="sequential",
+            top_k=10,
+            with_metadata=False,
+            max_vectors=min(100_000, num_vectors)
+        )
+        
+        # Create CUDA events for precise timing
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        
+        # Synchronize before starting
+        torch.cuda.synchronize()
+        
+        # Start timing
+        start_event.record()
         
         # Run search
-        self.search(
+        results = self.search(
             query_vector,
             search_mode="sequential",
             top_k=10,
@@ -295,8 +320,12 @@ class SearchOrchestrator:
             max_vectors=num_vectors
         )
         
-        # Calculate metrics
-        elapsed = time.time() - start_time
+        # End timing
+        end_event.record()
+        torch.cuda.synchronize()
+        
+        # Calculate elapsed time in seconds
+        elapsed = start_event.elapsed_time(end_event) / 1000.0
         speed = num_vectors / elapsed if elapsed > 0 else 0
         
         return {
