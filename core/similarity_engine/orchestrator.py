@@ -88,6 +88,9 @@ class SearchOrchestrator:
         if not self.use_gpu and not hasattr(self, 'chunk_size_optimizer'):
             self.chunk_size_optimizer = ChunkSizeOptimizer(self.vector_reader)
             self.chunk_size = self.chunk_size_optimizer.optimize()
+        # For GPU mode: Use max batch size directly
+        elif self.use_gpu and hasattr(self.vector_reader, 'get_max_batch_size'):
+            self.chunk_size = self.vector_reader.get_max_batch_size()
         
         # Pass self.use_gpu and max_batch_size to ChunkedSearch
         self.chunked_search = ChunkedSearch(
@@ -111,7 +114,7 @@ class SearchOrchestrator:
         # Create test vector
         test_vector = np.random.rand(32).astype(np.float32)
         
-        # Benchmark CPU with specific chunk sizes
+        # Benchmark CPU with optimized chunk sizes
         if not self.skip_cpu_benchmark:
             print("   Benchmarking CPU with optimized chunk sizes...")
             cpu_orchestrator = SearchOrchestrator(
@@ -120,29 +123,21 @@ class SearchOrchestrator:
                 use_gpu=False
             )
             
-            # Test specific chunk sizes on first 500K vectors
-            chunk_sizes = [5_000, 10_000, 15_000, 20_000, 30_000, 50_000, 100_000, 200_000, 500_000]
-            cpu_speeds = []
+            # Use CPU optimizer directly
+            optimizer = ChunkSizeOptimizer(cpu_orchestrator.vector_reader)
+            best_chunk = optimizer.optimize()
+            cpu_orchestrator.chunk_size = best_chunk
+            cpu_orchestrator.chunked_search = ChunkedSearch(best_chunk, use_gpu=False)
             
-            for chunk_size in chunk_sizes:
-                cpu_orchestrator.chunk_size = chunk_size
-                cpu_orchestrator.chunked_search = ChunkedSearch(chunk_size, use_gpu=False)
-                
-                # Run test on first 500K vectors - suppress progress bars
-                result = cpu_orchestrator.run_performance_test(test_vector, 500_000, show_progress=False)
-                speed = result['speed']
-                cpu_speeds.append((chunk_size, speed))
-                print(f"      Chunk {chunk_size:6,}: {speed/1e6:.2f}M vec/sec")
-            
-            # Find fastest chunk size
-            best_chunk, best_speed = max(cpu_speeds, key=lambda x: x[1])
-            results['cpu_speed'] = best_speed
+            # Run test with optimal chunk size
+            result = cpu_orchestrator.run_performance_test(test_vector, 500_000, show_progress=False)
+            results['cpu_speed'] = result['speed']
             results['optimal_cpu_chunk_size'] = best_chunk
-            print(f"      Optimal CPU chunk: {best_chunk:,} ({best_speed/1e6:.2f}M vec/sec)")
+            print(f"      Optimal CPU chunk: {best_chunk:,} ({result['speed']/1e6:.2f}M vec/sec)")
             
             cpu_orchestrator.close()
         
-        # Benchmark GPU with max batch size
+        # Benchmark GPU only if available and not skipped
         if torch.cuda.is_available() and not self.skip_gpu_benchmark:
             print("   Benchmarking GPU with max batch size...")
             gpu_orchestrator = SearchOrchestrator(
