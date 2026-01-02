@@ -1,5 +1,6 @@
 # core/utilities/gpu_utils.py
 import torch
+from config import VRAM_SAFETY_FACTOR
 
 def get_gpu_info():
     """Get available GPU information including VRAM."""
@@ -26,7 +27,7 @@ def get_gpu_info():
     
     return gpu_info
 
-def recommend_max_batch_size(vector_dim=32, dtype_size=4, safety_factor=0.8):
+def recommend_max_batch_size(vector_dim=32, dtype_size=4, safety_factor=VRAM_SAFETY_FACTOR):
     """Recommend max batch size based on available VRAM."""
     gpu_info = get_gpu_info()
     if not gpu_info:

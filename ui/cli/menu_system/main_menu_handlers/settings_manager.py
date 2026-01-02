@@ -1,7 +1,7 @@
 # ui/cli/menu_system/main_menu_handlers/settings_manager.py
 import numpy as np
 import time
-from config import VERSION
+from config import VERSION, VRAM_SAFETY_FACTOR
 from pathlib import Path
 from ui.cli.console_utils import (
     print_header, 
@@ -188,7 +188,7 @@ def _handle_performance_test() -> str:
         if gpu_info:
             free_vram = gpu_info[0]['free_vram']
             bytes_per_vector = 32 * 4  # 32 floats * 4 bytes
-            max_batch = int((free_vram * 0.8) // bytes_per_vector)
+            max_batch = int((free_vram * VRAM_SAFETY_FACTOR) // bytes_per_vector)
             
             # Generate batch sizes
             batch_sizes = [1_000_000, 5_000_000, 10_000_000, 20_000_000, 

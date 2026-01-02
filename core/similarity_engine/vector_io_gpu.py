@@ -3,6 +3,7 @@ import torch
 import numpy as np
 from pathlib import Path
 from core.utilities.gpu_utils import recommend_max_batch_size
+from config import VRAM_SAFETY_FACTOR
 
 class VectorReaderGPU:
     """GPU-optimized vector reader with VRAM-aware batch sizing."""
@@ -39,7 +40,7 @@ class VectorReaderGPU:
             max_batch = recommend_max_batch_size(
                 vector_dim=self.VECTOR_DIMENSIONS,
                 dtype_size=4,  # float32 = 4 bytes
-                safety_factor=0.8
+                safety_factor=VRAM_SAFETY_FACTOR
             )
             return max_batch
         

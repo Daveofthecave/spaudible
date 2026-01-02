@@ -2,7 +2,7 @@
 import numpy as np
 import time
 import torch
-from config import PathConfig
+from config import PathConfig, VRAM_SAFETY_FACTOR
 from core.vectorization.canonical_track_resolver import build_canonical_vector
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional, Union, Callable
@@ -126,12 +126,12 @@ class SearchOrchestrator:
             gpu_info = get_gpu_info()
             if gpu_info:
                 free_vram = gpu_info[0]['free_vram']
-                # We want a chunk size that uses about 80% of free VRAM
+                # We want a chunk size that uses about X% of free VRAM
                 bytes_per_vector = 32 * 4  # 32 floats * 4 bytes
-                vectors_per_chunk = int((free_vram * 0.8) // bytes_per_vector)
-                results['optimal_chunk_size'] = min(vectors_per_chunk, 100_000_000)  # Cap at 100M
+                vectors_per_chunk = int((free_vram * VRAM_SAFETY_FACTOR) // bytes_per_vector)
+                results['optimal_chunk_size'] = vectors_per_chunk
             else:
-                results['optimal_chunk_size'] = 100_000_000
+                results['optimal_chunk_size'] = 30_000_000
         else:
             # Optimize CPU chunk size
             optimizer = ChunkSizeOptimizer(self.vector_reader)
