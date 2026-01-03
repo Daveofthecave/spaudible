@@ -27,7 +27,7 @@ class SearchOrchestrator:
                 metadata_db: Optional[str] = None,
                 chunk_size: int = 100_000_000,
                 use_gpu: bool = True,
-                max_gpu_mb: int = 2048,  # originally 2048
+                vram_scaling_factor_mb: int = 2**7,  # originally 2048
                 skip_cpu_benchmark: bool = False,
                 skip_gpu_benchmark: bool = False,
                 skip_benchmark: bool = False,  # Deprecated but kept for backward compatibility
@@ -41,7 +41,7 @@ class SearchOrchestrator:
             metadata_db: Path to metadata database
             chunk_size: Chunk size for vector processing
             use_gpu: Whether to use GPU acceleration
-            max_gpu_mb: Maximum GPU memory to use (MB)
+            vram_scaling_factor_mb: Factor that scales how much VRAM to allocate
             skip_cpu_benchmark: Skip CPU benchmarking
             skip_gpu_benchmark: Skip GPU benchmarking
             skip_benchmark: Deprecated - skip both CPU and GPU benchmarking
@@ -53,7 +53,7 @@ class SearchOrchestrator:
         
         self.chunk_size = chunk_size
         self.use_gpu = use_gpu
-        self.max_gpu_mb = max_gpu_mb
+        self.vram_scaling_factor_mb = vram_scaling_factor_mb
 
         # Validate GPU availability
         self._is_gpu_available(verbose=True)
@@ -187,7 +187,7 @@ class SearchOrchestrator:
         """Initialize vector reader with GPU support if available"""
         if self._is_gpu_available():
             try:
-                return VectorReaderGPU(vectors_path, max_gpu_mb=self.max_gpu_mb)
+                return VectorReaderGPU(vectors_path, vram_scaling_factor_mb=self.vram_scaling_factor_mb)
             except ImportError:
                 return VectorReader(vectors_path)
         else:
