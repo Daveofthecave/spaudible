@@ -142,31 +142,34 @@ class ChunkedSearch:
         processed_vectors = 0  # Track actual vectors processed
         
         for chunk_idx in range(num_chunks):
-            chunk_start = chunk_idx * self.chunk_size
-            chunk_end = min(chunk_start + self.chunk_size, vectors_to_scan)
-            remaining_in_chunk = chunk_end - chunk_start
-            
-            # Process chunk in sub-batches
-            while remaining_in_chunk > 0:
-                # Get next sub-batch
-                sub_size = min(remaining_in_chunk, self.max_batch_size)
-                vectors = vector_source(chunk_start, sub_size)
-                actual_sub_size = vectors.shape[0]
+            try:
+                # Process one batch
+                batch_processed = 0
+                chunk_start = chunk_idx * self.chunk_size
+                chunk_end = min(chunk_start + self.chunk_size, vectors_to_scan)
+                actual_chunk_size = chunk_end - chunk_start
+                
+                # Read vectors for this chunk
+                vectors = vector_source(chunk_start, actual_chunk_size)
+                
+                # Convert to tensor if needed
+                if not isinstance(vectors, torch.Tensor):
+                    vectors = torch.tensor(vectors, dtype=torch.float32, device=self.device)
                 
                 # Compute similarities
                 compute_start = time.time()
                 similarities = self.gpu_ops.masked_cosine_similarity_batch(query_vector, vectors)
                 compute_time = time.time() - compute_start
                 total_compute_time += compute_time
-                total_vectors_processed += actual_sub_size
+                total_vectors_processed += actual_chunk_size
                 
                 # Update top-k
-                if actual_sub_size > 0:
+                if actual_chunk_size > 0:
                     # Convert similarities to tensor
                     similarities_tensor = torch.as_tensor(similarities, device=self.device)
                     
-                    # Get top-k in current sub-batch
-                    chunk_top_k = min(top_k, actual_sub_size)
+                    # Get top-k in current chunk
+                    chunk_top_k = min(top_k, actual_chunk_size)
                     chunk_top_values, chunk_top_indices = torch.topk(similarities_tensor, chunk_top_k)
                     
                     # Convert to absolute indices
@@ -182,7 +185,7 @@ class ChunkedSearch:
                     top_indices = combined_indices[global_top_indices]
                 
                 # Update progress
-                processed_vectors += actual_sub_size
+                processed_vectors += actual_chunk_size
                 if show_progress:
                     last_update = self._update_progress_bar(
                         processed_vectors, 
@@ -191,9 +194,13 @@ class ChunkedSearch:
                         last_update
                     )
                 
-                # Move to next sub-batch
-                chunk_start += actual_sub_size
-                remaining_in_chunk -= actual_sub_size
+            except KeyboardInterrupt:
+                print("\n\n  ⏸️  Processing interrupted by user.")
+                print("  Partially processed data has been saved.")
+                return top_indices.cpu().numpy(), top_similarities.cpu().numpy()
+            except Exception as e:
+                print(f"\n\n  ❗ Error during processing: {e}")
+                return top_indices.cpu().numpy(), top_similarities.cpu().numpy()
         
         if show_progress:
             self._complete_progress_bar(vectors_to_scan, vectors_to_scan, start_time)

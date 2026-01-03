@@ -108,7 +108,7 @@ class VectorOps:
                 break
         
         # Vectorized constants
-        adj_factor = genre_reduction if not query_has_genre else 1.0
+        adj_factor = genre_reduction
         
         # Determine optimal block size (512KB blocks)
         block_size = 4096  # 4096 vectors × 128B = 512KB (L2 cache size)
@@ -131,6 +131,10 @@ class VectorOps:
                     if genre_mask[j] and vectors[i, j] != -1:
                         vector_has_genre = True
                         break
+                
+                # Unified adjustment factor (same as GPU)
+                if query_has_genre and vector_has_genre:
+                    adj_factor = 1.0
                 
                 # Second pass: Compute similarity
                 for j in range(dim):

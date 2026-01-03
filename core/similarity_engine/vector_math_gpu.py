@@ -4,14 +4,14 @@ import numpy as np
 from .weight_layers import WeightLayers
 
 class VectorOpsGPU:
-    """GPU-accelerated vector operations using PyTorch."""
+    """GPU-accelerated vector operations using PyTorch with unified logic."""
     
     VECTOR_DIMENSIONS = 32
     DTYPE = torch.float32
     
     def __init__(self, device="cuda"):
-        self.device_str = device  # Store as string
-        self.device = torch.device(device)  # Create device object
+        self.device_str = device
+        self.device = torch.device(device)
         self.weight_layers = WeightLayers()
         self.baseline_weights = torch.tensor(
             self.weight_layers.baseline_weights, 
@@ -32,37 +32,38 @@ class VectorOpsGPU:
         )
     
     def masked_cosine_similarity_batch(self, query: np.ndarray, vectors: torch.Tensor) -> np.ndarray:
-        # Convert query to PyTorch tensor if needed
-        if not isinstance(query, torch.Tensor):
-            query_t = torch.tensor(query, dtype=self.DTYPE, device=self.device)
-        else:
-            query_t = query
+        # Convert query to PyTorch tensor on the same device as vectors
+        query_t = torch.tensor(query, dtype=self.DTYPE, device=vectors.device)
         
-        # Ensure query has the correct shape
+        # Ensure query has correct shape
         if query_t.ndim == 1:
             query_t = query_t.unsqueeze(0).expand(vectors.shape[0], -1)
         
-        # Check genre presence
+        # Create valid mask for both query and vectors
+        valid_mask = (query_t != -1) & (vectors != -1)
+        
+        # Compute genre flags
         query_has_genre = torch.any(query_t[:, self.genre_mask] != -1, dim=1)
         vector_has_genre = torch.any(vectors[:, self.genre_mask] != -1, dim=1)
         
-        # Compute adjustment factor
+        # Compute adjustment factor (same as CPU)
         adj_factor = torch.where(
             query_has_genre & vector_has_genre,
-            torch.tensor(1.0, device=self.device),
+            torch.tensor(1.0, device=vectors.device),
             self.genre_reduction
         )
         
         # Create weight matrix
         weights = self.baseline_weights * self.availability_boost
+        weights = weights.to(vectors.device)  # Ensure weights are on correct device
+        
         weights = torch.where(
-            self.genre_mask & ~vector_has_genre.unsqueeze(1),
+            self.genre_mask.to(vectors.device) & ~vector_has_genre.unsqueeze(1),
             weights * adj_factor.unsqueeze(1),
             weights
         )
         
         # Apply weights and mask invalid values
-        valid_mask = (query_t != -1) & (vectors != -1)
         weighted_query = query_t * weights * valid_mask.float()
         weighted_vectors = vectors * weights * valid_mask.float()
         
@@ -76,7 +77,8 @@ class VectorOpsGPU:
         sim[torch.isnan(sim)] = 0
         
         # Synchronize GPU before returning
-        if self.device_str == 'cuda':  # Check device string
+        if self.device_str == 'cuda':
             torch.cuda.synchronize()
         
-        return sim.cpu().numpy()
+        return sim.cpu().numpy()  # Convert to CPU numpy array
+

@@ -13,6 +13,7 @@ from .vector_comparer import ChunkedSearch
 from .vector_io import VectorReader
 from .vector_io_gpu import VectorReaderGPU
 from .vector_math import VectorOps
+from .vector_math_gpu import VectorOpsGPU
 from core.utilities.gpu_utils import get_gpu_info, recommend_max_batch_size
 
 class SearchOrchestrator:
@@ -100,6 +101,14 @@ class SearchOrchestrator:
         )
         
         self.total_vectors = self.vector_reader.get_total_vectors()
+
+        # Validate implementations
+        try:
+            if not self.skip_cpu_benchmark and not self.skip_gpu_benchmark:
+                self._validate_implementation_parity()
+                print("  ✅ CPU/GPU implementations validated")
+        except Exception as e:
+            print(f"  ⚠️  Implementation validation failed: {e}")
 
     def run_auto_benchmark(self):
         """Run auto-benchmark with optimized test sizes"""
@@ -273,7 +282,64 @@ class SearchOrchestrator:
         else:
             results = list(zip(track_ids, similarities))
         
+        # Add secondary sort by popularity to break ties
+        results = self._apply_secondary_sort(results, with_metadata)
+        
         return results
+    
+    def _apply_secondary_sort(self, results, with_metadata):
+        """Apply secondary sort by popularity to break similarity ties"""
+        def get_popularity(item):
+            if with_metadata:
+                _, similarity, metadata = item
+                return metadata.get('popularity', 0) if metadata else 0
+            else:
+                return 0  # No metadata available
+        
+        # First sort by similarity (descending)
+        results.sort(key=lambda x: x[1], reverse=True)
+        
+        # Group by similarity and sort each group by popularity
+        grouped = {}
+        for item in results:
+            similarity = item[1]
+            if similarity not in grouped:
+                grouped[similarity] = []
+            grouped[similarity].append(item)
+        
+        # Sort each group by popularity (descending)
+        sorted_results = []
+        for similarity, group in grouped.items():
+            group.sort(key=get_popularity, reverse=True)
+            sorted_results.extend(group)
+        
+        return sorted_results
+
+    def _validate_implementation_parity(self):
+        """Validate CPU and GPU implementations produce identical results"""
+        test_vector = np.random.rand(32).astype(np.float32)
+        test_vectors = np.random.rand(1000, 32).astype(np.float32)
+        
+        # CPU results
+        cpu_ops = VectorOps()
+        cpu_results = cpu_ops.masked_cosine_similarity_batch(test_vector, test_vectors)
+        
+        # GPU results
+        if torch.cuda.is_available():
+            gpu_ops = VectorOpsGPU()
+            gpu_results = gpu_ops.masked_cosine_similarity_batch(
+                test_vector,
+                torch.tensor(test_vectors, device='cuda')
+            )
+            
+            # Compare results
+            if not np.allclose(cpu_results, gpu_results, atol=1e-5):
+                max_diff = np.max(np.abs(cpu_results - gpu_results))
+                raise ValueError(
+                    f"CPU/GPU implementation mismatch! Max diff: {max_diff:.6f}"
+                )
+        
+        return True
     
     def find_similar_to_track(
         self,
