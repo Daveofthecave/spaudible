@@ -15,6 +15,7 @@ from .utils import (
 from core.similarity_engine.orchestrator import SearchOrchestrator
 from core.vectorization.canonical_track_resolver import build_canonical_vector
 from config import PathConfig
+from core.utilities.config_manager import config_manager
 
 def handle_core_search() -> str:
     """Main search interface."""
@@ -99,6 +100,8 @@ def _search_by_track_id(track_id: str) -> str:
             print(f"   Searching for songs similar to:\n")
             print(f"   🎵   {track_name} - {artist_display}\n")
 
+        force_cpu = config_manager.get_force_cpu()
+        
         # Initialize search orchestrator
         metadata_db = get_metadata_db_path()
         orchestrator = SearchOrchestrator(
@@ -106,7 +109,8 @@ def _search_by_track_id(track_id: str) -> str:
             index_path=str(PathConfig.get_index_file()),
             metadata_db=get_metadata_db_path(),
             chunk_size=100_000_000,
-            use_gpu=True
+            use_gpu=True,
+            force_cpu=force_cpu
         )
 
         search_mode = "sequential"

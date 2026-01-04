@@ -20,6 +20,7 @@ from core.vectorization.canonical_track_resolver import build_canonical_vector
 from config import PathConfig
 from core.utilities.gpu_utils import get_gpu_info, print_gpu_info
 from core.similarity_engine.vector_comparer import ChunkedSearch
+from core.utilities.config_manager import config_manager
 
 try:
     import torch
@@ -29,10 +30,26 @@ except ImportError:
 def handle_settings() -> str:
     """Handle settings and tools menu."""
     print_header("Settings & Tools")
+
+    # Get current CPU mode setting
+    force_cpu = config_manager.get_force_cpu()
+    force_gpu = config_manager.get_force_gpu()
+    algorithm_name = config_manager.get_algorithm_name()
+
+    # Ensure mutual exclusivity
+    if force_cpu and force_gpu:
+        config_manager.set_force_gpu(False)
+        force_gpu = False
+
+    cpu_status = "ON" if force_cpu else "OFF"
+    gpu_status = "ON" if force_gpu else "OFF"
     
     print("\n  ⚙️  Configuration & Diagnostics")
     
     options = [
+        f"🐌 Force CPU Mode: {cpu_status}",
+        f"🐆 Force GPU Mode: {gpu_status}",
+        f"🧮 Select Similarity Algorithm: {algorithm_name}",        
         "❔ Check System Status",
         "📊 Performance Test",
         "🔄 Re-run Setup",
@@ -44,15 +61,82 @@ def handle_settings() -> str:
     choice = get_choice(len(options))
     
     if choice == 1:
-        return _handle_system_status()
+        return _force_cpu_mode()
     elif choice == 2:
-        return _handle_performance_test()
+        return _force_gpu_mode()
     elif choice == 3:
-        return _handle_rerun_setup()
+        return _select_algorithm()
     elif choice == 4:
+        return _handle_system_status()
+    elif choice == 5:
+        return _handle_performance_test()
+    elif choice == 6:
+        return _handle_rerun_setup()
+    elif choice == 7:
         return _handle_about()
     else:
         return "main_menu"
+
+def _force_cpu_mode() -> str:
+    """Toggle CPU mode setting"""
+    current = config_manager.get_force_cpu()
+    new_setting = not current
+    
+    # Disable GPU mode if enabling CPU mode
+    if new_setting:
+        config_manager.set_force_gpu(False)
+    
+    config_manager.set_force_cpu(new_setting)
+    
+    # Clear benchmark cache
+    SearchOrchestrator.clear_benchmark_cache()
+    
+    status = "ON" if new_setting else "OFF"
+    print(f"\n  ✅ CPU mode set to: {status}")
+    
+    input("\n  Press Enter to continue...")
+    return "settings"
+
+def _force_gpu_mode() -> str:
+    """Toggle GPU mode setting"""
+    current = config_manager.get_force_gpu()
+    new_setting = not current
+    
+    # Disable CPU mode if enabling GPU mode
+    if new_setting:
+        config_manager.set_force_cpu(False)
+    
+    config_manager.set_force_gpu(new_setting)
+    
+    # Clear benchmark cache
+    SearchOrchestrator.clear_benchmark_cache()
+    
+    status = "ON" if new_setting else "OFF"
+    print(f"\n  ✅ GPU mode set to: {status}")
+    
+    input("\n  Press Enter to continue...")
+    return "settings"
+
+def _select_algorithm() -> str:
+    """Select similarity algorithm"""
+    print_header("Select Similarity Algorithm")
+    
+    algorithms = config_manager.ALGORITHM_CHOICES
+    current = config_manager.get_algorithm()
+    
+    print("\n  Available algorithms:\n")
+    for i, (key, name) in enumerate(algorithms.items(), 1):
+        current_indicator = " ← CURRENT" if key == current else ""
+        print(f"  [{i}] {name}{current_indicator}")
+    
+    choice = get_choice(len(algorithms))
+    selected_key = list(algorithms.keys())[choice-1]
+    
+    config_manager.set_algorithm(selected_key)
+    print(f"\n  ✅ Algorithm set to: {algorithms[selected_key]}")
+    
+    input("\n  Press Enter to continue...")
+    return "settings"    
 
 def _handle_system_status() -> str:
     """Display comprehensive system status."""
@@ -145,9 +229,9 @@ def _handle_performance_test() -> str:
     print("=" * 70)
     print("  Testing various chunk sizes with 500,000 vectors\n")
     
-    cpu_chunk_sizes = [5_000, 10_000, 15_000, 20_000, 50_000, 
+    cpu_chunk_sizes = [5_000, 10_000, 15_000, 20_000, 30_000, 50_000, 
                        75_000, 100_000, 125_000, 150_000, 200_000, 
-                       300_000, 400_000, 500_000]
+                       300_000, 500_000]
     
     cpu_results = []
     cpu_orchestrator = SearchOrchestrator(

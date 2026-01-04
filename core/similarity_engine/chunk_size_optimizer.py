@@ -1,16 +1,21 @@
 # core/similarity_engine/chunk_size_optimizer.py
 import time
 import numpy as np
-import torch
 from .vector_math import VectorOps
-from core.utilities.gpu_utils import recommend_max_batch_size
 
 class ChunkSizeOptimizer:
     """Dynamically determines optimal chunk size for CPU processing"""
-
+    
     _global_optimal_chunk_size = None
     
     def __init__(self, vector_reader, sample_size=500_000):
+        """
+        Initialize CPU chunk size optimizer.
+        
+        Args:
+            vector_reader: VectorReader instance
+            sample_size: Number of vectors to use for benchmarking
+        """
         self.reader = vector_reader
         self.sample_size = min(sample_size, vector_reader.get_total_vectors())
         self.candidates = self._generate_candidates()
@@ -24,30 +29,18 @@ class ChunkSizeOptimizer:
             self.optimized = False
         
     def _generate_candidates(self):
-        """Generate candidate chunk sizes based on available resources."""
-        # Start with base candidates
-        candidates = [10_000, 50_000, 100_000, 200_000, 500_000, 1_000_000]
-        
-        # Add larger candidates if GPU available
-        if torch.cuda.is_available():
-            max_batch = recommend_max_batch_size()
-            if max_batch > 1_000_000:
-                # Add larger chunks scaled to VRAM capacity
-                step = max(1_000_000, max_batch // 10)
-                for size in range(step, max_batch + step, step):
-                    if size <= max_batch:
-                        candidates.append(size)
-        
-        # Sort and deduplicate
-        candidates = sorted(set(candidates))
-        return candidates
+        """Generate candidate chunk sizes optimized for CPU processing."""
+        # CPU-optimized chunk sizes
+        return [5_000, 10_000, 15_000, 20_000, 30_000, 50_000, 
+                75_000, 100_000, 125_000, 150_000, 200_000, 
+                300_000, 500_000]
         
     def optimize(self):
-        """Run optimization benchmark"""
+        """Run optimization benchmark for CPU processing."""
         if self.optimized:
             return self.best_size
             
-        print("🔧 Calibrating optimal chunk size for your system...")
+        print("🔧 Calibrating optimal CPU chunk size...")
         query_vector = np.random.rand(32).astype(np.float32)
         vector_ops = VectorOps()
         results = []
@@ -76,7 +69,7 @@ class ChunkSizeOptimizer:
         # Store in class-level cache for future instances
         ChunkSizeOptimizer._global_optimal_chunk_size = self.best_size    
         
-        print(f"   Optimal chunk size: {self.best_size:,} ({(max(results, key=lambda x: x[1])[1]/1e6):.2f}M vec/sec)")
+        print(f"   Optimal CPU chunk size: {self.best_size:,} ({(max(results, key=lambda x: x[1])[1]/1e6):.2f}M vec/sec)")
         return self.best_size
         
     def run_test(self, vector_ops, query_vector, chunk_size, warmup=False):
@@ -89,9 +82,8 @@ class ChunkSizeOptimizer:
         while processed < test_size:
             read_size = min(chunk_size, test_size - processed)
             vectors = self.reader.read_chunk(start_idx, read_size)
-            _ = vector_ops.masked_cosine_similarity_batch(query_vector, vectors)
+            _ = vector_ops.masked_weighted_cosine_similarity(query_vector, vectors)
             processed += read_size
             start_idx = (start_idx + read_size) % self.reader.get_total_vectors()
             
         return processed / (time.time() - start_time)
-        

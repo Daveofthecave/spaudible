@@ -12,7 +12,7 @@ class VectorReaderGPU:
     BYTES_PER_VECTOR = 128  # 32 * 4 bytes
     DTYPE = torch.float32
     
-    def __init__(self, vectors_path: str, device="cuda", max_gpu_mb=None):
+    def __init__(self, vectors_path: str, device="cuda", vram_scaling_factor_mb=None):
         self.vectors_path = Path(vectors_path)
         self.device = device
         
@@ -24,7 +24,7 @@ class VectorReaderGPU:
         self.total_vectors = self.file_size // self.BYTES_PER_VECTOR
         
         # Auto-configure batch size based on VRAM
-        self.max_batch_size = self._calculate_max_batch_size(max_gpu_mb)
+        self.max_batch_size = self._calculate_max_batch_size(vram_scaling_factor_mb)
         
         # Memory map on CPU
         self.mmap_cpu = torch.from_file(
@@ -33,9 +33,9 @@ class VectorReaderGPU:
             dtype=self.DTYPE
         ).reshape(self.total_vectors, self.VECTOR_DIMENSIONS)
     
-    def _calculate_max_batch_size(self, max_gpu_mb):
+    def _calculate_max_batch_size(self, vram_scaling_factor_mb):
         """Calculate optimal batch size based on available VRAM."""
-        if max_gpu_mb is None:
+        if vram_scaling_factor_mb is None:
             # Auto-detect VRAM
             max_batch = recommend_max_batch_size(
                 vector_dim=self.VECTOR_DIMENSIONS,
@@ -46,16 +46,15 @@ class VectorReaderGPU:
         
         # Use manual configuration
         bytes_per_vector = 32 * 4
-        return int((max_gpu_mb * 1024**2) / bytes_per_vector)
-    
-    def get_max_batch_size(self) -> int:
-        return self.max_batch_size
+        return int((vram_scaling_factor_mb * 1024**2) / bytes_per_vector)
     
     def read_chunk(self, start_idx: int, num_vectors: int) -> torch.Tensor:
         """Read chunk by breaking into sub-batches"""
         end_idx = start_idx + num_vectors
         # Return just the first sub-batch
         actual_size = min(num_vectors, self.max_batch_size)
+        
+        # Move to GPU device
         return self.mmap_cpu[start_idx:start_idx+actual_size].to(self.device)
     
     def get_total_vectors(self) -> int:
