@@ -2,6 +2,7 @@
 VERSION = "0.1.4"
 AUTO_OPTIMIZE_CHUNK_SIZE = True
 VRAM_SAFETY_FACTOR = 0.85 # What percentage of available VRAM to use
+VRAM_SCALING_FACTOR_MB = 2**8
 FORCE_CPU_MODE = False
 
 import os

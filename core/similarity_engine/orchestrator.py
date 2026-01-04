@@ -2,7 +2,7 @@
 import numpy as np
 import time
 import torch
-from config import PathConfig, VRAM_SAFETY_FACTOR
+from config import PathConfig, VRAM_SAFETY_FACTOR, VRAM_SCALING_FACTOR_MB
 from core.vectorization.canonical_track_resolver import build_canonical_vector
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional, Union, Callable
@@ -29,7 +29,7 @@ class SearchOrchestrator:
                 metadata_db: Optional[str] = None,
                 chunk_size: int = 100_000_000,
                 use_gpu: bool = True,
-                vram_scaling_factor_mb: int = 2**7,  # originally 2048
+                vram_scaling_factor_mb: int = VRAM_SCALING_FACTOR_MB,  # originally 2048
                 skip_cpu_benchmark: bool = False,
                 skip_gpu_benchmark: bool = False,
                 skip_benchmark: bool = False,  # Deprecated but kept for backward compatibility
@@ -333,6 +333,12 @@ class SearchOrchestrator:
             )
         else:
             raise ValueError(f"Unknown search mode: {search_mode}")
+        
+        # Validate results completeness
+        if len(indices) < top_k:
+            print(f"\n  ⚠️  Warning: Only {len(indices)} results found (requested {top_k})")
+            print("  This may indicate incomplete processing due to low VRAM settings.")
+            print("  Consider increasing VRAM_SCALING_FACTOR_MB in config.py")
         
         # Convert indices to track IDs
         track_ids = self.index_manager.get_track_ids_batch(indices)

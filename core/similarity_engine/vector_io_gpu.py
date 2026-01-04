@@ -49,13 +49,24 @@ class VectorReaderGPU:
         return int((vram_scaling_factor_mb * 1024**2) / bytes_per_vector)
     
     def read_chunk(self, start_idx: int, num_vectors: int) -> torch.Tensor:
-        """Read chunk by breaking into sub-batches"""
-        end_idx = start_idx + num_vectors
-        # Return just the first sub-batch
-        actual_size = min(num_vectors, self.max_batch_size)
+        """Read full chunk by breaking into sub-batches"""
+        vectors = []
+        processed = 0
         
-        # Move to GPU device
-        return self.mmap_cpu[start_idx:start_idx+actual_size].to(self.device)
+        while processed < num_vectors:
+            # Calculate remaining vectors
+            remaining = num_vectors - processed
+            read_size = min(remaining, self.max_batch_size)
+            
+            # Read sub-batch
+            sub_start = start_idx + processed
+            sub_vectors = self.mmap_cpu[sub_start:sub_start+read_size].to(self.device)
+            vectors.append(sub_vectors)
+            
+            processed += read_size
+        
+        # Combine all sub-batches
+        return torch.cat(vectors)
     
     def get_total_vectors(self) -> int:
         return self.total_vectors

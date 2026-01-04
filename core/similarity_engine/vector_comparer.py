@@ -10,6 +10,7 @@ import torch
 from typing import List, Tuple, Optional, Callable
 from .vector_math import VectorOps
 from .vector_math_gpu import VectorOpsGPU
+from ui.cli.console_utils import format_elapsed_time
 
 class ChunkedSearch:
     """Search algorithms for finding similar vectors."""
@@ -144,56 +145,71 @@ class ChunkedSearch:
         for chunk_idx in range(num_chunks):
             try:
                 # Process one batch
-                batch_processed = 0
                 chunk_start = chunk_idx * self.chunk_size
                 chunk_end = min(chunk_start + self.chunk_size, vectors_to_scan)
                 actual_chunk_size = chunk_end - chunk_start
                 
-                # Read vectors for this chunk
-                vectors = vector_source(chunk_start, actual_chunk_size)
-                
-                # Convert to tensor if needed
-                if not isinstance(vectors, torch.Tensor):
-                    vectors = torch.tensor(vectors, dtype=torch.float32, device=self.device)
-                
-                # Compute similarities
-                compute_start = time.time()
-                similarities = vector_ops.compute_similarity(query_vector, vectors)
-                compute_time = time.time() - compute_start
-                total_compute_time += compute_time
-                total_vectors_processed += actual_chunk_size
-                
-                # Update top-k
-                if actual_chunk_size > 0:
-                    # Convert similarities to tensor
-                    similarities_tensor = torch.as_tensor(similarities, device=self.device)
+                # Process chunk in sub-batches
+                sub_processed = 0
+                while sub_processed < actual_chunk_size:
+                    # Calculate sub-batch size
+                    sub_batch_size = min(actual_chunk_size - sub_processed, self.max_batch_size)
                     
-                    # Get top-k in current chunk
-                    chunk_top_k = min(top_k, actual_chunk_size)
-                    chunk_top_values, chunk_top_indices = torch.topk(similarities_tensor, chunk_top_k)
+                    # Read vectors for this sub-batch
+                    transfer_start = time.time()
+                    vectors = vector_source(chunk_start + sub_processed, sub_batch_size)
+                    transfer_time = time.time() - transfer_start
+                    total_transfer_time += transfer_time
                     
-                    # Convert to absolute indices
-                    absolute_indices = chunk_top_indices + chunk_start
+                    # Verify vector count
+                    actual_count = vectors.shape[0] if isinstance(vectors, torch.Tensor) else len(vectors)
+                    if actual_count != sub_batch_size:
+                        print(f"\n⚠️ Vector count mismatch: Requested {sub_batch_size}, got {actual_count}")
                     
-                    # Combine with current top-k
-                    combined_values = torch.cat([top_similarities, chunk_top_values])
-                    combined_indices = torch.cat([top_indices, absolute_indices])
+                    # Convert to tensor if needed
+                    if not isinstance(vectors, torch.Tensor):
+                        vectors = torch.tensor(vectors, dtype=torch.float32, device=self.device)
                     
-                    # Get new global top-k
-                    global_top_values, global_top_indices = torch.topk(combined_values, top_k)
-                    top_similarities = global_top_values
-                    top_indices = combined_indices[global_top_indices]
-                
-                # Update progress
-                processed_vectors += actual_chunk_size
-                if show_progress:
-                    last_update = self._update_progress_bar(
-                        processed_vectors, 
-                        vectors_to_scan, 
-                        start_time, 
-                        last_update
-                    )
-                
+                    # Compute similarities
+                    compute_start = time.time()
+                    similarities = vector_ops.compute_similarity(query_vector, vectors)
+                    compute_time = time.time() - compute_start
+                    total_compute_time += compute_time
+                    total_vectors_processed += sub_batch_size
+                    
+                    # Update top-k
+                    if sub_batch_size > 0:
+                        # Convert similarities to tensor
+                        similarities_tensor = torch.as_tensor(similarities, device=self.device)
+                        
+                        # Get top-k in current sub-batch
+                        sub_top_k = min(top_k, sub_batch_size)
+                        sub_top_values, sub_top_indices = torch.topk(similarities_tensor, sub_top_k)
+                        
+                        # Convert to absolute indices
+                        absolute_indices = sub_top_indices + chunk_start + sub_processed
+                        
+                        # Combine with current top-k
+                        combined_values = torch.cat([top_similarities, sub_top_values])
+                        combined_indices = torch.cat([top_indices, absolute_indices])
+                        
+                        # Get new global top-k
+                        global_top_values, global_top_indices = torch.topk(combined_values, top_k)
+                        top_similarities = global_top_values
+                        top_indices = combined_indices[global_top_indices]
+                    
+                    # Update progress
+                    sub_processed += sub_batch_size
+                    processed_vectors += sub_batch_size
+                    
+                    if show_progress:
+                        last_update = self._update_progress_bar(
+                            processed_vectors, 
+                            vectors_to_scan, 
+                            start_time, 
+                            last_update
+                        )
+                    
             except KeyboardInterrupt:
                 print("\n\n  ⏸️  Processing interrupted by user.")
                 print("  Partially processed data has been saved.")
