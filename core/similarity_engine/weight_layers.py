@@ -36,10 +36,10 @@ class WeightLayers:
         ], dtype=np.float32)
         
         # Availability boost factor for present attributes
-        self.availability_boost = 1.3
+        self.availability_boost = 1.0
 
         # Reduction factor for when genre data is missing
-        self.genre_reduction = 0.8    
+        self.genre_reduction = 1.0    
 
         # Precomputed constants
         self.genre_mask = np.zeros(32, dtype=bool)

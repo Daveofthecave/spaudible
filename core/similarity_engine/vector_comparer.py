@@ -158,7 +158,7 @@ class ChunkedSearch:
                 
                 # Compute similarities
                 compute_start = time.time()
-                similarities = self.gpu_ops.masked_cosine_similarity_batch(query_vector, vectors)
+                similarities = vector_ops.compute_similarity(query_vector, vectors)
                 compute_time = time.time() - compute_start
                 total_compute_time += compute_time
                 total_vectors_processed += actual_chunk_size
@@ -251,7 +251,7 @@ class ChunkedSearch:
             vectors = vector_source(chunk_start, actual_chunk_size)
             
             # Compute similarities
-            similarities = vector_ops.masked_cosine_similarity_batch(query_vector, vectors)
+            similarities = vector_ops.compute_similarity(query_vector, vectors)
             
             # Update GLOBAL top-k
             if actual_chunk_size > 0:
@@ -355,12 +355,12 @@ class ChunkedSearch:
             compute_start = time.time()
             # GPU acceleration for large batches
             if self.gpu_ops and actual_chunk_size > 50000 and is_gpu_tensor:
-                similarities = self.gpu_ops.masked_cosine_similarity_batch(query_vector, vectors)
+                similarities = self.gpu_ops.masked_weighted_cosine_similarity(query_vector, vectors)
             else:
                 # Convert GPU tensor to NumPy if needed
                 if is_gpu_tensor:
                     vectors = vectors.cpu().numpy()
-                similarities = vector_ops.masked_cosine_similarity_batch(query_vector, vectors)
+                similarities = vector_ops.compute_similarity(query_vector, vectors)
             compute_time = time.time() - compute_start
             total_compute_time += compute_time
             
@@ -449,7 +449,7 @@ class ChunkedSearch:
             vectors = vector_source(chunk_start, actual_chunk_size)
             
             # Compute similarities
-            similarities = vector_ops.masked_cosine_similarity_batch(query_vector, vectors)
+            similarities = vector_ops.compute_similarity(query_vector, vectors)
             
             # Update top-k for this chunk
             if actual_chunk_size > 0:

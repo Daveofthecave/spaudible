@@ -1,7 +1,8 @@
 # config.py
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 AUTO_OPTIMIZE_CHUNK_SIZE = True
 VRAM_SAFETY_FACTOR = 0.85 # What percentage of available VRAM to use
+FORCE_CPU_MODE = False
 
 import os
 from pathlib import Path
@@ -52,4 +53,8 @@ class PathConfig:
             "enabled": True,
             "half_precision": False,
             "max_batch_size": 5_000_000  # ~2GB for FP32
-        }       
+        }
+
+    @classmethod
+    def get_config_path(cls):
+        return cls.BASE_DIR / "config.json"

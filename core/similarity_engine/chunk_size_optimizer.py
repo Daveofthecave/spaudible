@@ -82,7 +82,7 @@ class ChunkSizeOptimizer:
         while processed < test_size:
             read_size = min(chunk_size, test_size - processed)
             vectors = self.reader.read_chunk(start_idx, read_size)
-            _ = vector_ops.masked_cosine_similarity_batch(query_vector, vectors)
+            _ = vector_ops.masked_weighted_cosine_similarity(query_vector, vectors)
             processed += read_size
             start_idx = (start_idx + read_size) % self.reader.get_total_vectors()
             
