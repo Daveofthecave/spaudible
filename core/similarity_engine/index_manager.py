@@ -67,12 +67,20 @@ class IndexManager:
         """
         track_ids = []
         with open(self.index_path, 'rb') as f:
+            file_size = self.index_path.stat().st_size
+            max_offset = file_size - self.INDEX_ENTRY_SIZE
+            
             for idx in indices:
                 offset = idx * self.INDEX_ENTRY_SIZE
+                if offset > max_offset or offset < 0:
+                    track_ids.append("")
+                    continue
+                    
                 f.seek(offset)
                 track_id_bytes = f.read(self.TRACK_ID_SIZE)
-                track_id = track_id_bytes.decode('utf-8', errors='ignore').rstrip('\x00')
+                track_id = track_id_bytes.decode('utf-8', errors='ignore').rstrip('\0')
                 track_ids.append(track_id)
+                
         return track_ids
     
     def get_index_from_track_id(self, track_id: str) -> Optional[int]:

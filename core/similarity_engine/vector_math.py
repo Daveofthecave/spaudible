@@ -3,9 +3,8 @@
 Vector math operations for similarity calculations.
 """
 import numpy as np
-from numba import njit, prange
+import numba as nb
 from typing import List
-import torch
 from .weight_layers import WeightLayers
 
 class VectorOps:
@@ -13,356 +12,166 @@ class VectorOps:
     
     VECTOR_DIMENSIONS = 32
     DTYPE = np.float32
-    GENRE_START = 19 # index
-    GENRE_END = 31
 
     def __init__(self, algorithm='cosine-euclidean'):
         self.algorithm = algorithm
         self.weight_layers = WeightLayers()
         # Precompute constants
         self.baseline_weights = self.weight_layers.baseline_weights.astype(np.float32)
-        self.genre_mask = np.zeros(32, dtype=np.bool_)
-        self.genre_mask[self.GENRE_START:self.GENRE_END+1] = True
         self.availability_boost = np.float32(self.weight_layers.availability_boost)
         self.genre_reduction = np.float32(self.weight_layers.genre_reduction)
-        # Warm up JIT compiler
-        self._warmup_jit()
+        self.user_weights = np.ones(32, dtype=np.float32)  # Default weights
 
-    def _warmup_jit(self):
-        """Warm up the JIT compiler"""
-        warmup_vector = np.random.rand(32).astype(np.float32)
-        warmup_vectors = np.random.rand(100, 32).astype(np.float32)
-        self.masked_weighted_cosine_similarity(warmup_vector, warmup_vectors)
-        self.masked_weighted_cosine_euclidean_similarity(warmup_vector, warmup_vectors)
-      
-    def compute_similarity(self, query: np.ndarray, vectors) -> np.ndarray:
+    def set_user_weights(self, weights: List[float]):
+        """Set user-defined weights at runtime."""
+        if len(weights) != 32:
+            raise ValueError(f"Expected 32 weights, got {len(weights)}")
+        self.user_weights = np.array(weights, dtype=np.float32)
+
+    def reset_weights(self):
+        """Reset weights to baseline values."""
+        self.user_weights = np.ones(32, dtype=np.float32)
+
+    def compute_similarity(self, query: np.ndarray, vectors, masks) -> np.ndarray:
         """Main entry point for similarity calculations"""
         if self.algorithm == 'cosine':
-            return self.masked_weighted_cosine_similarity(query, vectors)
+            return self.masked_weighted_cosine_similarity(query, vectors, masks)
         elif self.algorithm == 'cosine-euclidean':
-            return self.masked_weighted_cosine_euclidean_similarity(query, vectors)
+            return self.masked_weighted_cosine_euclidean_similarity(query, vectors, masks)
         elif self.algorithm == 'euclidean':
-            return self.masked_euclidean_similarity(query, vectors)
+            return self.masked_euclidean_similarity(query, vectors, masks)
         else:
             raise ValueError(f"Unknown algorithm: {self.algorithm}")
 
-    @staticmethod
-    def simple_cosine_similarity(query: np.ndarray, vectors: np.ndarray) -> np.ndarray:
-        """
-        Compute cosine similarity between query and a batch of vectors.
-        
-        Args:
-            query: Query vector shape (32,)
-            vectors: Batch of vectors shape (N, 32)
-            
-        Returns:
-            Array of similarities shape (N,)
-        """
-        # Ensure consistent float32 precision
-        query = query.astype(np.float32)
-        vectors = vectors.astype(np.float32)
-
-        # Vectorized dot product
-        dots = np.dot(vectors, query)
-        
-        # Vectorized norms
-        vector_norms = np.linalg.norm(vectors, axis=1)
-        query_norm = np.linalg.norm(query)
-        
-        # Avoid division by zero
-        mask = (vector_norms > 0) & (query_norm > 0)
-        similarities = np.zeros(vectors.shape[0], dtype=VectorOps.DTYPE)
-        similarities[mask] = dots[mask] / (vector_norms[mask] * query_norm)
-        
-        return similarities
-
-    def masked_weighted_cosine_similarity(self, query: np.ndarray, vectors) -> np.ndarray:
+    def masked_weighted_cosine_similarity(self, query: np.ndarray, vectors, masks) -> np.ndarray:
         """
         Compute masked cosine similarity between query and batch of vectors
-        with feature weighting
+        with validity masks and user-defined weights.
+        """
+        # Apply weights to query
+        weighted_query = query * self.user_weights
         
-        Handles both NumPy arrays and PyTorch tensors efficiently
-        """      
-        # Convert PyTorch tensors to NumPy arrays if needed
-        if isinstance(vectors, torch.Tensor):
-            # Only convert if necessary - GPU tensors need conversion
-            if vectors.is_cuda:
-                vectors = vectors.cpu().numpy()
-            else:
-                vectors = vectors.numpy()
-            
-        # Handle single query vector by broadcasting to batch size
-        if query.ndim == 1:
-            query = np.tile(query, (vectors.shape[0], 1))
-        
-        # Call optimized Numba function
-        return self._numba_masked_weighted_cosine_similarity(
-            query.astype(np.float32),
-            vectors.astype(np.float32),
-            self.baseline_weights,
-            self.genre_mask,
-            self.availability_boost,
-            self.genre_reduction
-        )
-
-    @staticmethod
-    @njit(parallel=True, fastmath=True, cache=True)
-    def _numba_masked_weighted_cosine_similarity(query, vectors, baseline_weights, genre_mask, availability_boost, genre_reduction):
-        """Optimized similarity computation with cache-blocking"""
+        # Process in batches for cache efficiency
+        batch_size = 10000
         n = vectors.shape[0]
-        dim = vectors.shape[1]
         similarities = np.empty(n, dtype=np.float32)
         
-        # Precompute query genre status once
-        query_has_genre = False
-        for j in range(dim):
-            if genre_mask[j] and query[0, j] != -1:
-                query_has_genre = True
-                break
-        
-        # Vectorized constants
-        adj_factor = genre_reduction
-        
-        # Determine optimal block size (512KB blocks)
-        block_size = 4096  # 4096 vectors × 128B = 512KB (L2 cache size)
-        num_blocks = (n + block_size - 1) // block_size
-        
-        # Process in parallel blocks
-        for block_idx in prange(num_blocks):
-            start_idx = block_idx * block_size
-            end_idx = min(start_idx + block_size, n)
+        for start_idx in range(0, n, batch_size):
+            end_idx = min(start_idx + batch_size, n)
+            batch_vectors = vectors[start_idx:end_idx]
+            batch_masks = masks[start_idx:end_idx]
             
-            # Process vectors in current block
-            for i in range(start_idx, end_idx):
-                dot = 0.0
-                norm_u = 0.0
-                norm_v = 0.0
-                vector_has_genre = False
-                
-                # First pass: Check genre presence
-                for j in range(dim):
-                    if genre_mask[j] and vectors[i, j] != -1:
-                        vector_has_genre = True
-                        break
-                
-                # Unified adjustment factor (same as GPU)
-                if query_has_genre and vector_has_genre:
-                    adj_factor = 1.0
-                
-                # Second pass: Compute similarity
-                for j in range(dim):
-                    q_val = query[i, j]
-                    v_val = vectors[i, j]
-                    
-                    # Skip invalid dimensions
-                    if q_val == -1 or v_val == -1:
-                        continue
-                    
-                    # Calculate weight
-                    weight = baseline_weights[j] * availability_boost
-                    
-                    # Genre-specific adjustment
-                    if genre_mask[j] and not vector_has_genre:
-                        weight *= adj_factor
-                    
-                    # Weighted values
-                    w_q = q_val * weight
-                    w_v = v_val * weight
-                    
-                    # Accumulate
-                    dot += w_q * w_v
-                    norm_u += w_q * w_q
-                    norm_v += w_v * w_v
-                
-                # Compute final similarity
-                norm_product = max(np.sqrt(norm_u) * np.sqrt(norm_v), 1e-9)
-                similarities[i] = dot / norm_product
-        
+            # Use optimized function
+            similarities[start_idx:end_idx] = self._batch_masked_cosine(
+                weighted_query, batch_vectors, batch_masks
+            )
+            
         return similarities
 
-    def masked_weighted_cosine_euclidean_similarity(self, query: np.ndarray, vectors) -> np.ndarray:
-        """
-        Compute hybrid cosine-euclidean similarity with feature weighting
-        
-        Combines directional alignment (cosine) and magnitude proximity (euclidean)
-        into a single similarity metric: hybrid_sim = cosine_sim * euclidean_sim
-        
-        Args:
-            query: Query vector (32D numpy array)
-            vectors: Batch of vectors to compare against
-            
-        Returns:
-            Array of hybrid similarities shape (N,)
-        """
-        # Convert PyTorch tensors to NumPy arrays if needed
-        if isinstance(vectors, torch.Tensor):
-            if vectors.is_cuda:
-                vectors = vectors.cpu().numpy()
-            else:
-                vectors = vectors.numpy()
-            
-        # Handle single query vector by broadcasting to batch size
-        if query.ndim == 1:
-            query = np.tile(query, (vectors.shape[0], 1))
-        
-        # Call optimized Numba function
-        return self._numba_masked_weighted_cosine_euclidean_similarity(
-            query.astype(np.float32),
-            vectors.astype(np.float32),
-            self.baseline_weights,
-            self.genre_mask,
-            self.availability_boost,
-            self.genre_reduction
-        )
-
-    @staticmethod
-    @njit(parallel=True, fastmath=True, cache=True)
-    def _numba_masked_weighted_cosine_euclidean_similarity(query, vectors, baseline_weights, genre_mask, availability_boost, genre_reduction):
-        """
-        Optimized hybrid cosine-euclidean similarity computation
-        Computes: hybrid_sim = cosine_sim * euclidean_sim
-        """
+    def _batch_masked_cosine(self, weighted_query, vectors, masks):
+        """Compute cosine similarity for a batch of vectors"""
         n = vectors.shape[0]
-        dim = vectors.shape[1]
-        similarities = np.empty(n, dtype=np.float32)
+        results = np.zeros(n, dtype=np.float32)
         
-        # Precompute query genre status once
-        query_has_genre = False
-        for j in range(dim):
-            if genre_mask[j] and query[0, j] != -1:
-                query_has_genre = True
-                break
+        # Precompute weights for vectors
+        weighted_vectors = vectors * self.user_weights
         
-        # Vectorized constants
-        adj_factor = genre_reduction
-        
-        # Determine optimal block size (512KB blocks)
-        block_size = 4096  # 4096 vectors × 128B = 512KB (L2 cache size)
-        num_blocks = (n + block_size - 1) // block_size
-        
-        # Process in parallel blocks
-        for block_idx in prange(num_blocks):
-            start_idx = block_idx * block_size
-            end_idx = min(start_idx + block_size, n)
+        # Process each vector
+        for i in range(n):
+            mask = masks[i]
+            valid_dims = self._get_valid_dims(mask)
             
-            # Process vectors in current block
-            for i in range(start_idx, end_idx):
-                dot = 0.0
-                norm_u = 0.0
-                norm_v = 0.0
-                sq_diff = 0.0
-                vector_has_genre = False
-                
-                # First pass: Check genre presence
-                for j in range(dim):
-                    if genre_mask[j] and vectors[i, j] != -1:
-                        vector_has_genre = True
-                        break
-                
-                # Unified adjustment factor (same as GPU)
-                if query_has_genre and vector_has_genre:
-                    adj_factor = 1.0
-                
-                # Second pass: Compute both metrics simultaneously
-                for j in range(dim):
-                    q_val = query[i, j]
-                    v_val = vectors[i, j]
-                    
-                    # Skip invalid dimensions
-                    if q_val == -1 or v_val == -1:
-                        continue
-                    
-                    # Calculate weight
-                    weight = baseline_weights[j] * availability_boost
-                    
-                    # Genre-specific adjustment
-                    if genre_mask[j] and not vector_has_genre:
-                        weight *= adj_factor
-                    
-                    # Weighted values
-                    w_q = q_val * weight
-                    w_v = v_val * weight
-                    
-                    # Cosine components
-                    dot += w_q * w_v
-                    norm_u += w_q * w_q
-                    norm_v += w_v * w_v
-                    
-                    # Euclidean components
-                    sq_diff += (w_q - w_v) ** 2
+            if valid_dims.size > 0:
+                q_valid = weighted_query[valid_dims]
+                v_valid = weighted_vectors[i, valid_dims]
                 
                 # Compute cosine similarity
-                norm_product = max(np.sqrt(norm_u) * np.sqrt(norm_v), 1e-9)
-                cosine_sim = dot / norm_product
+                dot = 0.0
+                norm_q = 0.0
+                norm_v = 0.0
                 
-                # Compute Euclidean similarity
-                euclidean_dist = np.sqrt(sq_diff)
-                euclidean_sim = 1.0 / (1.0 + euclidean_dist)
+                for j in range(q_valid.shape[0]):
+                    dot += q_valid[j] * v_valid[j]
+                    norm_q += q_valid[j] * q_valid[j]
+                    norm_v += v_valid[j] * v_valid[j]
                 
-                # Combine into hybrid similarity
-                similarities[i] = cosine_sim * euclidean_sim
+                norm_q = np.sqrt(norm_q)
+                norm_v = np.sqrt(norm_v)
+                
+                if norm_q > 0 and norm_v > 0:
+                    results[i] = dot / (norm_q * norm_v)
         
-        return similarities
-
-    def masked_euclidean_similarity(self, query: np.ndarray, vectors) -> np.ndarray:
-        """Euclidean similarity with masking"""
-        # Convert PyTorch tensors to NumPy arrays if needed
-        if isinstance(vectors, torch.Tensor):
-            if vectors.is_cuda:
-                vectors = vectors.cpu().numpy()
-            else:
-                vectors = vectors.numpy()
-            
-        # Handle single query vector by broadcasting to batch size
-        if query.ndim == 1:
-            query = np.tile(query, (vectors.shape[0], 1))
-        
-        # Call optimized Numba function
-        return self._numba_masked_euclidean_similarity(
-            query.astype(np.float32),
-            vectors.astype(np.float32)
-        )
+        return results
 
     @staticmethod
-    @njit(parallel=True, fastmath=True, cache=True)
-    def _numba_masked_euclidean_similarity(query, vectors):
-        """Optimized Euclidean similarity computation"""
+    @nb.njit(fastmath=True)
+    def _get_valid_dims(mask: int) -> np.ndarray:
+        """Get valid dimensions from mask using Numba acceleration"""
+        valid_dims = np.empty(32, dtype=np.bool_)
+        for j in range(32):
+            valid_dims[j] = (mask >> j) & 1
+        return np.where(valid_dims)[0]
+
+    def masked_weighted_cosine_euclidean_similarity(self, query: np.ndarray, vectors, masks) -> np.ndarray:
+        """
+        Compute hybrid cosine-euclidean similarity with validity masks.
+        """
+        # Compute both metrics
+        cosine_sim = self.masked_weighted_cosine_similarity(query, vectors, masks)
+        euclidean_sim = self.masked_euclidean_similarity(query, vectors, masks)
+        
+        # Combine results
+        return cosine_sim * euclidean_sim
+
+    def masked_euclidean_similarity(self, query: np.ndarray, vectors, masks) -> np.ndarray:
+        """Euclidean similarity with masking"""
+        # Apply weights to query
+        weighted_query = query * self.user_weights
+        
+        # Process in batches for cache efficiency
+        batch_size = 10000
         n = vectors.shape[0]
-        dim = vectors.shape[1]
         similarities = np.empty(n, dtype=np.float32)
         
-        # Determine optimal block size
-        block_size = 4096
-        num_blocks = (n + block_size - 1) // block_size
-        
-        # Process in parallel blocks
-        for block_idx in prange(num_blocks):
-            start_idx = block_idx * block_size
-            end_idx = min(start_idx + block_size, n)
+        for start_idx in range(0, n, batch_size):
+            end_idx = min(start_idx + batch_size, n)
+            batch_vectors = vectors[start_idx:end_idx]
+            batch_masks = masks[start_idx:end_idx]
             
-            # Process vectors in current block
-            for i in range(start_idx, end_idx):
-                sq_diff = 0.0
-                valid_count = 0
-                
-                for j in range(dim):
-                    q_val = query[i, j]
-                    v_val = vectors[i, j]
-                    
-                    # Skip invalid dimensions
-                    if q_val == -1 or v_val == -1:
-                        continue
-                    
-                    sq_diff += (q_val - v_val) ** 2
-                    valid_count += 1
+            # Use optimized function
+            similarities[start_idx:end_idx] = self._batch_masked_euclidean(
+                weighted_query, batch_vectors, batch_masks
+            )
+            
+        return similarities
+
+    def _batch_masked_euclidean(self, weighted_query, vectors, masks):
+        """Compute Euclidean similarity for a batch of vectors"""
+        n = vectors.shape[0]
+        results = np.zeros(n, dtype=np.float32)
+        
+        # Precompute weights for vectors
+        weighted_vectors = vectors * self.user_weights
+        
+        # Process each vector
+        for i in range(n):
+            mask = masks[i]
+            valid_dims = self._get_valid_dims(mask)
+            
+            if valid_dims.size > 0:
+                q_valid = weighted_query[valid_dims]
+                v_valid = weighted_vectors[i, valid_dims]
                 
                 # Compute Euclidean distance
-                distance = np.sqrt(sq_diff) if valid_count > 0 else 0
+                sq_diff = 0.0
+                for j in range(q_valid.shape[0]):
+                    diff = q_valid[j] - v_valid[j]
+                    sq_diff += diff * diff
                 
-                # Convert to similarity
-                similarities[i] = 1.0 / (1.0 + distance)
+                distance = np.sqrt(sq_diff)
+                results[i] = 1.0 / (1.0 + distance)
         
-        return similarities
+        return results
     
     @staticmethod
     def validate_vector(vector: List[float]) -> bool:

@@ -3,7 +3,6 @@ import numpy as np
 import time
 import torch
 from config import PathConfig, VRAM_SAFETY_FACTOR, VRAM_SCALING_FACTOR_MB
-from core.vectorization.canonical_track_resolver import build_canonical_vector
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional, Union, Callable
 from .chunk_size_optimizer import ChunkSizeOptimizer
@@ -16,6 +15,7 @@ from .vector_math import VectorOps
 from .vector_math_gpu import VectorOpsGPU
 from core.utilities.gpu_utils import get_gpu_info, recommend_max_batch_size
 from core.utilities.config_manager import config_manager
+from core.vectorization.canonical_track_resolver import build_canonical_vector
 
 class SearchOrchestrator:
     """High-level coordinator for similarity search operations."""
@@ -26,13 +26,14 @@ class SearchOrchestrator:
     def __init__(self,
                 vectors_path: Optional[str] = None,
                 index_path: Optional[str] = None,
+                masks_path: Optional[str] = None,
                 metadata_db: Optional[str] = None,
                 chunk_size: int = 100_000_000,
                 use_gpu: bool = True,
-                vram_scaling_factor_mb: int = VRAM_SCALING_FACTOR_MB,  # originally 2048
+                vram_scaling_factor_mb: int = VRAM_SCALING_FACTOR_MB,
                 skip_cpu_benchmark: bool = False,
                 skip_gpu_benchmark: bool = False,
-                skip_benchmark: bool = False,  # Deprecated but kept for backward compatibility
+                skip_benchmark: bool = False,
                 force_cpu: bool = False,
                 force_gpu: bool = False,
                 **kwargs):
@@ -41,6 +42,7 @@ class SearchOrchestrator:
         
         Args:
             vectors_path: Path to track_vectors.bin (default: from PathConfig)
+            masks_path: Path to track_masks.bin (default: from PathConfig)
             index_path: Path to track_index.bin (default: from PathConfig)
             metadata_db: Path to metadata database
             chunk_size: Chunk size for vector processing
@@ -62,12 +64,18 @@ class SearchOrchestrator:
 
         # Set default paths if not provided
         vectors_path = vectors_path or str(PathConfig.get_vector_file())
+        masks_path = masks_path or str(PathConfig.get_mask_file())
         index_path = index_path or str(PathConfig.get_index_file())
 
         # Initialize components
-        self.vector_reader = self._init_vector_reader(vectors_path)
+        self.vector_reader = self._init_vector_reader(vectors_path, masks_path)
         self.algorithm = config_manager.get_algorithm()
-        self.vector_ops = VectorOps(algorithm=self.algorithm)
+        self.vector_ops = VectorOps(algorithm=self.algorithm)  # Initialize first
+
+        # Apply user-defined weights AFTER initialization
+        weights = config_manager.get_weights()
+        self.vector_ops.set_user_weights(weights)
+
         print(f"  🧮 Using algorithm: {config_manager.get_algorithm_name()}")
         self.index_manager = IndexManager(index_path)
         self.metadata_manager = MetadataManager(metadata_db)
@@ -84,7 +92,7 @@ class SearchOrchestrator:
         elif self.force_gpu:
             self.use_gpu = True
             print("  ℹ️ GPU mode forced by configuration")
-    
+
         # Clear cache if settings changed
         if SearchOrchestrator._benchmark_results is not None:
             current_force_cpu = config_manager.get_force_cpu()
@@ -245,28 +253,32 @@ class SearchOrchestrator:
             self.use_gpu = False
             return False
 
-    def _init_vector_reader(self, vectors_path: str):
+    def _init_vector_reader(self, vectors_path: str, masks_path: str):
         """Initialize vector reader with GPU support if available"""
         # Force GPU if requested
         if self.force_gpu and torch.cuda.is_available():
             try:
-                return VectorReaderGPU(vectors_path, vram_scaling_factor_mb=self.vram_scaling_factor_mb)
+                return VectorReaderGPU(vectors_path, masks_path, vram_scaling_factor_mb=self.vram_scaling_factor_mb)
             except ImportError:
                 print("  ⚠️  GPU acceleration not available")
-                return VectorReader(vectors_path)
+                return VectorReader(vectors_path, masks_path)
         
         # Normal GPU detection
         if self._is_gpu_available():
             try:
-                return VectorReaderGPU(vectors_path, vram_scaling_factor_mb=self.vram_scaling_factor_mb)
+                return VectorReaderGPU(vectors_path, masks_path, vram_scaling_factor_mb=self.vram_scaling_factor_mb)
             except ImportError:
-                return VectorReader(vectors_path)
+                return VectorReader(vectors_path, masks_path)
         else:
-            return VectorReader(vectors_path)  
+            return VectorReader(vectors_path, masks_path)  
     
     def _vector_source(self, start_idx: int, num_vectors: int) -> np.ndarray:
         """Wrapper for vector reader."""
         return self.vector_reader.read_chunk(start_idx, num_vectors)
+    
+    def _mask_source(self, start_idx: int, num_vectors: int) -> np.ndarray:
+        """Wrapper for mask reader."""
+        return self.vector_reader.read_masks(start_idx, num_vectors)
     
     def search(
         self,
@@ -301,6 +313,7 @@ class SearchOrchestrator:
             indices, similarities = self.chunked_search.sequential_scan(
                 query_np,
                 self._vector_source,
+                self._mask_source,
                 self.total_vectors,
                 self.vector_ops,
                 top_k=top_k,
@@ -311,6 +324,7 @@ class SearchOrchestrator:
             indices, similarities = self.chunked_search.random_chunk_search(
                 query_np,
                 self._vector_source,
+                self._mask_source,
                 self.total_vectors,
                 self.vector_ops,
                 num_chunks=100,
@@ -322,6 +336,7 @@ class SearchOrchestrator:
             indices, similarities = self.chunked_search.progressive_search(
                 query_np,
                 self._vector_source,
+                self._mask_source,
                 self.total_vectors,
                 self.vector_ops,
                 min_chunks=1,
@@ -387,23 +402,25 @@ class SearchOrchestrator:
         """Validate CPU and GPU implementations produce identical results"""
         test_vector = np.random.rand(32).astype(np.float32)
         test_vectors = np.random.rand(1000, 32).astype(np.float32)
+        test_masks = np.random.randint(0, 2**32, size=1000, dtype=np.uint32)
         
         # CPU results
         cpu_ops = VectorOps(algorithm=self.algorithm)
-        cpu_results = cpu_ops.compute_similarity(test_vector, test_vectors)
+        cpu_results = cpu_ops.compute_similarity(test_vector, test_vectors, test_masks)
         
         # GPU results
         if torch.cuda.is_available():
             gpu_ops = VectorOpsGPU()
             gpu_tensor = torch.tensor(test_vectors, device='cuda')
+            gpu_masks = torch.tensor(test_masks, device='cuda')
             
             # Call the correct GPU method based on current algorithm
             if self.algorithm == 'cosine':
-                gpu_results = gpu_ops.masked_weighted_cosine_similarity(test_vector, gpu_tensor)
+                gpu_results = gpu_ops.masked_weighted_cosine_similarity(test_vector, gpu_tensor, gpu_masks)
             elif self.algorithm == 'cosine-euclidean':
-                gpu_results = gpu_ops.masked_weighted_cosine_euclidean_similarity(test_vector, gpu_tensor)
+                gpu_results = gpu_ops.masked_weighted_cosine_euclidean_similarity(test_vector, gpu_tensor, gpu_masks)
             elif self.algorithm == 'euclidean':
-                gpu_results = gpu_ops.masked_euclidean_similarity(test_vector, gpu_tensor)
+                gpu_results = gpu_ops.masked_euclidean_similarity(test_vector, gpu_tensor, gpu_masks)
             else:
                 raise ValueError(f"Unknown algorithm: {self.algorithm}")
             
@@ -540,4 +557,3 @@ def find_similar_tracks(
     )
     orchestrator.close()
     return results
-    

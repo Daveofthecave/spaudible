@@ -7,7 +7,8 @@ from ui.cli.console_utils import (
     print_header, 
     print_menu, 
     get_choice,
-    format_elapsed_time
+    format_elapsed_time,
+    clear_screen
 )
 from .utils import (
     check_preprocessed_files,
@@ -31,11 +32,11 @@ def handle_settings() -> str:
     """Handle settings and tools menu."""
     print_header("Settings & Tools")
 
-    # Get current CPU mode setting
+    # Get current settings
     force_cpu = config_manager.get_force_cpu()
     force_gpu = config_manager.get_force_gpu()
     algorithm_name = config_manager.get_algorithm_name()
-
+    
     # Ensure mutual exclusivity
     if force_cpu and force_gpu:
         config_manager.set_force_gpu(False)
@@ -49,7 +50,8 @@ def handle_settings() -> str:
     options = [
         f"🐌 Force CPU Mode: {cpu_status}",
         f"🐆 Force GPU Mode: {gpu_status}",
-        f"🧮 Select Similarity Algorithm: {algorithm_name}",        
+        f"🧮 Select Similarity Algorithm: {algorithm_name}", 
+        "⚖️  Adjust Feature Weights",
         "❔ Check System Status",
         "📊 Performance Test",
         "🔄 Re-run Setup",
@@ -67,12 +69,14 @@ def handle_settings() -> str:
     elif choice == 3:
         return _select_algorithm()
     elif choice == 4:
-        return _handle_system_status()
+        return _adjust_feature_weights()
     elif choice == 5:
-        return _handle_performance_test()
+        return _handle_system_status()
     elif choice == 6:
-        return _handle_rerun_setup()
+        return _handle_performance_test()
     elif choice == 7:
+        return _handle_rerun_setup()
+    elif choice == 8:
         return _handle_about()
     else:
         return "main_menu"
@@ -136,7 +140,82 @@ def _select_algorithm() -> str:
     print(f"\n  ✅ Algorithm set to: {algorithms[selected_key]}")
     
     input("\n  Press Enter to continue...")
-    return "settings"    
+    return "settings" 
+
+def _adjust_feature_weights() -> str:
+    """Adjust feature weights for similarity calculations."""
+    print_header("Adjust Feature Weights")
+    
+    # Get current weights
+    weights = config_manager.get_weights()
+    
+    # Feature names
+    features = [
+        "Acousticness", "Instrumentalness", "Speechiness", "Valence", "Danceability",
+        "Energy", "Liveness", "Loudness", "Key", "Mode", "Tempo", "Time Signature 4/4",
+        "Time Signature 3/4", "Time Signature 5/4", "Time Signature Other", "Duration",
+        "Release Date", "Popularity", "Artist Followers", "Electronic & Dance", 
+        "Rock & Alternative", "World & Traditional", "Latin", "Hip Hop & Rap", "Pop",
+        "Classical & Art Music", "Jazz & Blues", "Christian & Religious", "Country & Folk",
+        "R&B & Soul", "Reggae & Caribbean", "Other Genres"
+    ]
+    
+    print("\n  Current feature weights:\n")
+    for i, (feature, weight) in enumerate(zip(features, weights)):
+        print(f"  {i+1:2d}. {feature:25} : {weight:.2f}")
+    
+    print("\n  Options:")
+    print("  1. Edit individual weights")
+    print("  2. Reset all weights to default")
+    print("  3. Back to settings")
+    
+    choice = get_choice(3)
+    
+    if choice == 1:
+        return _edit_weights(weights, features)
+    elif choice == 2:
+        config_manager.reset_weights()
+        print("\n  ✅ All weights reset to 1.0")
+        input("\n  Press Enter to continue...")
+        return "settings"
+    else:
+        return "settings"
+
+def _edit_weights(weights, features):
+    """Edit individual feature weights."""
+    while True:
+        clear_screen()
+        print_header("Edit Feature Weights")
+        print("\n  Select a feature to adjust:\n")
+        
+        # Print features with current weights
+        for i, (feature, weight) in enumerate(zip(features, weights)):
+            print(f"  {i+1:2d}. {feature:25} : {weight:.2f}")
+        
+        print("\n  99. Save and return to settings")
+        print("  00. Cancel without saving")
+        
+        try:
+            choice = int(input("\n  Enter feature number: "))
+            if choice == 99:
+                config_manager.set_weights(weights)
+                print("\n  ✅ Weights saved!")
+                input("\n  Press Enter to continue...")
+                return "settings"
+            elif choice == 0:
+                return "settings"
+            elif 1 <= choice <= 32:
+                feature_idx = choice - 1
+                new_weight = float(input(f"  Enter new weight for '{features[feature_idx]}' (current: {weights[feature_idx]:.2f}): "))
+                weights[feature_idx] = max(0.0, min(10.0, new_weight))  # Clamp to [0,10]
+                print(f"  Updated {features[feature_idx]} weight to {weights[feature_idx]:.2f}")
+                input("\n  Press Enter to continue...")
+            else:
+                print("  ❌ Invalid choice")
+                time.sleep(1)
+        except ValueError:
+            print("  ❌ Please enter a valid number")
+            time.sleep(1)       
 
 def _handle_system_status() -> str:
     """Display comprehensive system status."""

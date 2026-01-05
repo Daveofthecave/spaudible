@@ -55,6 +55,7 @@ class ChunkedSearch:
         self,
         query_vector: np.ndarray,
         vector_source: Callable[[int, int], np.ndarray],
+        mask_source: Callable[[int, int], np.ndarray],
         total_vectors: int,
         vector_ops: VectorOps,
         top_k: int = 10,
@@ -68,6 +69,7 @@ class ChunkedSearch:
         Args:
             query_vector: Query vector (32D numpy array)
             vector_source: Function that returns vectors given (start_idx, num_vectors)
+            mask_source: Function that returns masks given (start_idx, num_vectors)
             total_vectors: Total number of vectors available
             vector_ops: Vector operations instance
             top_k: Number of top results to return
@@ -83,6 +85,7 @@ class ChunkedSearch:
             return self._gpu_sequential_scan(
                 query_vector,
                 vector_source,
+                mask_source,
                 total_vectors,
                 vector_ops,
                 top_k=top_k,
@@ -94,6 +97,7 @@ class ChunkedSearch:
             return self._cpu_sequential_scan(
                 query_vector,
                 vector_source,
+                mask_source,
                 total_vectors,
                 vector_ops,
                 top_k=top_k,
@@ -106,6 +110,7 @@ class ChunkedSearch:
         self,
         query_vector: np.ndarray,
         vector_source: Callable[[int, int], np.ndarray],
+        mask_source: Callable[[int, int], np.ndarray],
         total_vectors: int,
         vector_ops: VectorOps,
         top_k: int = 10,
@@ -116,8 +121,8 @@ class ChunkedSearch:
         """
         GPU-optimized sequential scan implementation with GLOBAL top-k tracking
         """
-        if query_vector.shape != (self.VECTOR_DIMENSIONS,):
-            raise ValueError(f"Query vector must be {self.VECTOR_DIMENSIONS}D")
+        # Convert query to PyTorch tensor
+        query_t = torch.tensor(query_vector, dtype=torch.float32, device=self.device)
         
         # Initialize GLOBAL results
         top_similarities = torch.full((top_k,), -1.0, dtype=torch.float32, device=self.device)
@@ -149,66 +154,47 @@ class ChunkedSearch:
                 chunk_end = min(chunk_start + self.chunk_size, vectors_to_scan)
                 actual_chunk_size = chunk_end - chunk_start
                 
-                # Process chunk in sub-batches
-                sub_processed = 0
-                while sub_processed < actual_chunk_size:
-                    # Calculate sub-batch size
-                    sub_batch_size = min(actual_chunk_size - sub_processed, self.max_batch_size)
-                    
-                    # Read vectors for this sub-batch
-                    transfer_start = time.time()
-                    vectors = vector_source(chunk_start + sub_processed, sub_batch_size)
-                    transfer_time = time.time() - transfer_start
-                    total_transfer_time += transfer_time
-                    
-                    # Verify vector count
-                    actual_count = vectors.shape[0] if isinstance(vectors, torch.Tensor) else len(vectors)
-                    if actual_count != sub_batch_size:
-                        print(f"\n⚠️ Vector count mismatch: Requested {sub_batch_size}, got {actual_count}")
-                    
-                    # Convert to tensor if needed
-                    if not isinstance(vectors, torch.Tensor):
-                        vectors = torch.tensor(vectors, dtype=torch.float32, device=self.device)
-                    
-                    # Compute similarities
-                    compute_start = time.time()
-                    similarities = vector_ops.compute_similarity(query_vector, vectors)
-                    compute_time = time.time() - compute_start
-                    total_compute_time += compute_time
-                    total_vectors_processed += sub_batch_size
-                    
-                    # Update top-k
-                    if sub_batch_size > 0:
-                        # Convert similarities to tensor
-                        similarities_tensor = torch.as_tensor(similarities, device=self.device)
-                        
-                        # Get top-k in current sub-batch
-                        sub_top_k = min(top_k, sub_batch_size)
-                        sub_top_values, sub_top_indices = torch.topk(similarities_tensor, sub_top_k)
-                        
-                        # Convert to absolute indices
-                        absolute_indices = sub_top_indices + chunk_start + sub_processed
-                        
-                        # Combine with current top-k
-                        combined_values = torch.cat([top_similarities, sub_top_values])
-                        combined_indices = torch.cat([top_indices, absolute_indices])
-                        
-                        # Get new global top-k
-                        global_top_values, global_top_indices = torch.topk(combined_values, top_k)
-                        top_similarities = global_top_values
-                        top_indices = combined_indices[global_top_indices]
-                    
-                    # Update progress
-                    sub_processed += sub_batch_size
-                    processed_vectors += sub_batch_size
-                    
-                    if show_progress:
-                        last_update = self._update_progress_bar(
-                            processed_vectors, 
-                            vectors_to_scan, 
-                            start_time, 
-                            last_update
-                        )
+                # Read vectors and masks
+                transfer_start = time.time()
+                vectors = vector_source(chunk_start, actual_chunk_size)
+                masks = mask_source(chunk_start, actual_chunk_size)
+                transfer_time = time.time() - transfer_start
+                total_transfer_time += transfer_time
+                
+                # Convert to GPU tensors
+                vectors_gpu = torch.tensor(vectors, dtype=torch.float32, device=self.device)
+                masks_gpu = torch.tensor(masks, dtype=torch.int32, device=self.device)
+                
+                # Compute similarities
+                compute_start = time.time()
+                similarities = self.gpu_ops.masked_weighted_cosine_similarity(
+                    query_vector, vectors_gpu, masks_gpu
+                )
+                compute_time = time.time() - compute_start
+                total_compute_time += compute_time
+                
+                # Update top-k
+                similarities_tensor = torch.tensor(similarities, device=self.device)
+                batch_top_values, batch_top_indices = torch.topk(similarities_tensor, min(top_k, actual_chunk_size))
+                
+                # Combine with global top-k
+                combined_values = torch.cat([top_similarities, batch_top_values])
+                combined_indices = torch.cat([top_indices, batch_top_indices + chunk_start])
+                
+                # Get new global top-k
+                global_top_values, global_top_indices = torch.topk(combined_values, top_k)
+                top_similarities = global_top_values
+                top_indices = combined_indices[global_top_indices]
+                
+                # Update progress
+                processed_vectors += actual_chunk_size
+                if show_progress:
+                    last_update = self._update_progress_bar(
+                        processed_vectors, 
+                        vectors_to_scan, 
+                        start_time, 
+                        last_update
+                    )
                     
             except KeyboardInterrupt:
                 print("\n\n  ⏸️  Processing interrupted by user.")
@@ -229,6 +215,7 @@ class ChunkedSearch:
         self,
         query_vector: np.ndarray,
         vector_source: Callable[[int, int], np.ndarray],
+        mask_source: Callable[[int, int], np.ndarray],
         total_vectors: int,
         vector_ops: VectorOps,
         top_k: int = 10,
@@ -263,11 +250,12 @@ class ChunkedSearch:
             chunk_end = min(chunk_start + self.chunk_size, vectors_to_scan)
             actual_chunk_size = chunk_end - chunk_start
             
-            # Read vectors for this chunk
+            # Read vectors and masks for this chunk
             vectors = vector_source(chunk_start, actual_chunk_size)
+            masks = mask_source(chunk_start, actual_chunk_size)
             
             # Compute similarities
-            similarities = vector_ops.compute_similarity(query_vector, vectors)
+            similarities = vector_ops.compute_similarity(query_vector, vectors, masks)
             
             # Update GLOBAL top-k
             if actual_chunk_size > 0:
