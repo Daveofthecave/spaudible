@@ -1,66 +1,82 @@
 # core/similarity_engine/vector_io.py
-"""
-Reading vectors from binary files.
-"""
 import numpy as np
+import os
 from pathlib import Path
-from typing import Optional, Tuple
-import struct
+import mmap
 
 class VectorReader:
-    """Read vectors from binary files efficiently."""
+    """Optimized CPU vector reader with persistent memory mapping"""
     
     VECTOR_DIMENSIONS = 32
-    BYTES_PER_VECTOR = 128  # 32 floats * 4 bytes each
+    BYTES_PER_VECTOR = 128  # 32 * 4 bytes
+    BYTES_PER_MASK = 4      # 32-bit unsigned integer
     DTYPE = np.float32
-    
-    def __init__(self, vectors_path: str = "data/vectors/track_vectors.bin"):
-        """
-        Initialize vector reader.
-        
-        Args:
-            vectors_path: Path to track_vectors.bin file
-        """
-        self.vectors_path = Path(vectors_path)
-        
-        if not self.vectors_path.exists():
-            raise FileNotFoundError(f"Vector file not found: {self.vectors_path}")
-        
-        # Calculate total vectors
-        file_size = self.vectors_path.stat().st_size
-        self.total_vectors = file_size // self.BYTES_PER_VECTOR
 
-        # Memory map the file
-        self.mmap = np.memmap(
-            self.vectors_path,
-            dtype=self.DTYPE,
-            mode='r',
-            shape=(self.total_vectors, self.VECTOR_DIMENSIONS)
+    def __init__(self, vectors_path: str, masks_path: str):
+        self.vectors_path = vectors_path
+        self.masks_path = masks_path
+        
+        # Open files and create persistent memory maps
+        self.vectors_file = open(vectors_path, 'rb')
+        self.masks_file = open(masks_path, 'rb')
+        
+        self.vector_file_size = os.path.getsize(vectors_path)
+        self.mask_file_size = os.path.getsize(masks_path)
+        self.total_vectors = self.vector_file_size // self.BYTES_PER_VECTOR
+        
+        # Create memory maps
+        self.vectors_mmap = mmap.mmap(
+            self.vectors_file.fileno(), 
+            self.vector_file_size, 
+            access=mmap.ACCESS_READ
         )
         
-        # print(f"   Vector Reader Initialized:")
-        # print(f"     Total track vectors: {self.total_vectors:,}")
-        # print(f"     File size: {file_size / (1024**3):.1f} GB")
-    
-    def read_chunk(self, start_idx: int, num_vectors: int) -> np.ndarray:
-        """
-        Read a chunk of vectors from file.
+        self.masks_mmap = mmap.mmap(
+            self.masks_file.fileno(),
+            self.mask_file_size,
+            access=mmap.ACCESS_READ
+        )
         
-        Args:
-            start_idx: Starting vector index (0-based)
-            num_vectors: Number of vectors to read
-            
-        Returns:
-            NumPy array of shape (num_vectors, 32)
-        """
+        # print(f"  📊 Memory-mapped vector file: {self.vector_file_size/(1024**3):.1f} GB")
+        # print(f"  📊 Memory-mapped mask file: {self.mask_file_size/(1024**3):.1f} GB")
 
-        # User memory mapping
-        return self.mmap[start_idx:start_idx+num_vectors]
-    
+    def read_chunk(self, start_idx: int, num_vectors: int) -> np.ndarray:
+        # Adjust num_vectors to not exceed file bounds
+        actual_num = min(num_vectors, self.total_vectors - start_idx)
+        if actual_num <= 0:
+            return np.empty((0, self.VECTOR_DIMENSIONS), dtype=self.DTYPE)
+
+        offset = start_idx * self.BYTES_PER_VECTOR
+        return np.frombuffer(
+            self.vectors_mmap,
+            dtype=self.DTYPE,
+            count=actual_num * self.VECTOR_DIMENSIONS,
+            offset=offset
+        ).reshape(actual_num, self.VECTOR_DIMENSIONS)
+
+    def read_masks(self, start_idx: int, num_vectors: int) -> np.ndarray:
+        actual_num = min(num_vectors, self.total_vectors - start_idx)
+        if actual_num <= 0:
+            return np.empty(0, dtype=np.uint32)
+
+        offset = start_idx * self.BYTES_PER_MASK
+        return np.frombuffer(
+            self.masks_mmap,
+            dtype=np.uint32,
+            count=actual_num,
+            offset=offset
+        )
+
+    def __del__(self):
+        """Clean up resources"""
+        if hasattr(self, 'vectors_mmap'):
+            self.vectors_mmap.close()
+        if hasattr(self, 'masks_mmap'):
+            self.masks_mmap.close()
+        if hasattr(self, 'vectors_file'):
+            self.vectors_file.close()
+        if hasattr(self, 'masks_file'):
+            self.masks_file.close()
+
     def get_total_vectors(self) -> int:
-        """Get total number of vectors in the file."""
         return self.total_vectors
-    
-    def read_single_vector(self, index: int) -> np.ndarray:
-        """Read a single vector by index."""
-        return self.read_chunk(index, 1)[0]

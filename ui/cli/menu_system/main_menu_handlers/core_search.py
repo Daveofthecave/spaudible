@@ -4,7 +4,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Optional, Tuple, Any
-from ui.cli.console_utils import print_header, format_elapsed_time
+from ui.cli.console_utils import print_header, format_elapsed_time, clear_screen
 from .input_router import route_input
 from .utils import (
     check_preprocessed_files,
@@ -70,6 +70,7 @@ def handle_core_search() -> str:
 def _search_by_track_id(track_id: str) -> str:
     """Core search function for track IDs."""
     print(f"   Finding songs similar to track: {track_id}")
+    print(f"   Using algorithm: {config_manager.get_algorithm_name()}")     
     
     # Check preprocessed files
     files_exist, error_msg = check_preprocessed_files()
@@ -90,7 +91,7 @@ def _search_by_track_id(track_id: str) -> str:
             return "main_menu"
         
         vector_time = time.time() - start_time
-        print(f"   Track converted to vector in {format_elapsed_time(vector_time)}")
+        # print(f"   Track converted to vector in {format_elapsed_time(vector_time)}")
         
         # Show track info
         if track_data:
@@ -113,25 +114,16 @@ def _search_by_track_id(track_id: str) -> str:
             force_cpu=force_cpu
         )
 
-        search_mode = "sequential"
+        search_mode = "sequential"   
         
         # Run search
         search_start = time.time()
-        if search_mode == "progressive":
-            results = orchestrator.search(
-                query_vector=vector,
-                search_mode=search_mode,
-                top_k=10,
-                with_metadata=True,
-                quality_threshold=0.95  # Only for progressive
-            )
-        else:
-            results = orchestrator.search(
-                query_vector=vector,
-                search_mode=search_mode,
-                top_k=10,
-                with_metadata=True
-            )
+        results = orchestrator.search(
+            query_vector=vector,
+            search_mode=search_mode,
+            top_k=10,
+            with_metadata=True
+        )
         
         search_time = time.time() - search_start
         orchestrator.close()
@@ -164,14 +156,26 @@ def _search_by_track_id(track_id: str) -> str:
             
             choice = input("\n  Choice (1-3): ").strip()
             
-            if choice == '2':
+            if choice == '1':
+                # Clear screen and return to search screen
+                clear_screen()
+                print_header("Find Similar Songs")
+                print("\n🔍 What would you like to find similar songs for?\n")
+                print("   Enter any of the following:\n")
+                print("   • Spotify track URL (https://open.spotify.com/track/...)")
+                print("   • 22-character Spotify track ID (eg. 0eGsygTp906u18L0Oimnem)")
+                return "core_search"
+            elif choice == '2':
                 playlist_name = input("  Enter playlist name: ").strip() or "Similar Songs"
-                from .utils import save_playlist
                 filename = save_playlist(results, playlist_name)
                 print(f"  ✅ Playlist saved to: {filename}")
-                input("\n  Press Enter to return...")
-                return "main_menu"
+                input("\n  Press Enter to continue...")
+                # Stay in results screen after saving
+                return "core_search"
             elif choice == '3':
+                return "main_menu"
+            else:
+                print("  ❌ Invalid choice, returning to main menu.")
                 return "main_menu"
         
         return "main_menu"
@@ -182,6 +186,7 @@ def _search_by_track_id(track_id: str) -> str:
         traceback.print_exc()
         input("\n  Press Enter to return...")
         return "main_menu"
+
 
 # Placeholder implementations for other handlers
 def _handle_audio_file(file_path: str) -> str:
@@ -216,4 +221,3 @@ def _handle_unknown_input(user_input: str) -> str:
     print("  • Audio file: /path/to/song.mp3")
     print("  • Search: 'Mr. Brightside The Killers'")
     return "main_menu"
-    

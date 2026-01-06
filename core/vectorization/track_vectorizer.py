@@ -2,6 +2,7 @@
 import math
 import numpy as np
 from .genre_mapper import compute_genre_intensities
+from typing import List
 
 def safe_float(value, default=-1.0):
     """Safely convert a value to float, returning default if conversion fails."""
@@ -117,6 +118,20 @@ def normalize_followers(followers):
     # Log10 normalization
     return math.log10(clipped + 1) / math.log10(MAX_FOLLOWERS + 1)
 
+def validate_vector(vector: List[float]) -> bool:
+    """Comprehensive vector validation"""
+    if len(vector) != 32:
+        return False
+    
+    for val in vector:
+        # Check type and range
+        if not isinstance(val, (int, float)):
+            return False
+        if val != -1.0 and not (0.0 <= val <= 1.0):
+            return False
+    
+    return True
+
 def build_track_vector(track_dict):
     """Convert track dictionary to 32-dimensional vector."""
     vector = [-1.0] * 32
@@ -168,5 +183,8 @@ def build_track_vector(track_dict):
     genre_list = track_dict.get('genres', [])
     genre_intensities = compute_genre_intensities(genre_list)
     vector[19:32] = genre_intensities
+
+    if not validate_vector(vector):
+        raise ValueError(f"Invalid vector for track {track_dict.get('track_id', 'unknown')}")
     
     return vector

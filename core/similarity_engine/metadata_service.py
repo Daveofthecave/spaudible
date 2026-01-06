@@ -111,15 +111,7 @@ class MetadataManager:
         return self._default_metadata()
     
     def get_track_metadata_batch(self, track_ids: List[str]) -> List[Dict[str, Optional[str]]]:
-        """
-        Get metadata for multiple tracks efficiently.
-        
-        Args:
-            track_ids: List of Spotify track IDs
-            
-        Returns:
-            List of metadata dictionaries in same order as input
-        """
+        """Fixed metadata retrieval with proper schema handling"""
         if not self.conn and not self.connect():
             return [self._default_metadata() for _ in track_ids]
         
@@ -127,83 +119,53 @@ class MetadataManager:
             placeholders = ','.join(['?'] * len(track_ids))
             cursor = self.conn.cursor()
             
-            # Check schema
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-            rows = cursor.fetchall()
-            tables = [row[0] for row in rows]
+            # Always use the complex schema - our DB has tracks table
+            cursor.execute(f"""
+                SELECT 
+                    t.id AS track_id,
+                    t.name AS track_name,
+                    alb.name AS album_name,
+                    alb.release_date,
+                    GROUP_CONCAT(DISTINCT art.name) AS artist_name
+                FROM tracks t
+                JOIN albums alb ON t.album_rowid = alb.rowid
+                JOIN track_artists ta ON t.rowid = ta.track_rowid
+                JOIN artists art ON ta.artist_rowid = art.rowid
+                WHERE t.id IN ({placeholders})
+                GROUP BY t.rowid
+            """, track_ids)
             
-            if 'tracks' in tables and 'albums' in tables and 'artists' in tables:
-                cursor.execute(f"""
-                    SELECT 
-                        t.id AS track_id,
-                        t.name AS track_name,
-                        alb.name AS album_name,
-                        alb.release_date,
-                        GROUP_CONCAT(art.name, ', ') AS artist_name
-                    FROM tracks t
-                    JOIN albums alb ON t.album_rowid = alb.rowid
-                    JOIN track_artists ta ON t.rowid = ta.track_rowid
-                    JOIN artists art ON ta.artist_rowid = art.rowid
-                    WHERE t.id IN ({placeholders})
-                    GROUP BY t.rowid
-                """, track_ids)
+            rows = cursor.fetchall()
+            
+            # Create lookup dictionary
+            metadata_dict = {}
+            for row in rows:
+                track_id_val = row[0]
+                track_name = row[1] or 'Unknown'
+                album_name = row[2] or 'Unknown'
+                release_date = row[3]
+                artist_name = row[4] or 'Unknown'
                 
-                rows = cursor.fetchall()
+                year = None
+                if release_date and len(str(release_date)) >= 4:
+                    year = str(release_date)[:4]
                 
-                # Create lookup dictionary
-                metadata_dict = {}
-                for row in rows:
-                    # row is a tuple: (track_id, track_name, album_name, release_date, artist_name)
-                    track_id_val = row[0]
-                    track_name = row[1] or 'Unknown'
-                    album_name = row[2] or 'Unknown'
-                    release_date = row[3]
-                    artist_name = row[4] or 'Unknown'
-                    
-                    year = None
-                    if release_date and len(str(release_date)) >= 4:
-                        year = str(release_date)[:4]
-                    
-                    metadata_dict[track_id_val] = {
-                        'track_name': track_name,
-                        'artist_name': artist_name,
-                        'album_name': album_name,
-                        'album_release_year': year
-                    }
-                
-                # Return in same order as input
-                return [metadata_dict.get(tid, self._default_metadata()) for tid in track_ids]
-                
-            else:
-                cursor.execute(f"""
-                    SELECT track_id, track_name, artist_name, album_name, album_release_year
-                    FROM tracks 
-                    WHERE track_id IN ({placeholders})
-                """, track_ids)
-                
-                rows = cursor.fetchall()
-                
-                # Create lookup dictionary
-                metadata_dict = {}
-                for row in rows:
-                    # row is a tuple: (track_id, track_name, artist_name, album_name, album_release_year)
-                    track_id_val = row[0]
-                    metadata_dict[track_id_val] = {
-                        'track_name': row[1] or 'Unknown',
-                        'artist_name': row[2] or 'Unknown',
-                        'album_name': row[3] or 'Unknown',
-                        'album_release_year': row[4]
-                    }
-                
-                # Return in same order as input
-                return [metadata_dict.get(tid, self._default_metadata()) for tid in track_ids]
+                metadata_dict[track_id_val] = {
+                    'track_name': track_name,
+                    'artist_name': artist_name,
+                    'album_name': album_name,
+                    'album_release_year': year
+                }
+            
+            # Return in same order as input
+            return [metadata_dict.get(tid, self._default_metadata()) for tid in track_ids]
             
         except Exception as e:
             print(f"⚠️  Error fetching metadata batch: {e}")
             import traceback
             traceback.print_exc()
             return [self._default_metadata() for _ in track_ids]
-    
+
     def _default_metadata(self) -> Dict[str, Optional[str]]:
         """Return default metadata when track not found."""
         return {

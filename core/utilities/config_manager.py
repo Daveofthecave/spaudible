@@ -10,6 +10,8 @@ class ConfigManager:
         'euclidean': 'Euclidean Similarity'
     }
     
+    DEFAULT_WEIGHTS = [1.0] * 32
+    
     _instance = None
     
     def __new__(cls):
@@ -26,8 +28,12 @@ class ConfigManager:
                     self.settings = json.load(f)
             else:
                 self.settings = {}
+                
+            # Initialize weights if not present
+            if 'weights' not in self.settings:
+                self.settings['weights'] = self.DEFAULT_WEIGHTS
         except:
-            self.settings = {}
+            self.settings = {'weights': self.DEFAULT_WEIGHTS}
     
     def save(self):
         with open(self.config_path, 'w') as f:
@@ -62,7 +68,22 @@ class ConfigManager:
     
     def get_algorithm_name(self):
         algo = self.get_algorithm()
-        return self.ALGORITHM_CHOICES.get(algo, 'Unknown')   
+        return self.ALGORITHM_CHOICES.get(algo, 'Unknown')
+    
+    def get_weights(self):
+        return self.settings.get('weights', self.DEFAULT_WEIGHTS)
+    
+    def set_weights(self, weights):
+        if len(weights) != 32:
+            raise ValueError("Weights must have exactly 32 values")
+        if not all(isinstance(w, (int, float)) for w in weights):
+            raise ValueError("All weights must be numbers")
+        self.settings['weights'] = weights
+        self.save()
+    
+    def reset_weights(self):
+        self.settings['weights'] = self.DEFAULT_WEIGHTS
+        self.save()
 
 # Singleton access
 config_manager = ConfigManager()

@@ -7,7 +7,8 @@ from ui.cli.console_utils import (
     print_header, 
     print_menu, 
     get_choice,
-    format_elapsed_time
+    format_elapsed_time,
+    clear_screen
 )
 from .utils import (
     check_preprocessed_files,
@@ -21,6 +22,7 @@ from config import PathConfig
 from core.utilities.gpu_utils import get_gpu_info, print_gpu_info
 from core.similarity_engine.vector_comparer import ChunkedSearch
 from core.utilities.config_manager import config_manager
+from core.similarity_engine.vector_math import VectorOps
 
 try:
     import torch
@@ -31,11 +33,11 @@ def handle_settings() -> str:
     """Handle settings and tools menu."""
     print_header("Settings & Tools")
 
-    # Get current CPU mode setting
+    # Get current settings
     force_cpu = config_manager.get_force_cpu()
     force_gpu = config_manager.get_force_gpu()
     algorithm_name = config_manager.get_algorithm_name()
-
+    
     # Ensure mutual exclusivity
     if force_cpu and force_gpu:
         config_manager.set_force_gpu(False)
@@ -49,7 +51,8 @@ def handle_settings() -> str:
     options = [
         f"🐌 Force CPU Mode: {cpu_status}",
         f"🐆 Force GPU Mode: {gpu_status}",
-        f"🧮 Select Similarity Algorithm: {algorithm_name}",        
+        f"🧮 Select Similarity Algorithm: {algorithm_name}", 
+        "⚖️  Adjust Feature Weights",
         "❔ Check System Status",
         "📊 Performance Test",
         "🔄 Re-run Setup",
@@ -67,12 +70,14 @@ def handle_settings() -> str:
     elif choice == 3:
         return _select_algorithm()
     elif choice == 4:
-        return _handle_system_status()
+        return _adjust_feature_weights()
     elif choice == 5:
-        return _handle_performance_test()
+        return _handle_system_status()
     elif choice == 6:
-        return _handle_rerun_setup()
+        return _handle_performance_test()
     elif choice == 7:
+        return _handle_rerun_setup()
+    elif choice == 8:
         return _handle_about()
     else:
         return "main_menu"
@@ -136,7 +141,82 @@ def _select_algorithm() -> str:
     print(f"\n  ✅ Algorithm set to: {algorithms[selected_key]}")
     
     input("\n  Press Enter to continue...")
-    return "settings"    
+    return "settings" 
+
+def _adjust_feature_weights() -> str:
+    """Adjust feature weights for similarity calculations."""
+    print_header("Adjust Feature Weights")
+    
+    # Get current weights
+    weights = config_manager.get_weights()
+    
+    # Feature names
+    features = [
+        "Acousticness", "Instrumentalness", "Speechiness", "Valence", "Danceability",
+        "Energy", "Liveness", "Loudness", "Key", "Mode", "Tempo", "Time Signature 4/4",
+        "Time Signature 3/4", "Time Signature 5/4", "Time Signature Other", "Duration",
+        "Release Date", "Popularity", "Artist Followers", "Electronic & Dance", 
+        "Rock & Alternative", "World & Traditional", "Latin", "Hip Hop & Rap", "Pop",
+        "Classical & Art Music", "Jazz & Blues", "Christian & Religious", "Country & Folk",
+        "R&B & Soul", "Reggae & Caribbean", "Other Genres"
+    ]
+    
+    print("\n  Current feature weights:\n")
+    for i, (feature, weight) in enumerate(zip(features, weights)):
+        print(f"  {i+1:2d}. {feature:25} : {weight:.2f}")
+    
+    print("\n  Options:")
+    print("  1. Edit individual weights")
+    print("  2. Reset all weights to default")
+    print("  3. Back to settings")
+    
+    choice = get_choice(3)
+    
+    if choice == 1:
+        return _edit_weights(weights, features)
+    elif choice == 2:
+        config_manager.reset_weights()
+        print("\n  ✅ All weights reset to 1.0")
+        input("\n  Press Enter to continue...")
+        return "settings"
+    else:
+        return "settings"
+
+def _edit_weights(weights, features):
+    """Edit individual feature weights."""
+    while True:
+        clear_screen()
+        print_header("Edit Feature Weights")
+        print("\n  Select a feature to adjust:\n")
+        
+        # Print features with current weights
+        for i, (feature, weight) in enumerate(zip(features, weights)):
+            print(f"  {i+1:2d}. {feature:25} : {weight:.2f}")
+        
+        print("\n  99. Save and return to settings")
+        print("  00. Cancel without saving")
+        
+        try:
+            choice = int(input("\n  Enter feature number: "))
+            if choice == 99:
+                config_manager.set_weights(weights)
+                print("\n  ✅ Weights saved!")
+                input("\n  Press Enter to continue...")
+                return "settings"
+            elif choice == 0:
+                return "settings"
+            elif 1 <= choice <= 32:
+                feature_idx = choice - 1
+                new_weight = float(input(f"  Enter new weight for '{features[feature_idx]}' (current: {weights[feature_idx]:.2f}): "))
+                weights[feature_idx] = max(0.0, min(10.0, new_weight))  # Clamp to [0,10]
+                print(f"  Updated {features[feature_idx]} weight to {weights[feature_idx]:.2f}")
+                input("\n  Press Enter to continue...")
+            else:
+                print("  ❌ Invalid choice")
+                time.sleep(1)
+        except ValueError:
+            print("  ❌ Please enter a valid number")
+            time.sleep(1)       
 
 def _handle_system_status() -> str:
     """Display comprehensive system status."""
@@ -165,7 +245,13 @@ def _handle_system_status() -> str:
     index_file = PathConfig.get_index_file()
     index_size = format_file_size(index_file.stat().st_size) if index_file.exists() else "Not found"
     print(f"   • Vector Index: {index_file.name}")
-    print(f"      Size: {index_size}")
+    print(f"       Size: {index_size}")
+    
+    # Bit mask file
+    mask_file = PathConfig.get_mask_file()
+    mask_size = format_file_size(mask_file.stat().st_size) if mask_file.exists() else "Not found"
+    print(f"   • Vector Masks: {mask_file.name}")
+    print(f"       Size: {mask_size}")
     
     metadata_file = PathConfig.get_metadata_file()
     metadata_size = format_file_size(metadata_file.stat().st_size) if metadata_file.exists() else "Not found"
@@ -180,7 +266,10 @@ def _handle_system_status() -> str:
 
     # Total disk usage
     total_size = 0
-    for file in [main_db, audio_db, vector_file, index_file, metadata_file, genre_file]:
+    files_to_check = [
+        main_db, audio_db, vector_file, index_file, mask_file, metadata_file, genre_file
+    ]
+    for file in files_to_check:
         if file.exists():
             total_size += file.stat().st_size
     print(f"\n  💾 Total Disk Usage: {format_file_size(total_size)}")            
@@ -191,14 +280,6 @@ def _handle_system_status() -> str:
         print("\n  ✅ Canonical Track ID Resolver: Ready")
     except Exception as e:
         print(f"\n  ⚠️  Canonical Track ID Resolver: Error - {str(e)}")
-    
-    # # Check similarity engine
-    # try:
-    #     orchestrator = SearchOrchestrator()
-    #     orchestrator.close()
-    #     print("  ✅ Similarity Engine: Ready")
-    # except Exception as e:
-    #     print(f"  ⚠️  Similarity engine: Error - {str(e)}")
     
     input("\n  Press Enter to continue...")
     return "settings"
@@ -227,38 +308,49 @@ def _handle_performance_test() -> str:
     print("=" * 70)
     print("  🔧 CPU Chunk Size Optimization")
     print("=" * 70)
-    print("  Testing various chunk sizes with 500,000 vectors\n")
+    print("  Testing various chunk sizes with 1,000,000 vectors\n")
     
-    cpu_chunk_sizes = [5_000, 10_000, 15_000, 20_000, 30_000, 50_000, 
-                       75_000, 100_000, 125_000, 150_000, 200_000, 
-                       300_000, 500_000]
+    cpu_chunk_sizes = [1_000_000, 750_000, 500_000, 300_000, 200_000, 150_000, 
+                       125_000, 100_000, 75_000, 50_000, 30_000, 20_000, 
+                       15_000, 10_000, 5_000]
     
     cpu_results = []
     cpu_orchestrator = SearchOrchestrator(
-        use_gpu=False,
-        skip_benchmark=True
+        skip_cpu_benchmark=True,
+        skip_gpu_benchmark=True,
+        use_gpu=False
     )
+    
+    # Initialize vector_ops for CPU orchestrator
+    cpu_orchestrator.vector_ops = VectorOps(algorithm=config_manager.get_algorithm())
+    cpu_orchestrator.vector_ops.set_user_weights(config_manager.get_weights())
     
     # Run CPU tests without progress bars
     for chunk_size in cpu_chunk_sizes:
-        print(f"  Testing chunk size: {chunk_size:>7,}", end="", flush=True)
-        cpu_orchestrator.chunk_size = chunk_size
-        cpu_orchestrator.chunked_search = ChunkedSearch(chunk_size, use_gpu=False)
+        print(f"  Testing chunk size: {chunk_size:>9,}", end="", flush=True)
+        
+        # Create new ChunkedSearch with vector_ops
+        cpu_orchestrator.chunked_search = ChunkedSearch(
+            chunk_size,
+            use_gpu=False,
+            vector_ops=cpu_orchestrator.vector_ops
+        )
         
         start_time = time.time()
         cpu_orchestrator.search(
             test_vector,
-            max_vectors=500_000
+            max_vectors=1_000_000,
+            show_progress=False
         )
         elapsed = time.time() - start_time
-        speed = 500_000 / elapsed if elapsed > 0 else 0
+        speed = 1_000_000 / elapsed if elapsed > 0 else 0
         
         print(f" - {speed/1e6:.2f}M vec/sec")
         cpu_results.append((chunk_size, speed))
     
     # Find optimal CPU chunk size
     optimal_cpu_chunk, optimal_cpu_speed = max(cpu_results, key=lambda x: x[1])
-    print(f"\n  ✅ Optimal CPU chunk size: {optimal_cpu_chunk:,} ({optimal_cpu_speed/1e6:.2f}M vec/sec)")
+    print(f"\n  Optimal CPU chunk size: {optimal_cpu_chunk:,} ({optimal_cpu_speed/1e6:.2f}M vec/sec)")
     
     # Section 2: GPU Batch Scaling
     print("\n" + "=" * 70)
@@ -267,47 +359,49 @@ def _handle_performance_test() -> str:
     
     gpu_results = []
     if torch.cuda.is_available():
-        # Determine max batch size based on VRAM
-        gpu_info = get_gpu_info()
-        if gpu_info:
-            free_vram = gpu_info[0]['free_vram']
-            bytes_per_vector = 32 * 4  # 32 floats * 4 bytes
-            max_batch = int((free_vram * VRAM_SAFETY_FACTOR) // bytes_per_vector)
+        gpu_orchestrator = SearchOrchestrator(
+            skip_cpu_benchmark=True,
+            skip_gpu_benchmark=True,
+            use_gpu=True
+        )
+        
+        # Get max batch size from vector reader
+        max_batch = gpu_orchestrator.vector_reader.get_max_batch_size()
+        
+        # Generate batch sizes
+        batch_sizes = [1_000_000, 5_000_000, 10_000_000, 20_000_000, 
+                       50_000_000, 100_000_000, max_batch]
+        batch_sizes = sorted(set([bs for bs in batch_sizes if bs <= max_batch]))
+        
+        print(f"  Testing batch sizes up to {max_batch:,} vectors\n")
+        
+        for batch_size in batch_sizes:
+            print(f"  Testing batch size: {batch_size:>10,}", end="", flush=True)
             
-            # Generate batch sizes
-            batch_sizes = [1_000_000, 5_000_000, 10_000_000, 20_000_000, 
-                           50_000_000, 100_000_000, max_batch]
-            batch_sizes = sorted(set([bs for bs in batch_sizes if bs <= max_batch]))
-            
-            gpu_orchestrator = SearchOrchestrator(
+            # Create new ChunkedSearch with vector_ops
+            gpu_orchestrator.chunked_search = ChunkedSearch(
+                batch_size,
                 use_gpu=True,
-                skip_benchmark=True
+                vector_ops=gpu_orchestrator.vector_ops
             )
             
-            print(f"  Testing batch sizes up to {max_batch:,} vectors\n")
+            start_time = time.time()
+            gpu_orchestrator.search(
+                test_vector,
+                max_vectors=batch_size,
+                show_progress=False
+            )
+            elapsed = time.time() - start_time
+            speed = batch_size / elapsed if elapsed > 0 else 0
             
-            for batch_size in batch_sizes:
-                print(f"  Testing batch size: {batch_size:>10,}", end="", flush=True)
-                gpu_orchestrator.chunk_size = batch_size
-                gpu_orchestrator.chunked_search = ChunkedSearch(batch_size, use_gpu=True)
-                
-                start_time = time.time()
-                gpu_orchestrator.search(
-                    test_vector,
-                    max_vectors=batch_size
-                )
-                elapsed = time.time() - start_time
-                speed = batch_size / elapsed if elapsed > 0 else 0
-                
-                print(f" - {speed/1e6:.2f}M vec/sec")
-                gpu_results.append((batch_size, speed))
-            
-            # Find fastest GPU batch size
-            if gpu_results:
-                best_batch, best_speed = max(gpu_results, key=lambda x: x[1])
-                print(f"\n  🚀 Fastest GPU batch: {best_batch:,} ({best_speed/1e6:.2f}M vec/sec)")
-        else:
-            print("  ⚠️  Could not get GPU information")
+            print(f" - {speed/1e6:.2f}M vec/sec")
+            gpu_results.append((batch_size, speed))
+        
+        # Find fastest GPU batch size
+        if gpu_results:
+            best_batch, best_speed = max(gpu_results, key=lambda x: x[1])
+            print(f"\n  🚀 Fastest GPU batch: {best_batch:,} ({best_speed/1e6:.2f}M vec/sec)")
+        gpu_orchestrator.close()
     else:
         print("  ⚠️  No GPU available - skipping GPU tests")
     

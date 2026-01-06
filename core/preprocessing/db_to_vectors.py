@@ -5,6 +5,7 @@ from pathlib import Path
 from core.vectorization.track_vectorizer import build_track_vector
 from .vector_exporter import VectorWriter
 from .progress import ProgressTracker
+from .mask_generator import generate_mask_file
 
 class DatabaseReader:
     """Efficient, memory-mapped reader for Spotify SQLite databases."""
@@ -241,24 +242,42 @@ class PreprocessingEngine:
         
         # Show completion
         progress.complete()
-        self._show_statistics(processed_count)
-        return True
+        
+        # Generate mask file as separate pass
+        print("\n⚙️  Generating mask file from vectors...")
+        vectors_path = Path(self.output_dir) / "track_vectors.bin"
+        masks_path = Path(self.output_dir) / "track_masks.bin"
+        
+        mask_start = time.time()
+        mask_success = generate_mask_file(vectors_path, masks_path)
+        mask_time = time.time() - mask_start
+        
+        if mask_success:
+            print(f"✅ Mask generation completed in {mask_time:.1f} seconds")
+            self._show_statistics(processed_count, masks_path)
+            return True
+        else:
+            print(f"❌ Mask generation failed after {mask_time:.1f} seconds")
+            return False
     
-    def _show_statistics(self, total_processed):
-        """Display processing statistics."""
+    def _show_statistics(self, total_processed, masks_path: Path):
+        """Display processing statistics including mask file."""
         vectors_path = Path(self.output_dir) / "track_vectors.bin"
         index_path = Path(self.output_dir) / "track_index.bin"
         
         vectors_size = vectors_path.stat().st_size if vectors_path.exists() else 0
+        masks_size = masks_path.stat().st_size if masks_path.exists() else 0
         index_size = index_path.stat().st_size if index_path.exists() else 0
         
         vectors_gb = vectors_size / (1024**3)
+        masks_gb = masks_size / (1024**3)
         index_gb = index_size / (1024**3)
-        total_gb = vectors_gb + index_gb
+        total_gb = vectors_gb + masks_gb + index_gb
         
         print("\n  📊 Processing Statistics:")
         print(f"    Total tracks processed: {total_processed:,}")
         print(f"    Vector file size: {vectors_gb:.1f} GB")
+        print(f"    Mask file size: {masks_gb:.1f} GB")
         print(f"    Index file size: {index_gb:.1f} GB")
         print(f"    Total disk space used: {total_gb:.1f} GB")
         print(f"    Output directory: {self.output_dir}")

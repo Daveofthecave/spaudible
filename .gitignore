@@ -25,7 +25,7 @@ data/vectors/*
 playlists/
 
 # Benchmarks - testing stuff
-benchmarks/
+_misc/
 
 # Environment variables
 .env

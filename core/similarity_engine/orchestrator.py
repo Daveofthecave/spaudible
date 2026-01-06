@@ -2,8 +2,7 @@
 import numpy as np
 import time
 import torch
-from config import PathConfig, VRAM_SAFETY_FACTOR
-from core.vectorization.canonical_track_resolver import build_canonical_vector
+from config import PathConfig, VRAM_SAFETY_FACTOR, VRAM_SCALING_FACTOR_MB
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional, Union, Callable
 from .chunk_size_optimizer import ChunkSizeOptimizer
@@ -16,6 +15,7 @@ from .vector_math import VectorOps
 from .vector_math_gpu import VectorOpsGPU
 from core.utilities.gpu_utils import get_gpu_info, recommend_max_batch_size
 from core.utilities.config_manager import config_manager
+from core.vectorization.canonical_track_resolver import build_canonical_vector
 
 class SearchOrchestrator:
     """High-level coordinator for similarity search operations."""
@@ -23,16 +23,17 @@ class SearchOrchestrator:
     # Class-level cache for benchmark results
     _benchmark_results = None
     
-    def __init__(self,
-                vectors_path: Optional[str] = None,
+    def __init__(self, 
+                vectors_path: Optional[str] = None, 
                 index_path: Optional[str] = None,
+                masks_path: Optional[str] = None,
                 metadata_db: Optional[str] = None,
                 chunk_size: int = 100_000_000,
                 use_gpu: bool = True,
-                vram_scaling_factor_mb: int = 2**7,  # originally 2048
+                vram_scaling_factor_mb: int = VRAM_SCALING_FACTOR_MB,
                 skip_cpu_benchmark: bool = False,
                 skip_gpu_benchmark: bool = False,
-                skip_benchmark: bool = False,  # Deprecated but kept for backward compatibility
+                skip_benchmark: bool = False,
                 force_cpu: bool = False,
                 force_gpu: bool = False,
                 **kwargs):
@@ -41,6 +42,7 @@ class SearchOrchestrator:
         
         Args:
             vectors_path: Path to track_vectors.bin (default: from PathConfig)
+            masks_path: Path to track_masks.bin (default: from PathConfig)
             index_path: Path to track_index.bin (default: from PathConfig)
             metadata_db: Path to metadata database
             chunk_size: Chunk size for vector processing
@@ -49,6 +51,8 @@ class SearchOrchestrator:
             skip_cpu_benchmark: Skip CPU benchmarking
             skip_gpu_benchmark: Skip GPU benchmarking
             skip_benchmark: Deprecated - skip both CPU and GPU benchmarking
+            force_cpu: Whether CPU mode is forced
+            force_gpu: Whether GPU mode is forced
             **kwargs: Additional keyword arguments
         """
         self.skip_cpu_benchmark = skip_cpu_benchmark or skip_benchmark
@@ -58,17 +62,22 @@ class SearchOrchestrator:
         self.force_cpu = config_manager.get_force_cpu()
         self.force_gpu = config_manager.get_force_gpu()
         self.vram_scaling_factor_mb = vram_scaling_factor_mb
-        self._is_gpu_available(verbose=True)
+        self._is_gpu_available(verbose=False)
 
         # Set default paths if not provided
         vectors_path = vectors_path or str(PathConfig.get_vector_file())
+        masks_path = masks_path or str(PathConfig.get_mask_file())
         index_path = index_path or str(PathConfig.get_index_file())
 
         # Initialize components
-        self.vector_reader = self._init_vector_reader(vectors_path)
+        self.vector_reader = self._init_vector_reader(vectors_path, masks_path)
         self.algorithm = config_manager.get_algorithm()
-        self.vector_ops = VectorOps(algorithm=self.algorithm)
-        print(f"  🧮 Using algorithm: {config_manager.get_algorithm_name()}")
+        self.vector_ops = VectorOps(algorithm=self.algorithm)  # Initialize first
+
+        # Apply user-defined weights AFTER initialization
+        weights = config_manager.get_weights()
+        self.vector_ops.set_user_weights(weights)
+
         self.index_manager = IndexManager(index_path)
         self.metadata_manager = MetadataManager(metadata_db)
         
@@ -80,11 +89,11 @@ class SearchOrchestrator:
         # Apply force settings
         if self.force_cpu:
             self.use_gpu = False
-            print("  ℹ️ CPU mode forced by configuration")
+            print("ℹ️  CPU mode forced by configuration")
         elif self.force_gpu:
             self.use_gpu = True
-            print("  ℹ️ GPU mode forced by configuration")
-    
+            print("ℹ️  GPU mode forced by configuration")
+
         # Clear cache if settings changed
         if SearchOrchestrator._benchmark_results is not None:
             current_force_cpu = config_manager.get_force_cpu()
@@ -104,24 +113,43 @@ class SearchOrchestrator:
             if SearchOrchestrator._benchmark_results:
                 self.use_gpu = (SearchOrchestrator._benchmark_results['recommended_device'] == 'gpu')
                 self.chunk_size = SearchOrchestrator._benchmark_results['optimal_chunk_size']
-                print(f"  🚀 Using {self.use_gpu and 'GPU' or 'CPU'} acceleration with chunk size {self.chunk_size:,}")
+                # print(f"   Using {self.use_gpu and 'GPU' or 'CPU'} with vector chunk size {self.chunk_size:,}")
         
-        # For forced modes or when benchmark wasn't run
-        if not hasattr(self, 'chunk_size'):
+        # Handle forced CPU mode - always run benchmark
+        if self.force_cpu:
+            # Initialize CPU optimizer
+            self.chunk_size_optimizer = ChunkSizeOptimizer(self.vector_reader)
+            self.chunk_size = self.chunk_size_optimizer.optimize()
+            # print(f"   Using CPU with vector chunk size {self.chunk_size:,}")
+        
+        # Handle forced GPU mode
+        elif self.force_gpu:
             if self.use_gpu and hasattr(self.vector_reader, 'get_max_batch_size'):
                 self.chunk_size = self.vector_reader.get_max_batch_size()
-                print(f"  🚀 Using GPU acceleration with chunk size {self.chunk_size:,}")
+                # print(f"   Using GPU with vector chunk size {self.chunk_size:,}")
+            else:
+                # Fallback to CPU if GPU not available
+                self.chunk_size_optimizer = ChunkSizeOptimizer(self.vector_reader)
+                self.chunk_size = self.chunk_size_optimizer.optimize()
+                # print(f"   Using CPU (GPU fallback) with vector chunk size {self.chunk_size:,}")
+        
+        # Handle non-forced modes where benchmark wasn't run
+        elif not hasattr(self, 'chunk_size'):
+            if self.use_gpu and hasattr(self.vector_reader, 'get_max_batch_size'):
+                self.chunk_size = self.vector_reader.get_max_batch_size()
+                # print(f"   Using GPU with vector chunk size {self.chunk_size:,}")
             else:
                 # Initialize CPU optimizer
                 self.chunk_size_optimizer = ChunkSizeOptimizer(self.vector_reader)
                 self.chunk_size = self.chunk_size_optimizer.optimize()
-                print(f"  🚀 Using CPU acceleration with chunk size {self.chunk_size:,}")
+                # print(f"   Using CPU with vector chunk size {self.chunk_size:,}")
         
         # Pass self.use_gpu and max_batch_size to ChunkedSearch
         self.chunked_search = ChunkedSearch(
             self.chunk_size, 
             use_gpu=self.use_gpu,
-            max_batch_size=max_batch_size
+            max_batch_size=max_batch_size,
+            vector_ops=self.vector_ops
         )
         
         self.total_vectors = self.vector_reader.get_total_vectors()
@@ -131,13 +159,13 @@ class SearchOrchestrator:
             try:
                 if not self.skip_cpu_benchmark and not self.skip_gpu_benchmark:
                     self._validate_implementation_parity()
-                    print("  ✅ CPU/GPU implementations validated")
+                    # print("  ✅ CPU/GPU implementations validated")
             except Exception as e:
                 print(f"  ⚠️  Implementation validation failed: {e}")
 
     def run_auto_benchmark(self):
         """Run auto-benchmark with optimized test sizes"""
-        print("   Running auto-benchmark...")
+        # print("   Running auto-benchmark...")
         results = {
             'cpu_speed': 0,
             'gpu_speed': 0,
@@ -161,7 +189,7 @@ class SearchOrchestrator:
         
         # Benchmark CPU with optimized chunk sizes
         if not self.skip_cpu_benchmark:
-            print("   Benchmarking CPU with optimized chunk sizes...")
+            # print("   Benchmarking CPU with optimized chunk sizes...")
             cpu_orchestrator = SearchOrchestrator(
                 skip_cpu_benchmark=True,
                 skip_gpu_benchmark=True,
@@ -173,13 +201,19 @@ class SearchOrchestrator:
             optimizer = ChunkSizeOptimizer(cpu_orchestrator.vector_reader)
             best_chunk = optimizer.optimize()
             cpu_orchestrator.chunk_size = best_chunk
-            cpu_orchestrator.chunked_search = ChunkedSearch(best_chunk, use_gpu=False)
+            
+            # Create new ChunkedSearch with vector_ops
+            cpu_orchestrator.chunked_search = ChunkedSearch(
+                best_chunk,
+                use_gpu=False,
+                vector_ops=cpu_orchestrator.vector_ops
+            )
             
             # Run test with optimal chunk size
-            result = cpu_orchestrator.run_performance_test(test_vector, 500_000, show_progress=False)
+            result = cpu_orchestrator.run_performance_test(test_vector, 1_000_000, show_progress=False)
             results['cpu_speed'] = result['speed']
             results['optimal_cpu_chunk_size'] = best_chunk
-            print(f"      Optimal CPU chunk: {best_chunk:,} ({result['speed']/1e6:.2f}M vec/sec)")
+            # print(f"   Optimal CPU chunk: {best_chunk:,} ({result['speed']/1e6:.2f}M vec/sec)")
             
             cpu_orchestrator.close()
         
@@ -194,12 +228,12 @@ class SearchOrchestrator:
             
             # Get max batch size from vector reader
             max_batch = gpu_orchestrator.vector_reader.get_max_batch_size()
-            print(f"      Max GPU batch: {max_batch:,} vectors")
+            # print(f"      Max GPU batch: {max_batch:,} vectors")
             
             # Run test with max batch size - show progress bars
             gpu_result = gpu_orchestrator.run_performance_test(test_vector, max_batch, show_progress=True)
             results['gpu_speed'] = gpu_result['speed']
-            print(f"      GPU speed: {gpu_result['speed']/1e6:.2f}M vec/sec")
+            # print(f"   GPU speed: {gpu_result['speed']/1e6:.2f}M vec/sec")
             
             gpu_orchestrator.close()
         
@@ -214,10 +248,10 @@ class SearchOrchestrator:
             results['recommended_device'] = 'cpu'
             results['optimal_chunk_size'] = results.get('optimal_cpu_chunk_size', 100_000)
         
-        print(f"✅ Auto-benchmark complete: Using {results['recommended_device'].upper()} "
-            f"with chunk size {results['optimal_chunk_size']:,}")
+        # print(f"✅ Auto-benchmark complete: Using {results['recommended_device'].upper()} "
+            # f"with chunk size {results['optimal_chunk_size']:,}")
         return results
-
+        
     def _is_gpu_available(self, verbose: bool = False):
         """Validate GPU availability considering force settings"""
         if self.force_cpu:
@@ -228,16 +262,16 @@ class SearchOrchestrator:
             
         if self.force_gpu:
             if not torch.cuda.is_available():
-                print("  ⚠️  GPU not available but forced by configuration")
+                print("⚠️ GPU not available but forced by configuration")
                 return False
             if verbose:
-                print("ℹ️ Using GPU (forced by configuration)")
+                print("ℹ️  Using GPU (forced by configuration)")
             self.use_gpu = True
             return True
             
         if self.use_gpu and torch.cuda.is_available():
             if verbose: 
-                print("ℹ️ Using GPU")
+                print("ℹ️  Using GPU")
             return True
         else:
             if verbose: 
@@ -245,28 +279,32 @@ class SearchOrchestrator:
             self.use_gpu = False
             return False
 
-    def _init_vector_reader(self, vectors_path: str):
+    def _init_vector_reader(self, vectors_path: str, masks_path: str):
         """Initialize vector reader with GPU support if available"""
         # Force GPU if requested
         if self.force_gpu and torch.cuda.is_available():
             try:
-                return VectorReaderGPU(vectors_path, vram_scaling_factor_mb=self.vram_scaling_factor_mb)
+                return VectorReaderGPU(vectors_path, masks_path, vram_scaling_factor_mb=self.vram_scaling_factor_mb)
             except ImportError:
                 print("  ⚠️  GPU acceleration not available")
-                return VectorReader(vectors_path)
+                return VectorReader(vectors_path, masks_path)
         
         # Normal GPU detection
         if self._is_gpu_available():
             try:
-                return VectorReaderGPU(vectors_path, vram_scaling_factor_mb=self.vram_scaling_factor_mb)
+                return VectorReaderGPU(vectors_path, masks_path, vram_scaling_factor_mb=self.vram_scaling_factor_mb)
             except ImportError:
-                return VectorReader(vectors_path)
+                return VectorReader(vectors_path, masks_path)
         else:
-            return VectorReader(vectors_path)  
+            return VectorReader(vectors_path, masks_path)  
     
     def _vector_source(self, start_idx: int, num_vectors: int) -> np.ndarray:
         """Wrapper for vector reader."""
         return self.vector_reader.read_chunk(start_idx, num_vectors)
+    
+    def _mask_source(self, start_idx: int, num_vectors: int) -> np.ndarray:
+        """Wrapper for mask reader."""
+        return self.vector_reader.read_masks(start_idx, num_vectors)
     
     def search(
         self,
@@ -301,8 +339,8 @@ class SearchOrchestrator:
             indices, similarities = self.chunked_search.sequential_scan(
                 query_np,
                 self._vector_source,
+                self._mask_source,
                 self.total_vectors,
-                self.vector_ops,
                 top_k=top_k,
                 show_progress=show_progress,
                 **kwargs
@@ -311,8 +349,8 @@ class SearchOrchestrator:
             indices, similarities = self.chunked_search.random_chunk_search(
                 query_np,
                 self._vector_source,
+                self._mask_source,
                 self.total_vectors,
-                self.vector_ops,
                 num_chunks=100,
                 top_k=top_k,
                 show_progress=show_progress,
@@ -322,8 +360,8 @@ class SearchOrchestrator:
             indices, similarities = self.chunked_search.progressive_search(
                 query_np,
                 self._vector_source,
+                self._mask_source,
                 self.total_vectors,
-                self.vector_ops,
                 min_chunks=1,
                 max_chunks=100,
                 quality_threshold=0.95,
@@ -334,6 +372,12 @@ class SearchOrchestrator:
         else:
             raise ValueError(f"Unknown search mode: {search_mode}")
         
+        # Validate results completeness
+        if len(indices) < top_k:
+            print(f"\n  ⚠️  Warning: Only {len(indices)} results found (requested {top_k})")
+            print("  This may indicate incomplete processing due to low VRAM settings.")
+            print("  Consider increasing VRAM_SCALING_FACTOR_MB in config.py")
+
         # Convert indices to track IDs
         track_ids = self.index_manager.get_track_ids_batch(indices)
         
@@ -348,7 +392,7 @@ class SearchOrchestrator:
         results = self._apply_secondary_sort(results, with_metadata)
         
         return results
-    
+
     def _apply_secondary_sort(self, results, with_metadata):
         """Apply secondary sort by popularity to break similarity ties"""
         def get_popularity(item):
@@ -381,23 +425,25 @@ class SearchOrchestrator:
         """Validate CPU and GPU implementations produce identical results"""
         test_vector = np.random.rand(32).astype(np.float32)
         test_vectors = np.random.rand(1000, 32).astype(np.float32)
+        test_masks = np.random.randint(0, 2**32, size=1000, dtype=np.uint32)
         
         # CPU results
         cpu_ops = VectorOps(algorithm=self.algorithm)
-        cpu_results = cpu_ops.compute_similarity(test_vector, test_vectors)
+        cpu_results = cpu_ops.compute_similarity(test_vector, test_vectors, test_masks)
         
         # GPU results
         if torch.cuda.is_available():
             gpu_ops = VectorOpsGPU()
             gpu_tensor = torch.tensor(test_vectors, device='cuda')
+            gpu_masks = torch.tensor(test_masks, device='cuda')
             
             # Call the correct GPU method based on current algorithm
             if self.algorithm == 'cosine':
-                gpu_results = gpu_ops.masked_weighted_cosine_similarity(test_vector, gpu_tensor)
+                gpu_results = gpu_ops.masked_weighted_cosine_similarity(test_vector, gpu_tensor, gpu_masks)
             elif self.algorithm == 'cosine-euclidean':
-                gpu_results = gpu_ops.masked_weighted_cosine_euclidean_similarity(test_vector, gpu_tensor)
+                gpu_results = gpu_ops.masked_weighted_cosine_euclidean_similarity(test_vector, gpu_tensor, gpu_masks)
             elif self.algorithm == 'euclidean':
-                gpu_results = gpu_ops.masked_euclidean_similarity(test_vector, gpu_tensor)
+                gpu_results = gpu_ops.masked_euclidean_similarity(test_vector, gpu_tensor, gpu_masks)
             else:
                 raise ValueError(f"Unknown algorithm: {self.algorithm}")
             
@@ -534,4 +580,3 @@ def find_similar_tracks(
     )
     orchestrator.close()
     return results
-    

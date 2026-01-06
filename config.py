@@ -1,7 +1,8 @@
 # config.py
-VERSION = "0.1.4"
+VERSION = "0.1.5"
 AUTO_OPTIMIZE_CHUNK_SIZE = True
 VRAM_SAFETY_FACTOR = 0.85 # What percentage of available VRAM to use
+VRAM_SCALING_FACTOR_MB = 2**8
 FORCE_CPU_MODE = False
 
 import os
@@ -20,6 +21,10 @@ class PathConfig:
     @classmethod
     def get_index_file(cls):
         return cls.VECTORS / "track_index.bin"
+    
+    @classmethod
+    def get_mask_file(cls):
+        return cls.VECTORS / "track_masks.bin"
 
     @classmethod
     def get_metadata_file(cls):
@@ -45,6 +50,7 @@ class PathConfig:
             cls.get_audio_db(),
             cls.get_vector_file(),
             cls.get_index_file(),
+            cls.get_mask_file(),
             cls.get_metadata_file()
         ]
 
@@ -58,3 +64,4 @@ class PathConfig:
     @classmethod
     def get_config_path(cls):
         return cls.BASE_DIR / "config.json"
+        
