@@ -221,7 +221,7 @@ class ChunkedSearch:
         **kwargs
     ) -> Tuple[List[int], List[float]]:
         """
-        Pure CPU implementation with GLOBAL top-k tracking
+        Pure CPU implementation with GLOBAL top-k tracking and adaptive chunk sizing.
         """
         if query_vector.shape != (self.VECTOR_DIMENSIONS,):
             raise ValueError(f"Query vector must be {self.VECTOR_DIMENSIONS}D")
@@ -242,17 +242,48 @@ class ChunkedSearch:
                 f"🔍 Sequentially scanning {vectors_to_scan:,} vectors in {num_chunks} chunks...\n"
             )
         
-        for chunk_idx in range(num_chunks):
-            chunk_start = chunk_idx * self.chunk_size
-            chunk_end = min(chunk_start + self.chunk_size, vectors_to_scan)
-            actual_chunk_size = chunk_end - chunk_start
+        # Adaptive chunk sizing parameters
+        base_chunk_size = self.chunk_size
+        min_chunk_size = 5_000   # Minimum chunk size
+        max_chunk_size = 1_000_000 # Maximum chunk size
+        current_chunk_size = base_chunk_size
+        speed_history = []       # Keep track of the last few speeds (vectors per second)
+        processed_count = 0      # Total vectors processed so far
+        adjustment_counter = 0   # Count chunks since last adjustment
+        
+        while processed_count < vectors_to_scan:
+            # Adjust chunk size every 5 chunks based on recent performance
+            if len(speed_history) >= 3 and adjustment_counter >= 5:
+                avg_speed = sum(speed_history[-3:]) / 3
+                
+                # Reduce chunk size if performance is slow
+                if avg_speed < 1_000_000 and current_chunk_size > min_chunk_size:
+                    new_size = max(min_chunk_size, int(current_chunk_size * 0.8))
+                    if new_size != current_chunk_size:
+                        # print(f"\n  ⚙️  Reducing chunk size from {current_chunk_size:,} to {new_size:,} (avg speed: {avg_speed/1e6:.2f}M vec/sec)")
+                        current_chunk_size = new_size
+                
+                # Increase chunk size if performance is fast
+                elif avg_speed > 5_000_000 and current_chunk_size < max_chunk_size:
+                    new_size = min(max_chunk_size, int(current_chunk_size * 1.2))
+                    if new_size != current_chunk_size:
+                        # print(f"\n  ⚙️  Increasing chunk size from {current_chunk_size:,} to {new_size:,} (avg speed: {avg_speed/1e6:.2f}M vec/sec)")
+                        current_chunk_size = new_size
+                
+                adjustment_counter = 0
+            
+            # Calculate current chunk start and size
+            chunk_start = processed_count
+            actual_chunk_size = min(current_chunk_size, vectors_to_scan - processed_count)
             
             # Read vectors and masks for this chunk
             vectors = vector_source(chunk_start, actual_chunk_size)
             masks = mask_source(chunk_start, actual_chunk_size)
             
-            # Compute similarities with masks
+            # Compute similarities
+            chunk_start_time = time.time()
             similarities = vector_ops.compute_similarity(query_vector, vectors, masks)
+            chunk_time = time.time() - chunk_start_time
             
             # Update GLOBAL top-k
             if actual_chunk_size > 0:
@@ -271,10 +302,21 @@ class ChunkedSearch:
                 top_similarities = combined_similarities[top_indices_in_combined]
                 top_indices = combined_indices[top_indices_in_combined]
             
+            # Update processed count
+            processed_count += actual_chunk_size
+            
+            # Record speed for this chunk (if we have a valid time)
+            if chunk_time > 0:
+                chunk_speed = actual_chunk_size / chunk_time
+                speed_history.append(chunk_speed)
+            
+            # Increment adjustment counter
+            adjustment_counter += 1
+            
             # Update progress bar
             if show_progress:
                 last_update = self._update_progress_bar(
-                    chunk_end, vectors_to_scan, start_time, last_update
+                    processed_count, vectors_to_scan, start_time, last_update
                 )
         
         if show_progress:
@@ -429,7 +471,7 @@ class ChunkedSearch:
                                 num_chunks: int = 100,
                                 top_k: int = 10) -> Tuple[List[int], List[float]]:
         """
-        Pure CPU implementation of random chunk search
+        Pure CPU implementation of random chunk search.
         """
         if query_vector.shape != (self.VECTOR_DIMENSIONS,):
             raise ValueError(f"Query vector must be {self.VECTOR_DIMENSIONS}D")
@@ -438,10 +480,12 @@ class ChunkedSearch:
         top_similarities = np.full(top_k, -1.0, dtype=np.float32)
         top_indices = np.full(top_k, -1, dtype=np.int64)
         
+        total_to_process = num_chunks * self.chunk_size
+        
         # Initialize progress bar
         start_time = self._init_progress_bar(
-            num_chunks * self.chunk_size,
-            f"Random chunk search ({num_chunks} chunks, {num_chunks * self.chunk_size:,} total vectors"
+            total_to_process,
+            f"Random chunk search ({num_chunks} chunks, {total_to_process:,} total vectors"
         )
         last_update = start_time
         
@@ -479,7 +523,7 @@ class ChunkedSearch:
             # Update progress bar
             processed = (chunk_idx + 1) * self.chunk_size
             last_update = self._update_progress_bar(
-                processed, num_chunks * self.chunk_size, start_time, last_update
+                processed, total_to_process, start_time, last_update
             )
         
         # Sort results
@@ -488,7 +532,7 @@ class ChunkedSearch:
         top_indices = top_indices[sorted_indices]
         
         # Finalize progress bar
-        self._complete_progress_bar(num_chunks * self.chunk_size, num_chunks * self.chunk_size, start_time)
+        self._complete_progress_bar(total_to_process, total_to_process, start_time)
         print(f"\n✅ Random chunk search complete")
 
         return top_indices.tolist(), top_similarities.tolist()

@@ -4,39 +4,35 @@ import numpy as np
 from .vector_math import VectorOps
 
 class ChunkSizeOptimizer:
-    """Dynamically determines optimal chunk size for CPU processing"""
+    """Improved optimizer with realistic workload simulation"""
     
     _global_optimal_chunk_size = None
     
-    def __init__(self, vector_reader, sample_size=500_000):
-        """
-        Initialize CPU chunk size optimizer.
-        
-        Args:
-            vector_reader: VectorReader instance
-            sample_size: Number of vectors to use for benchmarking
-        """
+    def __init__(self, vector_reader, sample_size=1_000_000):
         self.reader = vector_reader
-        self.sample_size = min(sample_size, vector_reader.get_total_vectors())
-        self.candidates = self._generate_candidates()
-
-        # Use global optimal size if available
-        if ChunkSizeOptimizer._global_optimal_chunk_size:
-            self.best_size = ChunkSizeOptimizer._global_optimal_chunk_size
-            self.optimized = True
-        else:
-            self.best_size = 100_000  # Default fallback
-            self.optimized = False
         
+        # Get total vectors using either method or attribute
+        if hasattr(vector_reader, 'get_total_vectors'):
+            total_vectors = vector_reader.get_total_vectors()
+        elif hasattr(vector_reader, 'total_vectors'):
+            total_vectors = vector_reader.total_vectors
+        else:
+            raise AttributeError("VectorReader has no total_vectors attribute or method")
+            
+        self.sample_size = min(sample_size, total_vectors)
+        self.candidates = self._generate_candidates()
+        self.best_size = 100_000
+        self.optimized = False
+
     def _generate_candidates(self):
         """Generate candidate chunk sizes optimized for CPU processing."""
         # CPU-optimized chunk sizes
-        return [5_000, 10_000, 15_000, 20_000, 30_000, 50_000, 
-                75_000, 100_000, 125_000, 150_000, 200_000, 
-                300_000, 500_000]
+        return [1_000_000, 750_000, 500_000, 300_000, 200_000, 150_000, 
+                125_000, 100_000, 75_000, 50_000, 30_000, 20_000, 
+                15_000, 10_000, 5_000]
         
     def optimize(self):
-        """Run optimization benchmark for CPU processing."""
+        """Run optimization with realistic workload"""
         if self.optimized:
             return self.best_size
             
@@ -45,18 +41,34 @@ class ChunkSizeOptimizer:
         vector_ops = VectorOps()
         results = []
         
+        # Use distributed sample points across the dataset
+        sample_points = np.linspace(
+            0, 
+            self.reader.get_total_vectors() - max(self.candidates), 
+            10,
+            dtype=int
+        )
+        
         for size in self.candidates:
-            # Skip sizes larger than total vectors
-            if size > self.reader.get_total_vectors():
-                continue
-                
-            # Warmup
-            self.run_test(vector_ops, query_vector, size, warmup=True)
+            total_speed = 0
+            valid_tests = 0
             
-            # Timed test
-            speed = self.run_test(vector_ops, query_vector, size)
-            results.append((size, speed))
-            print(f"   Chunk {size:12,}: {speed/1e6:.2f}M vec/sec")
+            for start_idx in sample_points:
+                try:
+                    # Warmup
+                    self._run_test(vector_ops, query_vector, start_idx, size, warmup=True)
+                    
+                    # Timed test
+                    speed = self._run_test(vector_ops, query_vector, start_idx, size)
+                    total_speed += speed
+                    valid_tests += 1
+                except Exception:
+                    continue
+            
+            if valid_tests > 0:
+                avg_speed = total_speed / valid_tests
+                results.append((size, avg_speed))
+                print(f"   Chunk {size:12,}: {avg_speed/1e6:.2f}M vec/sec")
         
         # Find fastest candidate
         if results:
@@ -72,22 +84,17 @@ class ChunkSizeOptimizer:
         print(f"   Optimal CPU chunk size: {self.best_size:,} ({(max(results, key=lambda x: x[1])[1]/1e6):.2f}M vec/sec)")
         return self.best_size
         
-    def run_test(self, vector_ops, query_vector, chunk_size, warmup=False):
-        """Run performance test for a chunk size"""
-        start_idx = 0
-        processed = 0
-        test_size = min(self.sample_size, 500_000) if warmup else self.sample_size
+    def _run_test(self, vector_ops, query_vector, start_idx, chunk_size, warmup=False):
+        """Run performance test at different file positions"""
+        test_size = min(chunk_size, 100_000) if warmup else chunk_size
         
+        # Read vectors and masks
+        vectors = self.reader.read_chunk(start_idx, test_size)
+        masks = self.reader.read_masks(start_idx, test_size)
+        
+        # Compute similarity
         start_time = time.time()
-        while processed < test_size:
-            read_size = min(chunk_size, test_size - processed)
-            vectors = self.reader.read_chunk(start_idx, read_size)
-            masks = self.reader.read_masks(start_idx, read_size)  # Read masks
-            
-            # Compute similarity with masks
-            _ = vector_ops.masked_weighted_cosine_similarity(query_vector, vectors, masks)
-            
-            processed += read_size
-            start_idx = (start_idx + read_size) % self.reader.get_total_vectors()
-            
-        return processed / (time.time() - start_time)
+        _ = vector_ops.compute_similarity(query_vector, vectors, masks)
+        elapsed = time.time() - start_time
+        
+        return test_size / elapsed

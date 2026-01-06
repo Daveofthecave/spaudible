@@ -23,8 +23,8 @@ class SearchOrchestrator:
     # Class-level cache for benchmark results
     _benchmark_results = None
     
-    def __init__(self,
-                vectors_path: Optional[str] = None,
+    def __init__(self, 
+                vectors_path: Optional[str] = None, 
                 index_path: Optional[str] = None,
                 masks_path: Optional[str] = None,
                 metadata_db: Optional[str] = None,
@@ -51,6 +51,8 @@ class SearchOrchestrator:
             skip_cpu_benchmark: Skip CPU benchmarking
             skip_gpu_benchmark: Skip GPU benchmarking
             skip_benchmark: Deprecated - skip both CPU and GPU benchmarking
+            force_cpu: Whether CPU mode is forced
+            force_gpu: Whether GPU mode is forced
             **kwargs: Additional keyword arguments
         """
         self.skip_cpu_benchmark = skip_cpu_benchmark or skip_benchmark
@@ -114,8 +116,26 @@ class SearchOrchestrator:
                 self.chunk_size = SearchOrchestrator._benchmark_results['optimal_chunk_size']
                 print(f"  🚀 Using {self.use_gpu and 'GPU' or 'CPU'} acceleration with chunk size {self.chunk_size:,}")
         
-        # For forced modes or when benchmark wasn't run
-        if not hasattr(self, 'chunk_size'):
+        # Handle forced CPU mode - always run benchmark
+        if self.force_cpu:
+            # Initialize CPU optimizer
+            self.chunk_size_optimizer = ChunkSizeOptimizer(self.vector_reader)
+            self.chunk_size = self.chunk_size_optimizer.optimize()
+            print(f"  🚀 Using CPU acceleration with optimized chunk size {self.chunk_size:,}")
+        
+        # Handle forced GPU mode
+        elif self.force_gpu:
+            if self.use_gpu and hasattr(self.vector_reader, 'get_max_batch_size'):
+                self.chunk_size = self.vector_reader.get_max_batch_size()
+                print(f"  🚀 Using GPU acceleration with chunk size {self.chunk_size:,}")
+            else:
+                # Fallback to CPU if GPU not available
+                self.chunk_size_optimizer = ChunkSizeOptimizer(self.vector_reader)
+                self.chunk_size = self.chunk_size_optimizer.optimize()
+                print(f"  🚀 Using CPU acceleration (GPU fallback) with chunk size {self.chunk_size:,}")
+        
+        # Handle non-forced modes where benchmark wasn't run
+        elif not hasattr(self, 'chunk_size'):
             if self.use_gpu and hasattr(self.vector_reader, 'get_max_batch_size'):
                 self.chunk_size = self.vector_reader.get_max_batch_size()
                 print(f"  🚀 Using GPU acceleration with chunk size {self.chunk_size:,}")
@@ -184,7 +204,7 @@ class SearchOrchestrator:
             cpu_orchestrator.chunked_search = ChunkedSearch(best_chunk, use_gpu=False)
             
             # Run test with optimal chunk size
-            result = cpu_orchestrator.run_performance_test(test_vector, 500_000, show_progress=False)
+            result = cpu_orchestrator.run_performance_test(test_vector, 1_000_000, show_progress=False)
             results['cpu_speed'] = result['speed']
             results['optimal_cpu_chunk_size'] = best_chunk
             print(f"      Optimal CPU chunk: {best_chunk:,} ({result['speed']/1e6:.2f}M vec/sec)")

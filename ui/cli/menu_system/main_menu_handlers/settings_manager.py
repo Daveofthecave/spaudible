@@ -308,9 +308,9 @@ def _handle_performance_test() -> str:
     print("=" * 70)
     print("  Testing various chunk sizes with 500,000 vectors\n")
     
-    cpu_chunk_sizes = [5_000, 10_000, 15_000, 20_000, 30_000, 50_000, 
-                       75_000, 100_000, 125_000, 150_000, 200_000, 
-                       300_000, 500_000]
+    cpu_chunk_sizes = [1_000_000, 750_000, 500_000, 300_000, 200_000, 150_000, 
+                       125_000, 100_000, 75_000, 50_000, 30_000, 20_000, 
+                       15_000, 10_000, 5_000]
     
     cpu_results = []
     cpu_orchestrator = SearchOrchestrator(
@@ -327,10 +327,10 @@ def _handle_performance_test() -> str:
         start_time = time.time()
         cpu_orchestrator.search(
             test_vector,
-            max_vectors=500_000
+            max_vectors=1_000_000
         )
         elapsed = time.time() - start_time
-        speed = 500_000 / elapsed if elapsed > 0 else 0
+        speed = 1_000_000 / elapsed if elapsed > 0 else 0
         
         print(f" - {speed/1e6:.2f}M vec/sec")
         cpu_results.append((chunk_size, speed))
