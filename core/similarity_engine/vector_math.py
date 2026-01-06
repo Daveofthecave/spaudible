@@ -3,12 +3,13 @@
 Vector math operations for similarity calculations.
 """
 import numpy as np
-import numba as nb
+import simsimd as simd
+from numba import njit, prange
 from typing import List
 from .weight_layers import WeightLayers
 
 class VectorOps:
-    """Mathematical operations on vectors."""
+    """Optimized vector operations using SIMD and parallel processing."""
     
     VECTOR_DIMENSIONS = 32
     DTYPE = np.float32
@@ -45,138 +46,98 @@ class VectorOps:
 
     def masked_weighted_cosine_similarity(self, query: np.ndarray, vectors, masks) -> np.ndarray:
         """
-        Compute masked cosine similarity between query and batch of vectors
-        with validity masks and user-defined weights.
+        Optimized cosine similarity using SIMD instructions and parallel processing.
         """
         # Apply weights to query
         weighted_query = query * self.user_weights
         
-        # Process in batches for cache efficiency
-        batch_size = 10000
-        n = vectors.shape[0]
-        similarities = np.empty(n, dtype=np.float32)
+        # Process masks in bulk
+        valid_masks = self._unpack_masks_bulk(masks)
         
-        for start_idx in range(0, n, batch_size):
-            end_idx = min(start_idx + batch_size, n)
-            batch_vectors = vectors[start_idx:end_idx]
-            batch_masks = masks[start_idx:end_idx]
-            
-            # Use optimized function
-            similarities[start_idx:end_idx] = self._batch_masked_cosine(
-                weighted_query, batch_vectors, batch_masks
-            )
-            
+        # Ensure arrays are contiguous
+        vectors_cont = np.ascontiguousarray(vectors)
+        valid_masks_cont = np.ascontiguousarray(valid_masks)
+        
+        # Use SIMD acceleration for cosine similarity
+        return self._simd_cosine_similarity(weighted_query, vectors_cont, valid_masks_cont)
+
+    def _simd_cosine_similarity(self, query: np.ndarray, vectors: np.ndarray, valid_masks: np.ndarray) -> np.ndarray:
+        """SIMD-accelerated cosine similarity calculation"""
+        # Precompute query norm once
+        query_valid = np.where(query != -1.0, query, 0.0)
+        query_norm = np.sqrt(np.sum(query_valid**2))
+        
+        # Prepare vectors with masking
+        vectors_masked = vectors * valid_masks
+        
+        # Compute dot products using SIMD - avoid transposing non-contiguous arrays
+        dots = np.empty(vectors_masked.shape[0], dtype=np.float32)
+        for i in range(vectors_masked.shape[0]):
+            # Ensure vector is contiguous
+            vec = np.ascontiguousarray(vectors_masked[i])
+            dots[i] = simd.dot(query, vec)
+        
+        # Compute vector norms
+        norms = np.sqrt(np.sum(vectors_masked**2, axis=1))
+        
+        # Avoid division by zero
+        norms[norms == 0] = 1e-9
+        similarities = dots / (query_norm * norms)
+        
         return similarities
 
-    def _batch_masked_cosine(self, weighted_query, vectors, masks):
-        """Compute cosine similarity for a batch of vectors"""
-        n = vectors.shape[0]
-        results = np.zeros(n, dtype=np.float32)
-        
-        # Precompute weights for vectors
-        weighted_vectors = vectors * self.user_weights
-        
-        # Process each vector
-        for i in range(n):
-            mask = masks[i]
-            valid_dims = self._get_valid_dims(mask)
-            
-            if valid_dims.size > 0:
-                q_valid = weighted_query[valid_dims]
-                v_valid = weighted_vectors[i, valid_dims]
-                
-                # Compute cosine similarity
-                dot = 0.0
-                norm_q = 0.0
-                norm_v = 0.0
-                
-                for j in range(q_valid.shape[0]):
-                    dot += q_valid[j] * v_valid[j]
-                    norm_q += q_valid[j] * q_valid[j]
-                    norm_v += v_valid[j] * v_valid[j]
-                
-                norm_q = np.sqrt(norm_q)
-                norm_v = np.sqrt(norm_v)
-                
-                if norm_q > 0 and norm_v > 0:
-                    results[i] = dot / (norm_q * norm_v)
-        
-        return results
-
+    def _unpack_masks_bulk(self, masks: np.ndarray) -> np.ndarray:
+        """Bulk unpack masks to boolean arrays"""
+        # Optimized with Numba for speed
+        return self._numba_unpack_masks(masks)
+    
     @staticmethod
-    @nb.njit(fastmath=True)
-    def _get_valid_dims(mask: int) -> np.ndarray:
-        """Get valid dimensions from mask using Numba acceleration"""
-        valid_dims = np.empty(32, dtype=np.bool_)
-        for j in range(32):
-            valid_dims[j] = (mask >> j) & 1
-        return np.where(valid_dims)[0]
+    @njit(parallel=True)
+    def _numba_unpack_masks(masks: np.ndarray) -> np.ndarray:
+        """Numba-accelerated mask unpacking"""
+        result = np.empty((len(masks), 32), dtype=np.bool_)
+        for i in prange(len(masks)):
+            mask = masks[i]
+            for j in range(32):
+                result[i, j] = (mask >> j) & 1
+        return result
 
     def masked_weighted_cosine_euclidean_similarity(self, query: np.ndarray, vectors, masks) -> np.ndarray:
         """
-        Compute hybrid cosine-euclidean similarity with validity masks.
+        Optimized hybrid similarity metric.
         """
-        # Compute both metrics
         cosine_sim = self.masked_weighted_cosine_similarity(query, vectors, masks)
         euclidean_sim = self.masked_euclidean_similarity(query, vectors, masks)
-        
-        # Combine results
         return cosine_sim * euclidean_sim
 
     def masked_euclidean_similarity(self, query: np.ndarray, vectors, masks) -> np.ndarray:
         """Euclidean similarity with masking"""
-        # Apply weights to query
+        # Apply weights
         weighted_query = query * self.user_weights
         
-        # Process in batches for cache efficiency
-        batch_size = 10000
-        n = vectors.shape[0]
-        similarities = np.empty(n, dtype=np.float32)
+        # Process masks in bulk
+        valid_masks = self._unpack_masks_bulk(masks)
         
-        for start_idx in range(0, n, batch_size):
-            end_idx = min(start_idx + batch_size, n)
-            batch_vectors = vectors[start_idx:end_idx]
-            batch_masks = masks[start_idx:end_idx]
-            
-            # Use optimized function
-            similarities[start_idx:end_idx] = self._batch_masked_euclidean(
-                weighted_query, batch_vectors, batch_masks
-            )
-            
+        # Ensure arrays are contiguous
+        vectors_cont = np.ascontiguousarray(vectors)
+        valid_masks_cont = np.ascontiguousarray(valid_masks)
+        
+        # Compute squared Euclidean distance using SIMD
+        distances = np.empty(vectors_cont.shape[0], dtype=np.float32)
+        for i in range(vectors_cont.shape[0]):
+            # Ensure vector is contiguous
+            vec = np.ascontiguousarray(vectors_cont[i])
+            distances[i] = simd.l2sq(weighted_query, vec)
+        
+        # Convert to similarity
+        similarities = 1.0 / (1.0 + np.sqrt(distances))
+        
         return similarities
 
-    def _batch_masked_euclidean(self, weighted_query, vectors, masks):
-        """Compute Euclidean similarity for a batch of vectors"""
-        n = vectors.shape[0]
-        results = np.zeros(n, dtype=np.float32)
-        
-        # Precompute weights for vectors
-        weighted_vectors = vectors * self.user_weights
-        
-        # Process each vector
-        for i in range(n):
-            mask = masks[i]
-            valid_dims = self._get_valid_dims(mask)
-            
-            if valid_dims.size > 0:
-                q_valid = weighted_query[valid_dims]
-                v_valid = weighted_vectors[i, valid_dims]
-                
-                # Compute Euclidean distance
-                sq_diff = 0.0
-                for j in range(q_valid.shape[0]):
-                    diff = q_valid[j] - v_valid[j]
-                    sq_diff += diff * diff
-                
-                distance = np.sqrt(sq_diff)
-                results[i] = 1.0 / (1.0 + distance)
-        
-        return results
-    
     @staticmethod
     def validate_vector(vector: List[float]) -> bool:
         """Validate vector dimensions and values."""
-        if len(vector) != VectorOps.VECTOR_DIMENSIONS:
+        if len(vector) != 32:
             return False
         for v in vector:
             if not (-1 <= v <= 1):  # Validate range

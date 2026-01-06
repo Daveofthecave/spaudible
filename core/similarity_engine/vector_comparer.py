@@ -118,9 +118,6 @@ class ChunkedSearch:
         show_progress: bool = True,
         **kwargs
     ) -> Tuple[List[int], List[float]]:
-        """
-        GPU-optimized sequential scan implementation with GLOBAL top-k tracking
-        """
         # Convert query to PyTorch tensor
         query_t = torch.tensor(query_vector, dtype=torch.float32, device=self.device)
         
@@ -162,8 +159,8 @@ class ChunkedSearch:
                 total_transfer_time += transfer_time
                 
                 # Convert to GPU tensors
-                vectors_gpu = torch.tensor(vectors, dtype=torch.float32, device=self.device)
-                masks_gpu = torch.tensor(masks, dtype=torch.int32, device=self.device)
+                vectors_gpu = vectors.clone().detach().to(device=self.device, dtype=torch.float32)
+                masks_gpu = masks.clone().detach().to(device=self.device, dtype=torch.int64)
                 
                 # Compute similarities
                 compute_start = time.time()
@@ -195,7 +192,7 @@ class ChunkedSearch:
                         start_time, 
                         last_update
                     )
-                    
+                        
             except KeyboardInterrupt:
                 print("\n\n  ⏸️  Processing interrupted by user.")
                 print("  Partially processed data has been saved.")

@@ -42,8 +42,10 @@ class VectorOpsGPU:
         self.user_weights = torch.ones(32, dtype=self.DTYPE, device=self.device)
 
     def masked_weighted_cosine_similarity(self, query: np.ndarray, vectors: torch.Tensor, masks: torch.Tensor) -> np.ndarray:
+        masks = masks.to(torch.int64)
+
         # Convert query to PyTorch tensor on the same device as vectors
-        query_t = torch.tensor(query, dtype=self.DTYPE, device=vectors.device)
+        query_t = torch.tensor(query, dtype=torch.float32, device=vectors.device)
         
         # Ensure query has correct shape
         if query_t.ndim == 1:
@@ -222,10 +224,10 @@ class VectorOpsGPU:
         Returns:
             Boolean tensor of shape [n, 32]
         """
-        # Create bitmask tensor
+        # Create bitmask tensor with int64 dtype
         bitmask = torch.tensor([(1 << i) for i in range(32)], 
-                              dtype=torch.int32, 
-                              device=masks.device)
+                            dtype=torch.int64,
+                            device=masks.device)
         
         # Expand dimensions for broadcasting
         masks_exp = masks.unsqueeze(-1)  # [n, 1]
