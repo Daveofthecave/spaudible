@@ -107,8 +107,12 @@ class VectorOpsGPU:
         Optimized GPU implementation of hybrid cosine-euclidean similarity.
         Computes: hybrid_sim = cosine_sim * euclidean_sim
         """
-        # Convert query to PyTorch tensor on the same device as vectors
-        query_t = torch.tensor(query, dtype=self.DTYPE, device=vectors.device)
+        # Convert masks to int64 if needed
+        if masks.dtype != torch.int64:
+            masks = masks.to(torch.int64)
+        
+        # Convert query to tensor with matching device
+        query_t = torch.tensor(query, dtype=vectors.dtype, device=vectors.device)
         
         # Ensure query has correct shape
         if query_t.ndim == 1:

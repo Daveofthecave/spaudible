@@ -149,7 +149,8 @@ class SearchOrchestrator:
         self.chunked_search = ChunkedSearch(
             self.chunk_size, 
             use_gpu=self.use_gpu,
-            max_batch_size=max_batch_size
+            max_batch_size=max_batch_size,
+            vector_ops=self.vector_ops
         )
         
         self.total_vectors = self.vector_reader.get_total_vectors()
@@ -201,7 +202,13 @@ class SearchOrchestrator:
             optimizer = ChunkSizeOptimizer(cpu_orchestrator.vector_reader)
             best_chunk = optimizer.optimize()
             cpu_orchestrator.chunk_size = best_chunk
-            cpu_orchestrator.chunked_search = ChunkedSearch(best_chunk, use_gpu=False)
+            
+            # Create new ChunkedSearch with vector_ops
+            cpu_orchestrator.chunked_search = ChunkedSearch(
+                best_chunk,
+                use_gpu=False,
+                vector_ops=cpu_orchestrator.vector_ops
+            )
             
             # Run test with optimal chunk size
             result = cpu_orchestrator.run_performance_test(test_vector, 1_000_000, show_progress=False)
@@ -245,7 +252,7 @@ class SearchOrchestrator:
         print(f"✅ Auto-benchmark complete: Using {results['recommended_device'].upper()} "
             f"with chunk size {results['optimal_chunk_size']:,}")
         return results
-
+        
     def _is_gpu_available(self, verbose: bool = False):
         """Validate GPU availability considering force settings"""
         if self.force_cpu:
@@ -335,7 +342,6 @@ class SearchOrchestrator:
                 self._vector_source,
                 self._mask_source,
                 self.total_vectors,
-                self.vector_ops,
                 top_k=top_k,
                 show_progress=show_progress,
                 **kwargs
@@ -346,7 +352,6 @@ class SearchOrchestrator:
                 self._vector_source,
                 self._mask_source,
                 self.total_vectors,
-                self.vector_ops,
                 num_chunks=100,
                 top_k=top_k,
                 show_progress=show_progress,
@@ -358,7 +363,6 @@ class SearchOrchestrator:
                 self._vector_source,
                 self._mask_source,
                 self.total_vectors,
-                self.vector_ops,
                 min_chunks=1,
                 max_chunks=100,
                 quality_threshold=0.95,
@@ -389,7 +393,7 @@ class SearchOrchestrator:
         results = self._apply_secondary_sort(results, with_metadata)
         
         return results
-    
+
     def _apply_secondary_sort(self, results, with_metadata):
         """Apply secondary sort by popularity to break similarity ties"""
         def get_popularity(item):

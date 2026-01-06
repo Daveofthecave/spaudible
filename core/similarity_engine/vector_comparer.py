@@ -19,7 +19,8 @@ class ChunkedSearch:
     
     def __init__(self, chunk_size: int = 100_000_000, 
                  use_gpu: bool = True,
-                 max_batch_size: Optional[int] = None):
+                 max_batch_size: Optional[int] = None,
+                 vector_ops: Optional[VectorOps] = None):
         """
         Initialize chunked search.
         
@@ -31,6 +32,7 @@ class ChunkedSearch:
         self.use_gpu = use_gpu
         self.max_batch_size = max_batch_size or 100_000  # Default for CPU
         self.gpu_ops = None
+        self.vector_ops = vector_ops
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.performance_stats = {}
 
@@ -57,7 +59,6 @@ class ChunkedSearch:
         vector_source: Callable[[int, int], np.ndarray],
         mask_source: Callable[[int, int], np.ndarray],
         total_vectors: int,
-        vector_ops: VectorOps,
         top_k: int = 10,
         max_vectors: Optional[int] = None,
         show_progress: bool = True,
@@ -87,7 +88,6 @@ class ChunkedSearch:
                 vector_source,
                 mask_source,
                 total_vectors,
-                vector_ops,
                 top_k=top_k,
                 max_vectors=max_vectors,
                 show_progress=show_progress,
@@ -99,7 +99,6 @@ class ChunkedSearch:
                 vector_source,
                 mask_source,
                 total_vectors,
-                vector_ops,
                 top_k=top_k,
                 max_vectors=max_vectors,
                 show_progress=show_progress,
@@ -112,7 +111,6 @@ class ChunkedSearch:
         vector_source: Callable[[int, int], np.ndarray],
         mask_source: Callable[[int, int], np.ndarray],
         total_vectors: int,
-        vector_ops: VectorOps,
         top_k: int = 10,
         max_vectors: Optional[int] = None,
         show_progress: bool = True,
@@ -161,12 +159,20 @@ class ChunkedSearch:
                 # Convert to GPU tensors
                 vectors_gpu = vectors.clone().detach().to(device=self.device, dtype=torch.float32)
                 masks_gpu = masks.clone().detach().to(device=self.device, dtype=torch.int64)
-                
+
+                # Determine which GPU function to use based on algorithm
+                if self.vector_ops.algorithm == 'cosine':
+                    gpu_similarity_func = self.gpu_ops.masked_weighted_cosine_similarity
+                elif self.vector_ops.algorithm == 'cosine-euclidean':
+                    gpu_similarity_func = self.gpu_ops.masked_weighted_cosine_euclidean_similarity
+                elif self.vector_ops.algorithm == 'euclidean':
+                    gpu_similarity_func = self.gpu_ops.masked_euclidean_similarity
+                else:
+                    raise ValueError(f"Unknown algorithm: {self.vector_ops.algorithm}")
+
                 # Compute similarities
                 compute_start = time.time()
-                similarities = self.gpu_ops.masked_weighted_cosine_similarity(
-                    query_vector, vectors_gpu, masks_gpu
-                )
+                similarities = gpu_similarity_func(query_vector, vectors_gpu, masks_gpu)
                 compute_time = time.time() - compute_start
                 total_compute_time += compute_time
                 
@@ -192,7 +198,7 @@ class ChunkedSearch:
                         start_time, 
                         last_update
                     )
-                        
+
             except KeyboardInterrupt:
                 print("\n\n  ⏸️  Processing interrupted by user.")
                 print("  Partially processed data has been saved.")
@@ -200,7 +206,7 @@ class ChunkedSearch:
             except Exception as e:
                 print(f"\n\n  ❗ Error during processing: {e}")
                 return top_indices.cpu().numpy(), top_similarities.cpu().numpy()
-        
+
         if show_progress:
             self._complete_progress_bar(vectors_to_scan, vectors_to_scan, start_time)
             print(f"\n✅ Sequential scan complete (GPU)")
@@ -214,7 +220,6 @@ class ChunkedSearch:
         vector_source: Callable[[int, int], np.ndarray],
         mask_source: Callable[[int, int], np.ndarray],
         total_vectors: int,
-        vector_ops: VectorOps,
         top_k: int = 10,
         max_vectors: Optional[int] = None,
         show_progress: bool = True,
@@ -282,7 +287,7 @@ class ChunkedSearch:
             
             # Compute similarities
             chunk_start_time = time.time()
-            similarities = vector_ops.compute_similarity(query_vector, vectors, masks)
+            similarities = self.vector_ops.compute_similarity(query_vector, vectors, masks)
             chunk_time = time.time() - chunk_start_time
             
             # Update GLOBAL top-k
