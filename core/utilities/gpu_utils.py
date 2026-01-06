@@ -51,8 +51,9 @@ def print_gpu_info():
         print("  No GPU devices available")
         return
     
-    print("  Detected GPU devices:")
+    print("   Detected GPU devices:")
     for i, gpu in enumerate(gpu_info):
-        print(f"    GPU {i}: {gpu['name']}")
-        print(f"      VRAM: {gpu['free_vram']/(1024**3):.1f} GB free of {gpu['total_vram']/(1024**3):.1f} GB")
-        print(f"      Compute Capability: {gpu['capability']}.x")
+        print(f"     GPU {i}: {gpu['name']}")
+        print(f"       VRAM: {gpu['free_vram']/(1024**3):.1f} GB free of {gpu['total_vram']/(1024**3):.1f} GB")
+        print(f"       Compute Capability: {gpu['capability']}.x")
+    print()

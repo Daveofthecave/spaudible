@@ -308,7 +308,7 @@ def _handle_performance_test() -> str:
     print("=" * 70)
     print("  🔧 CPU Chunk Size Optimization")
     print("=" * 70)
-    print("  Testing various chunk sizes with 500,000 vectors\n")
+    print("  Testing various chunk sizes with 1,000,000 vectors\n")
     
     cpu_chunk_sizes = [1_000_000, 750_000, 500_000, 300_000, 200_000, 150_000, 
                        125_000, 100_000, 75_000, 50_000, 30_000, 20_000, 
@@ -327,7 +327,7 @@ def _handle_performance_test() -> str:
     
     # Run CPU tests without progress bars
     for chunk_size in cpu_chunk_sizes:
-        print(f"  Testing chunk size: {chunk_size:>7,}", end="", flush=True)
+        print(f"  Testing chunk size: {chunk_size:>9,}", end="", flush=True)
         
         # Create new ChunkedSearch with vector_ops
         cpu_orchestrator.chunked_search = ChunkedSearch(
@@ -339,18 +339,18 @@ def _handle_performance_test() -> str:
         start_time = time.time()
         cpu_orchestrator.search(
             test_vector,
-            max_vectors=500_000,
+            max_vectors=1_000_000,
             show_progress=False
         )
         elapsed = time.time() - start_time
-        speed = 500_000 / elapsed if elapsed > 0 else 0
+        speed = 1_000_000 / elapsed if elapsed > 0 else 0
         
         print(f" - {speed/1e6:.2f}M vec/sec")
         cpu_results.append((chunk_size, speed))
     
     # Find optimal CPU chunk size
     optimal_cpu_chunk, optimal_cpu_speed = max(cpu_results, key=lambda x: x[1])
-    print(f"   Optimal CPU chunk size: {optimal_cpu_chunk:,} ({optimal_cpu_speed/1e6:.2f}M vec/sec)")
+    print(f"\n  Optimal CPU chunk size: {optimal_cpu_chunk:,} ({optimal_cpu_speed/1e6:.2f}M vec/sec)")
     
     # Section 2: GPU Batch Scaling
     print("\n" + "=" * 70)

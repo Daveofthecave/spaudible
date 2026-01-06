@@ -68,7 +68,7 @@ class ChunkSizeOptimizer:
             if valid_tests > 0:
                 avg_speed = total_speed / valid_tests
                 results.append((size, avg_speed))
-                print(f"   Chunk {size:12,}: {avg_speed/1e6:.2f}M vec/sec")
+                print(f"   Chunk size: {size:10,}: {avg_speed/1e6:.2f}M vec/sec")
         
         # Find fastest candidate
         if results:

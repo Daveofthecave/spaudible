@@ -89,10 +89,10 @@ class SearchOrchestrator:
         # Apply force settings
         if self.force_cpu:
             self.use_gpu = False
-            print("  ℹ️ CPU mode forced by configuration")
+            print("ℹ️  CPU mode forced by configuration")
         elif self.force_gpu:
             self.use_gpu = True
-            print("  ℹ️ GPU mode forced by configuration")
+            print("ℹ️  GPU mode forced by configuration")
 
         # Clear cache if settings changed
         if SearchOrchestrator._benchmark_results is not None:
@@ -262,7 +262,7 @@ class SearchOrchestrator:
             
         if self.force_gpu:
             if not torch.cuda.is_available():
-                print("  ⚠️  GPU not available but forced by configuration")
+                print("⚠️ GPU not available but forced by configuration")
                 return False
             if verbose:
                 print("ℹ️  Using GPU (forced by configuration)")
