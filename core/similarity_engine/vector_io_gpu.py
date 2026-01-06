@@ -59,11 +59,11 @@ class VectorReaderGPU:
         self.masks_fd = os.open(str(self.masks_path), os.O_RDONLY)
         self.masks_size = mask_file_size
         
-        print(f"   GPU Vector Reader Initialized:")
-        print(f"     Total track vectors: {self.total_vectors:,}")
-        print(f"     Vector file: {self.vectors_path.name} ({vector_file_size/(1024**3):.2f} GB)")
-        print(f"     Mask file: {self.masks_path.name} ({mask_file_size/(1024**3):.2f} GB)")
-        print(f"     Max batch size: {self.max_batch_size:,} vectors")
+        # print(f"   GPU Vector Reader Initialized:")
+        # print(f"     Total track vectors: {self.total_vectors:,}")
+        # print(f"     Vector file: {self.vectors_path.name} ({vector_file_size/(1024**3):.2f} GB)")
+        # print(f"     Mask file: {self.masks_path.name} ({mask_file_size/(1024**3):.2f} GB)")
+        # print(f"     Max batch size: {self.max_batch_size:,} vectors")
     
     def _calculate_max_batch_size(self, vram_scaling_factor_mb):
         """Calculate optimal batch size based on available VRAM."""

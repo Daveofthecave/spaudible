@@ -70,6 +70,7 @@ def handle_core_search() -> str:
 def _search_by_track_id(track_id: str) -> str:
     """Core search function for track IDs."""
     print(f"   Finding songs similar to track: {track_id}")
+    print(f"   Using algorithm: {config_manager.get_algorithm_name()}")     
     
     # Check preprocessed files
     files_exist, error_msg = check_preprocessed_files()
@@ -90,7 +91,7 @@ def _search_by_track_id(track_id: str) -> str:
             return "main_menu"
         
         vector_time = time.time() - start_time
-        print(f"   Track converted to vector in {format_elapsed_time(vector_time)}")
+        # print(f"   Track converted to vector in {format_elapsed_time(vector_time)}")
         
         # Show track info
         if track_data:
@@ -113,7 +114,7 @@ def _search_by_track_id(track_id: str) -> str:
             force_cpu=force_cpu
         )
 
-        search_mode = "sequential"
+        search_mode = "sequential"   
         
         # Run search
         search_start = time.time()
@@ -216,4 +217,3 @@ def _handle_unknown_input(user_input: str) -> str:
     print("  • Audio file: /path/to/song.mp3")
     print("  • Search: 'Mr. Brightside The Killers'")
     return "main_menu"
-    

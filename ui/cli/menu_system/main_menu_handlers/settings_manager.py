@@ -350,7 +350,7 @@ def _handle_performance_test() -> str:
     
     # Find optimal CPU chunk size
     optimal_cpu_chunk, optimal_cpu_speed = max(cpu_results, key=lambda x: x[1])
-    print(f"\n  ✅ Optimal CPU chunk size: {optimal_cpu_chunk:,} ({optimal_cpu_speed/1e6:.2f}M vec/sec)")
+    print(f"   Optimal CPU chunk size: {optimal_cpu_chunk:,} ({optimal_cpu_speed/1e6:.2f}M vec/sec)")
     
     # Section 2: GPU Batch Scaling
     print("\n" + "=" * 70)

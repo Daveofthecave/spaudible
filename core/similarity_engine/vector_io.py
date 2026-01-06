@@ -37,8 +37,8 @@ class VectorReader:
             access=mmap.ACCESS_READ
         )
         
-        print(f"  📊 Memory-mapped vector file: {self.vector_file_size/(1024**3):.1f} GB")
-        print(f"  📊 Memory-mapped mask file: {self.mask_file_size/(1024**3):.1f} GB")
+        # print(f"  📊 Memory-mapped vector file: {self.vector_file_size/(1024**3):.1f} GB")
+        # print(f"  📊 Memory-mapped mask file: {self.mask_file_size/(1024**3):.1f} GB")
 
     def read_chunk(self, start_idx: int, num_vectors: int) -> np.ndarray:
         # Adjust num_vectors to not exceed file bounds

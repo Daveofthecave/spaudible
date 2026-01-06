@@ -42,13 +42,13 @@ class ChunkedSearch:
                 # Check available VRAM
                 free_vram = torch.cuda.mem_get_info()[0]
                 if free_vram < 500_000_000:  # Less than 500MB
-                    print("  ⚠️  Low VRAM available, disabling GPU acceleration")
+                    print("⚠️ Low VRAM available, disabling GPU acceleration")
                     self.use_gpu = False
                 else:
                     self.gpu_ops = VectorOpsGPU(device=self.device)
-                    print("  ✅ GPU acceleration enabled")
+                    # print("✅ GPU acceleration enabled")
             except Exception as e:
-                print(f"  ⚠️ GPU initialization failed: {e}")
+                print(f"⚠️ GPU initialization failed: {e}")
                 self.gpu_ops = None
         else:
             self.device = "cpu"  # Ensure device is set for CPU mode      
@@ -132,7 +132,7 @@ class ChunkedSearch:
         if show_progress:
             self._init_progress_bar(
                 vectors_to_scan,
-                f"🔍 Sequentially scanning {vectors_to_scan:,} vectors in {num_chunks} chunks (GPU)...\n"
+                f"🔍 Scanning {vectors_to_scan:,} track vectors in {num_chunks} chunks (GPU)...\n"
             )
         
         # Performance monitoring
@@ -209,7 +209,7 @@ class ChunkedSearch:
 
         if show_progress:
             self._complete_progress_bar(vectors_to_scan, vectors_to_scan, start_time)
-            print(f"\n✅ Sequential scan complete (GPU)")
+            # print(f"\n✅ Sequential scan complete (GPU)")
 
         # Return CPU arrays
         return top_indices.cpu().numpy(), top_similarities.cpu().numpy()
@@ -244,7 +244,7 @@ class ChunkedSearch:
         if show_progress:
             self._init_progress_bar(
                 vectors_to_scan,
-                f"🔍 Sequentially scanning {vectors_to_scan:,} vectors in {num_chunks} chunks...\n"
+                f"🔍 Scanning {vectors_to_scan:,} track vectors in {num_chunks} chunks...\n"
             )
         
         # Adaptive chunk sizing parameters
@@ -326,7 +326,7 @@ class ChunkedSearch:
         
         if show_progress:
             self._complete_progress_bar(vectors_to_scan, vectors_to_scan, start_time)
-            print(f"\n✅ Sequential scan complete")
+            # print(f"\n✅ Sequential scan complete")
 
         return top_indices.tolist(), top_similarities.tolist()
 
@@ -449,7 +449,7 @@ class ChunkedSearch:
         
         # Finalize progress bar
         self._complete_progress_bar(total_to_process, total_to_process, start_time)
-        print(f"\n✅ Random chunk search complete")
+        # print(f"\n✅ Random chunk search complete")
 
         # Calculate performance metrics
         transfer_bytes = total_vectors_processed * 128  # 32 dimensions * 4 bytes
@@ -538,7 +538,7 @@ class ChunkedSearch:
         
         # Finalize progress bar
         self._complete_progress_bar(total_to_process, total_to_process, start_time)
-        print(f"\n✅ Random chunk search complete")
+        # print(f"\n✅ Random chunk search complete")
 
         return top_indices.tolist(), top_similarities.tolist()
     
