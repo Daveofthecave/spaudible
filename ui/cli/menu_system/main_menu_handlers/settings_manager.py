@@ -22,6 +22,7 @@ from config import PathConfig
 from core.utilities.gpu_utils import get_gpu_info, print_gpu_info
 from core.similarity_engine.vector_comparer import ChunkedSearch
 from core.utilities.config_manager import config_manager
+from core.similarity_engine.vector_math import VectorOps
 
 try:
     import torch
@@ -244,7 +245,13 @@ def _handle_system_status() -> str:
     index_file = PathConfig.get_index_file()
     index_size = format_file_size(index_file.stat().st_size) if index_file.exists() else "Not found"
     print(f"   • Vector Index: {index_file.name}")
-    print(f"      Size: {index_size}")
+    print(f"       Size: {index_size}")
+    
+    # Bit mask file
+    mask_file = PathConfig.get_mask_file()
+    mask_size = format_file_size(mask_file.stat().st_size) if mask_file.exists() else "Not found"
+    print(f"   • Vector Masks: {mask_file.name}")
+    print(f"       Size: {mask_size}")
     
     metadata_file = PathConfig.get_metadata_file()
     metadata_size = format_file_size(metadata_file.stat().st_size) if metadata_file.exists() else "Not found"
@@ -259,7 +266,10 @@ def _handle_system_status() -> str:
 
     # Total disk usage
     total_size = 0
-    for file in [main_db, audio_db, vector_file, index_file, metadata_file, genre_file]:
+    files_to_check = [
+        main_db, audio_db, vector_file, index_file, mask_file, metadata_file, genre_file
+    ]
+    for file in files_to_check:
         if file.exists():
             total_size += file.stat().st_size
     print(f"\n  💾 Total Disk Usage: {format_file_size(total_size)}")            
@@ -270,14 +280,6 @@ def _handle_system_status() -> str:
         print("\n  ✅ Canonical Track ID Resolver: Ready")
     except Exception as e:
         print(f"\n  ⚠️  Canonical Track ID Resolver: Error - {str(e)}")
-    
-    # # Check similarity engine
-    # try:
-    #     orchestrator = SearchOrchestrator()
-    #     orchestrator.close()
-    #     print("  ✅ Similarity Engine: Ready")
-    # except Exception as e:
-    #     print(f"  ⚠️  Similarity engine: Error - {str(e)}")
     
     input("\n  Press Enter to continue...")
     return "settings"
@@ -314,23 +316,34 @@ def _handle_performance_test() -> str:
     
     cpu_results = []
     cpu_orchestrator = SearchOrchestrator(
-        use_gpu=False,
-        skip_benchmark=True
+        skip_cpu_benchmark=True,
+        skip_gpu_benchmark=True,
+        use_gpu=False
     )
+    
+    # Initialize vector_ops for CPU orchestrator
+    cpu_orchestrator.vector_ops = VectorOps(algorithm=config_manager.get_algorithm())
+    cpu_orchestrator.vector_ops.set_user_weights(config_manager.get_weights())
     
     # Run CPU tests without progress bars
     for chunk_size in cpu_chunk_sizes:
         print(f"  Testing chunk size: {chunk_size:>7,}", end="", flush=True)
-        cpu_orchestrator.chunk_size = chunk_size
-        cpu_orchestrator.chunked_search = ChunkedSearch(chunk_size, use_gpu=False)
+        
+        # Create new ChunkedSearch with vector_ops
+        cpu_orchestrator.chunked_search = ChunkedSearch(
+            chunk_size,
+            use_gpu=False,
+            vector_ops=cpu_orchestrator.vector_ops
+        )
         
         start_time = time.time()
         cpu_orchestrator.search(
             test_vector,
-            max_vectors=1_000_000
+            max_vectors=500_000,
+            show_progress=False
         )
         elapsed = time.time() - start_time
-        speed = 1_000_000 / elapsed if elapsed > 0 else 0
+        speed = 500_000 / elapsed if elapsed > 0 else 0
         
         print(f" - {speed/1e6:.2f}M vec/sec")
         cpu_results.append((chunk_size, speed))
@@ -346,47 +359,49 @@ def _handle_performance_test() -> str:
     
     gpu_results = []
     if torch.cuda.is_available():
-        # Determine max batch size based on VRAM
-        gpu_info = get_gpu_info()
-        if gpu_info:
-            free_vram = gpu_info[0]['free_vram']
-            bytes_per_vector = 32 * 4  # 32 floats * 4 bytes
-            max_batch = int((free_vram * VRAM_SAFETY_FACTOR) // bytes_per_vector)
+        gpu_orchestrator = SearchOrchestrator(
+            skip_cpu_benchmark=True,
+            skip_gpu_benchmark=True,
+            use_gpu=True
+        )
+        
+        # Get max batch size from vector reader
+        max_batch = gpu_orchestrator.vector_reader.get_max_batch_size()
+        
+        # Generate batch sizes
+        batch_sizes = [1_000_000, 5_000_000, 10_000_000, 20_000_000, 
+                       50_000_000, 100_000_000, max_batch]
+        batch_sizes = sorted(set([bs for bs in batch_sizes if bs <= max_batch]))
+        
+        print(f"  Testing batch sizes up to {max_batch:,} vectors\n")
+        
+        for batch_size in batch_sizes:
+            print(f"  Testing batch size: {batch_size:>10,}", end="", flush=True)
             
-            # Generate batch sizes
-            batch_sizes = [1_000_000, 5_000_000, 10_000_000, 20_000_000, 
-                           50_000_000, 100_000_000, max_batch]
-            batch_sizes = sorted(set([bs for bs in batch_sizes if bs <= max_batch]))
-            
-            gpu_orchestrator = SearchOrchestrator(
+            # Create new ChunkedSearch with vector_ops
+            gpu_orchestrator.chunked_search = ChunkedSearch(
+                batch_size,
                 use_gpu=True,
-                skip_benchmark=True
+                vector_ops=gpu_orchestrator.vector_ops
             )
             
-            print(f"  Testing batch sizes up to {max_batch:,} vectors\n")
+            start_time = time.time()
+            gpu_orchestrator.search(
+                test_vector,
+                max_vectors=batch_size,
+                show_progress=False
+            )
+            elapsed = time.time() - start_time
+            speed = batch_size / elapsed if elapsed > 0 else 0
             
-            for batch_size in batch_sizes:
-                print(f"  Testing batch size: {batch_size:>10,}", end="", flush=True)
-                gpu_orchestrator.chunk_size = batch_size
-                gpu_orchestrator.chunked_search = ChunkedSearch(batch_size, use_gpu=True)
-                
-                start_time = time.time()
-                gpu_orchestrator.search(
-                    test_vector,
-                    max_vectors=batch_size
-                )
-                elapsed = time.time() - start_time
-                speed = batch_size / elapsed if elapsed > 0 else 0
-                
-                print(f" - {speed/1e6:.2f}M vec/sec")
-                gpu_results.append((batch_size, speed))
-            
-            # Find fastest GPU batch size
-            if gpu_results:
-                best_batch, best_speed = max(gpu_results, key=lambda x: x[1])
-                print(f"\n  🚀 Fastest GPU batch: {best_batch:,} ({best_speed/1e6:.2f}M vec/sec)")
-        else:
-            print("  ⚠️  Could not get GPU information")
+            print(f" - {speed/1e6:.2f}M vec/sec")
+            gpu_results.append((batch_size, speed))
+        
+        # Find fastest GPU batch size
+        if gpu_results:
+            best_batch, best_speed = max(gpu_results, key=lambda x: x[1])
+            print(f"\n  🚀 Fastest GPU batch: {best_batch:,} ({best_speed/1e6:.2f}M vec/sec)")
+        gpu_orchestrator.close()
     else:
         print("  ⚠️  No GPU available - skipping GPU tests")
     

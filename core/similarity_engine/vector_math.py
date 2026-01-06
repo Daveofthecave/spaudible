@@ -194,7 +194,7 @@ class VectorOps:
     def masked_euclidean_similarity(self, query: np.ndarray, vectors: np.ndarray, masks: np.ndarray) -> np.ndarray:
         """Optimized Euclidean similarity with Numba and mask handling"""
         return self._numba_euclidean_similarity(
-            query.ast(np.float32),
+            query.astype(np.float32),
             vectors.astype(np.float32),
             masks.astype(np.uint32)
         )
