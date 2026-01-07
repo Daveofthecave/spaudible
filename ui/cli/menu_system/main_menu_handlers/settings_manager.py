@@ -37,6 +37,7 @@ def handle_settings() -> str:
     force_cpu = config_manager.get_force_cpu()
     force_gpu = config_manager.get_force_gpu()
     algorithm_name = config_manager.get_algorithm_name()
+    deduplicate = config_manager.get_deduplicate()
     
     # Ensure mutual exclusivity
     if force_cpu and force_gpu:
@@ -45,6 +46,7 @@ def handle_settings() -> str:
 
     cpu_status = "ON" if force_cpu else "OFF"
     gpu_status = "ON" if force_gpu else "OFF"
+    deduplicate_status = "ON" if deduplicate else "OFF"
     
     print("\n  ⚙️  Configuration & Diagnostics")
     
@@ -52,6 +54,7 @@ def handle_settings() -> str:
         f"🐌 Force CPU Mode: {cpu_status}",
         f"🐆 Force GPU Mode: {gpu_status}",
         f"🧮 Select Similarity Algorithm: {algorithm_name}", 
+        f"🧦 Deduplicate Results: {deduplicate_status}",
         "⚖️  Adjust Feature Weights",
         "❔ Check System Status",
         "📊 Performance Test",
@@ -70,17 +73,32 @@ def handle_settings() -> str:
     elif choice == 3:
         return _select_algorithm()
     elif choice == 4:
-        return _adjust_feature_weights()
+        return _toggle_deduplicate()
     elif choice == 5:
-        return _handle_system_status()
+        return _adjust_feature_weights()
     elif choice == 6:
-        return _handle_performance_test()
+        return _handle_system_status()
     elif choice == 7:
-        return _handle_rerun_setup()
+        return _handle_performance_test()
     elif choice == 8:
+        return _handle_rerun_setup()
+    elif choice == 9:
         return _handle_about()
     else:
         return "main_menu"
+
+def _toggle_deduplicate() -> str:
+    """Toggle deduplication setting"""
+    current = config_manager.get_deduplicate()
+    new_setting = not current
+    
+    config_manager.set_deduplicate(new_setting)
+    
+    status = "ON" if new_setting else "OFF"
+    print(f"\n  ✅ Deduplication set to: {status}")
+    
+    input("\n  Press Enter to continue...")
+    return "settings"
 
 def _force_cpu_mode() -> str:
     """Toggle CPU mode setting"""
@@ -155,7 +173,7 @@ def _adjust_feature_weights() -> str:
         "Acousticness", "Instrumentalness", "Speechiness", "Valence", "Danceability",
         "Energy", "Liveness", "Loudness", "Key", "Mode", "Tempo", "Time Signature 4/4",
         "Time Signature 3/4", "Time Signature 5/4", "Time Signature Other", "Duration",
-        "Release Date", "Popularity", "Artist Followers", "Electronic & Dance", 
+        "Release Year", "Popularity", "Artist Followers", "Electronic & Dance", 
         "Rock & Alternative", "World & Traditional", "Latin", "Hip Hop & Rap", "Pop",
         "Classical & Art Music", "Jazz & Blues", "Christian & Religious", "Country & Folk",
         "R&B & Soul", "Reggae & Caribbean", "Other Genres"

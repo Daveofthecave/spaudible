@@ -6,7 +6,14 @@ import numpy as np
 from pathlib import Path
 
 class VectorWriter:
-    """Manages binary storage of vectors, masks, and index."""
+    """High-performance vector writer with buffered I/O."""
+    
+    # Constants for new index format
+    ISRC_SIZE = 12  # Max ISRC length (12 characters)
+    TRACK_ID_SIZE = 22
+    OFFSET_SIZE = 8  # uint64
+    INDEX_ENTRY_SIZE = ISRC_SIZE + TRACK_ID_SIZE + OFFSET_SIZE
+    WRITE_BUFFER_SIZE = 100000  # Buffer 100,000 vectors before flush
     
     def __init__(self, output_dir="data/vectors"):
         self.output_dir = Path(output_dir)
@@ -25,8 +32,15 @@ class VectorWriter:
         
         # Track metadata
         self.track_ids = []
+        self.track_isrcs = []
         self.vector_offsets = []
         
+        # Buffers
+        self.vector_buffer = bytearray()
+        self.index_buffer = bytearray()
+        self.mask_buffer = bytearray()
+        self.buffer_count = 0
+    
     def __enter__(self):
         """Open files for writing."""
         self.vectors_file = open(self.vectors_path, 'wb')
@@ -36,6 +50,9 @@ class VectorWriter:
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Close files and write metadata."""
+        # Flush any remaining buffered data
+        self._flush_buffers()
+        
         if self.vectors_file:
             self.vectors_file.close()
         if self.index_file:
@@ -47,9 +64,9 @@ class VectorWriter:
         if exc_type is None:
             self.write_metadata()
     
-    def write_vector(self, track_id: str, vector):
+    def write_vector(self, track_id: str, vector, isrc: str = ""):
         """
-        Write a single vector to the binary file and its validity mask.
+        Write a single vector to the binary file with buffered I/O.
         """
         # Validate vector before packing
         for i, val in enumerate(vector):
@@ -74,33 +91,58 @@ class VectorWriter:
         mask_bytes = struct.pack('<I', bitmask)  # Little-endian uint32
         
         # Get current offset
-        offset = self.vectors_file.tell()
+        offset = self.vectors_file.tell() + len(self.vector_buffer)
         
-        # Write vector
-        self.vectors_file.write(vector_bytes)
+        # Add to buffers
+        self.vector_buffer.extend(vector_bytes)
+        self.mask_buffer.extend(mask_bytes)
         
-        # Write mask
-        self.masks_file.write(mask_bytes)
+        # Prepare index entry components
+        padded_isrc = isrc.encode('utf-8').ljust(self.ISRC_SIZE, b'\0')[:self.ISRC_SIZE]
+        padded_id = track_id.ljust(self.TRACK_ID_SIZE, '\0').encode('utf-8')
+        offset_bytes = struct.pack('Q', offset)
+        self.index_buffer.extend(padded_isrc)
+        self.index_buffer.extend(padded_id)
+        self.index_buffer.extend(offset_bytes)
         
-        # Store index information
+        # Store metadata
         self.track_ids.append(track_id)
+        self.track_isrcs.append(isrc)
         self.vector_offsets.append(offset)
         
-        # Write to index file
-        padded_id = track_id.ljust(22, '\0').encode('utf-8')
-        offset_bytes = struct.pack('Q', offset)
-        self.index_file.write(padded_id + offset_bytes)
+        self.buffer_count += 1
         
-        # Flush periodically
-        if len(self.track_ids) % 10000 == 0:
+        # Flush buffers if full
+        if self.buffer_count >= self.WRITE_BUFFER_SIZE:
+            self._flush_buffers()
+    
+    def _flush_buffers(self):
+        """Write buffered data to disk."""
+        if self.buffer_count > 0:
+            self.vectors_file.write(self.vector_buffer)
+            self.index_file.write(self.index_buffer)
+            self.masks_file.write(self.mask_buffer)
+            
+            # Clear buffers
+            self.vector_buffer = bytearray()
+            self.index_buffer = bytearray()
+            self.mask_buffer = bytearray()
+            self.buffer_count = 0
+            
+            # Flush OS buffers
             self.vectors_file.flush()
             self.index_file.flush()
             self.masks_file.flush()
     
     def write_metadata(self):
         """Write processing metadata to JSON file."""
+        # Count valid ISRCs
+        valid_isrcs = sum(1 for isrc in self.track_isrcs if isrc)
+        total_tracks = len(self.track_ids)
+        isrc_coverage = valid_isrcs / total_tracks if total_tracks > 0 else 0
+        
         metadata = {
-            "total_tracks": len(self.track_ids),
+            "total_tracks": total_tracks,
             "vector_dimensions": 32,
             "bytes_per_vector": 128,
             "mask_bytes_per_vector": 4,
@@ -108,8 +150,10 @@ class VectorWriter:
             "database_source": "Spotify clean databases",
             "vector_format": "32 × float32 binary",
             "mask_format": "32-bit bitmask (1 bit per dimension)",
-            "index_format": "track_id (22B) + offset (8B)",
-            "description": "Vector cache: track embeddings; Mask: validity bitmask; Vector index: track ID to offset mapping",
+            "index_format": "isrc(12B) + track_id(22B) + offset(8B)",
+            "isrc_coverage": f"{isrc_coverage:.4f}",
+            "isrc_valid_count": valid_isrcs,
+            "description": "Vector cache: track embeddings; Mask: validity bitmask; Vector index: ISRC + track ID to offset mapping",
             "files": {
                 "vectors": str(self.vectors_path.name),
                 "masks": str(self.masks_path.name),

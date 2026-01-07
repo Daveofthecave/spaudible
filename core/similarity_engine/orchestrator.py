@@ -313,6 +313,7 @@ class SearchOrchestrator:
         top_k: int = 10,
         with_metadata: bool = True,
         show_progress: bool = True,
+        deduplicate: Optional[bool] = None,  # None means use config setting
         **kwargs
     ) -> List[Tuple[str, float, Optional[Dict]]]:
         """
@@ -323,6 +324,7 @@ class SearchOrchestrator:
             search_mode: One of "sequential", "random", "progressive"
             top_k: Number of results to return
             with_metadata: Whether to include metadata
+            deduplicate: Whether to deduplicate results (None = use config)
             **kwargs: Additional search parameters
             
         Returns:
@@ -372,6 +374,13 @@ class SearchOrchestrator:
         else:
             raise ValueError(f"Unknown search mode: {search_mode}")
         
+        # Apply deduplication if requested
+        if deduplicate is None:
+            deduplicate = config_manager.get_deduplicate()
+            
+        if deduplicate:
+            indices, similarities = self._deduplicate_results(indices, similarities, top_k)
+        
         # Validate results completeness
         if len(indices) < top_k:
             print(f"\n  ⚠️  Warning: Only {len(indices)} results found (requested {top_k})")
@@ -392,6 +401,55 @@ class SearchOrchestrator:
         results = self._apply_secondary_sort(results, with_metadata)
         
         return results
+
+    def _deduplicate_results(self, indices: List[int], similarities: List[float], top_k: int) -> Tuple[List[int], List[float]]:
+        """
+        Deduplicate results using ISRC codes.
+        
+        Args:
+            indices: Vector indices of results
+            similarities: Similarity scores
+            top_k: Desired number of unique results
+            
+        Returns:
+            Deduplicated (indices, similarities)
+        """
+        # Get ISRCs for all results
+        isrcs = self.index_manager.get_isrcs_batch(indices)
+        
+        seen_isrcs = set()
+        deduped_indices = []
+        deduped_similarities = []
+        
+        for idx, similarity, isrc in zip(indices, similarities, isrcs):
+            # Skip duplicates (non-empty ISRCs only)
+            if isrc and isrc in seen_isrcs:
+                continue
+                
+            seen_isrcs.add(isrc)
+            deduped_indices.append(idx)
+            deduped_similarities.append(similarity)
+            
+            # Early exit if we have enough results
+            if len(deduped_indices) >= top_k:
+                break
+        
+        # If we have fewer than top_k results, add remaining non-ISRC tracks
+        if len(deduped_indices) < top_k:
+            remaining = top_k - len(deduped_indices)
+            for idx, similarity, isrc in zip(indices, similarities, isrcs):
+                if idx in deduped_indices:
+                    continue
+                    
+                # Only add tracks without ISRC
+                if not isrc:
+                    deduped_indices.append(idx)
+                    deduped_similarities.append(similarity)
+                    remaining -= 1
+                    if remaining <= 0:
+                        break
+        
+        return deduped_indices, deduped_similarities
 
     def _apply_secondary_sort(self, results, with_metadata):
         """Apply secondary sort by popularity to break similarity ties"""
@@ -462,6 +520,7 @@ class SearchOrchestrator:
         top_k: int = 10,
         search_mode: str = "sequential",
         with_metadata: bool = True,
+        deduplicate: Optional[bool] = None,
         **kwargs
     ) -> List[Tuple[str, float, Optional[Dict]]]:
         """
@@ -472,6 +531,7 @@ class SearchOrchestrator:
             top_k: Number of results to return
             search_mode: Search algorithm to use
             with_metadata: Whether to include metadata
+            deduplicate: Whether to deduplicate results (None = use config)
             **kwargs: Additional search parameters
             
         Returns:
@@ -488,6 +548,7 @@ class SearchOrchestrator:
             search_mode=search_mode,
             top_k=top_k,
             with_metadata=with_metadata,
+            deduplicate=deduplicate,
             **kwargs
         )
     
@@ -557,6 +618,7 @@ def find_similar_tracks(
     track_id: str,
     top_k: int = 10,
     search_mode: str = "sequential",
+    deduplicate: Optional[bool] = None,
     **kwargs
 ) -> List:
     """
@@ -566,6 +628,7 @@ def find_similar_tracks(
         track_id: Spotify track ID
         top_k: Number of results
         search_mode: Search algorithm
+        deduplicate: Whether to deduplicate results (None = use config)
         **kwargs: Additional parameters
         
     Returns:
@@ -576,6 +639,7 @@ def find_similar_tracks(
         track_id,
         top_k=top_k,
         search_mode=search_mode,
+        deduplicate=deduplicate,
         **kwargs
     )
     orchestrator.close()

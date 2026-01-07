@@ -6,6 +6,13 @@ from core.vectorization.track_vectorizer import build_track_vector
 from .vector_exporter import VectorWriter
 from .progress import ProgressTracker
 from .mask_generator import generate_mask_file
+import concurrent.futures
+
+class VectorBuilder:
+    """Wrapper for vector building to enable multiprocessing."""
+    @staticmethod
+    def build_vector(track_data):
+        return build_track_vector(track_data)
 
 class DatabaseReader:
     """Efficient, memory-mapped reader for Spotify SQLite databases."""
@@ -53,6 +60,7 @@ class DatabaseReader:
         SELECT 
             t.rowid,
             t.id as track_id,
+            t.external_id_isrc,
             t.duration_ms,
             t.popularity,
             a.release_date,
@@ -87,7 +95,7 @@ class DatabaseReader:
         
         return None
     
-    def get_batch_tracks(self, batch_size=100000, last_rowid=0):
+    def get_batch_tracks(self, batch_size=500000, last_rowid=0):
         """
         Efficiently fetch a batch of tracks starting after last_rowid.
         Uses keyset pagination for constant-time performance.
@@ -96,6 +104,7 @@ class DatabaseReader:
         SELECT 
             t.rowid,
             t.id as track_id,
+            t.external_id_isrc,
             t.duration_ms,
             t.popularity,
             a.release_date,
@@ -156,7 +165,7 @@ class DatabaseReader:
             return {}
 
 class PreprocessingEngine:
-    """Orchestrates the database to vector conversion process."""
+    """Optimized preprocessing engine with parallelization."""
     
     def __init__(self, 
                  main_db_path="data/databases/spotify_clean.sqlite3",
@@ -165,13 +174,21 @@ class PreprocessingEngine:
         self.main_db_path = main_db_path
         self.audio_db_path = audio_db_path
         self.output_dir = output_dir
-        self.batch_size = 100000
+        self.batch_size = 500000  # Increased batch size
         self.estimated_total = 256_000_000
+        self.workers = 8  # Number of parallel workers
+    
+    def _prewarm_cache(self, db_reader):
+        """Warm up database cache to improve performance."""
+        print("  Warming up database cache...")
+        # Fetch first 1000 tracks to load indexes into memory
+        for _ in db_reader.get_batch_tracks(1000, 0):
+            pass
     
     def run(self):
-        """Run the full preprocessing pipeline."""
+        """Run optimized preprocessing pipeline."""
         print("\n" + "═" * 65)
-        print("  🚀 Starting Database Preprocessing")
+        print("  🚀 Starting Optimized Database Preprocessing")
         print("═" * 65)
         
         # Validate databases exist
@@ -194,8 +211,8 @@ class PreprocessingEngine:
                 print(f"  Using estimated total: {self.estimated_total:,} tracks")
                 actual_total = self.estimated_total
         
-        print("\n  🛠️  Processing tracks in batches of 100,000...")
-        print("  This will take several hours. Press Ctrl+C to interrupt.")
+        print("\n  🔥 Processing tracks in batches of 500,000 with parallelization...")
+        print("  This will still take several hours. Press Ctrl+C to interrupt.")
         print("\n  Progress:")
         
         progress = ProgressTracker(actual_total)
@@ -204,46 +221,50 @@ class PreprocessingEngine:
 
         with VectorWriter(self.output_dir) as writer:
             with DatabaseReader(self.main_db_path, self.audio_db_path) as db_reader:
-                while processed_count < actual_total:
-                    try:
-                        # Process one batch
-                        batch_processed = 0
-                        for track_data in db_reader.get_batch_tracks(self.batch_size, last_rowid):
-                            # Build vector
-                            vector = build_track_vector(track_data)
+                # Pre-warm database cache
+                self._prewarm_cache(db_reader)
+                
+                # Create process pool
+                with concurrent.futures.ProcessPoolExecutor(max_workers=self.workers) as executor:
+                    while processed_count < actual_total:
+                        try:
+                            # Accumulate batch
+                            batch = []
+                            for track_data in db_reader.get_batch_tracks(self.batch_size, last_rowid):
+                                batch.append(track_data)
+                                if len(batch) >= 10000:  # Process every 10k tracks
+                                    break
                             
-                            # Write to storage
-                            writer.write_vector(track_data['track_id'], vector)
-                            
-                            # Update last_rowid to the current track's rowid
-                            last_rowid = track_data['rowid']
-                            
-                            # Update progress
-                            batch_processed += 1
-                            progress.update(1)
-                            
-                            # Early exit if we've processed enough
-                            if batch_processed >= self.batch_size:
+                            if not batch:
                                 break
-                        
-                        if batch_processed == 0:
-                            # No more tracks to process
-                            break
-                        
-                        processed_count += batch_processed
-                        
-                    except KeyboardInterrupt:
-                        print("\n\n  ⏸️  Processing interrupted by user.")
-                        print("  Partially processed data has been saved.")
-                        return False
-                    except Exception as e:
-                        print(f"\n\n  ❗ Error during processing: {e}")
-                        return False
+                            
+                            # Build vectors in parallel
+                            vectors = list(executor.map(VectorBuilder.build_vector, batch))
+                            
+                            # Write vectors
+                            for track_data, vector in zip(batch, vectors):
+                                writer.write_vector(
+                                    track_data['track_id'], 
+                                    vector,
+                                    track_data.get('external_id_isrc', '')
+                                )
+                                last_rowid = track_data['rowid']
+                                progress.update(1)
+                            
+                            processed_count += len(batch)
+                            
+                        except KeyboardInterrupt:
+                            print("\n\n  ⏸️  Processing interrupted by user.")
+                            print("  Partially processed data has been saved.")
+                            return False
+                        except Exception as e:
+                            print(f"\n\n  ❗ Error during processing: {e}")
+                            return False
         
         # Show completion
         progress.complete()
         
-        # Generate mask file as separate pass
+        # Generate mask file
         print("\n⚙️  Generating mask file from vectors...")
         vectors_path = Path(self.output_dir) / "track_vectors.bin"
         masks_path = Path(self.output_dir) / "track_masks.bin"

@@ -17,8 +17,8 @@ def screen_preprocessing_prompt():
     print("  needs to extract attributes from these databases and")
     print("  convert them into an optimized numerical search index.\n")
 
-    print("  This process takes about 2-4 hours on an NVMe SSD,")
-    print("  and requires about 38 GB of additional disk space.")
+    print("  This process takes about 1-3 hours on an NVMe SSD,")
+    print("  and requires about 41 GB of additional disk space.")
     print("  Your computer can be used normally during this time.\n")
     
     print("  Would you like to start the setup process now?")

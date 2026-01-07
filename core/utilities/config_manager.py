@@ -11,6 +11,13 @@ class ConfigManager:
     }
     
     DEFAULT_WEIGHTS = [1.0] * 32
+    DEFAULT_SETTINGS = {
+        'weights': DEFAULT_WEIGHTS,
+        'similarity_algorithm': 'cosine-euclidean',
+        'force_cpu': False,
+        'force_gpu': False,
+        'deduplicate': True
+    }
     
     _instance = None
     
@@ -26,14 +33,15 @@ class ConfigManager:
             if self.config_path.exists():
                 with open(self.config_path, 'r') as f:
                     self.settings = json.load(f)
-            else:
-                self.settings = {}
                 
-            # Initialize weights if not present
-            if 'weights' not in self.settings:
-                self.settings['weights'] = self.DEFAULT_WEIGHTS
+                # Ensure new settings exist
+                for key, default in self.DEFAULT_SETTINGS.items():
+                    if key not in self.settings:
+                        self.settings[key] = default
+            else:
+                self.settings = self.DEFAULT_SETTINGS.copy()
         except:
-            self.settings = {'weights': self.DEFAULT_WEIGHTS}
+            self.settings = self.DEFAULT_SETTINGS.copy()
     
     def save(self):
         with open(self.config_path, 'w') as f:
@@ -84,6 +92,12 @@ class ConfigManager:
     def reset_weights(self):
         self.settings['weights'] = self.DEFAULT_WEIGHTS
         self.save()
+    
+    def get_deduplicate(self):
+        return self.get('deduplicate', True)
+    
+    def set_deduplicate(self, value):
+        self.set('deduplicate', bool(value))
 
 # Singleton access
 config_manager = ConfigManager()
