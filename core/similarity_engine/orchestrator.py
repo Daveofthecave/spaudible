@@ -404,7 +404,7 @@ class SearchOrchestrator:
 
     def _deduplicate_results(self, indices: List[int], similarities: List[float], top_k: int) -> Tuple[List[int], List[float]]:
         """
-        Deduplicate results using ISRC codes.
+        Deduplicate results using ISRC codes with fallback to track IDs.
         
         Args:
             indices: Vector indices of results
@@ -414,19 +414,23 @@ class SearchOrchestrator:
         Returns:
             Deduplicated (indices, similarities)
         """
-        # Get ISRCs for all results
+        # Get ISRCs and track IDs for all results
         isrcs = self.index_manager.get_isrcs_batch(indices)
+        track_ids = self.index_manager.get_track_ids_batch(indices)
         
-        seen_isrcs = set()
+        seen_keys = set()
         deduped_indices = []
         deduped_similarities = []
         
-        for idx, similarity, isrc in zip(indices, similarities, isrcs):
-            # Skip duplicates (non-empty ISRCs only)
-            if isrc and isrc in seen_isrcs:
+        for idx, similarity, isrc, track_id in zip(indices, similarities, isrcs, track_ids):
+            # Create deduplication key: ISRC if available, else track ID
+            dedup_key = isrc if isrc else track_id
+            
+            # Skip duplicates
+            if dedup_key in seen_keys:
                 continue
                 
-            seen_isrcs.add(isrc)
+            seen_keys.add(dedup_key)
             deduped_indices.append(idx)
             deduped_similarities.append(similarity)
             
@@ -434,17 +438,20 @@ class SearchOrchestrator:
             if len(deduped_indices) >= top_k:
                 break
         
-        # If we have fewer than top_k results, add remaining non-ISRC tracks
+        # If we have fewer than top_k results, add remaining tracks
         if len(deduped_indices) < top_k:
             remaining = top_k - len(deduped_indices)
-            for idx, similarity, isrc in zip(indices, similarities, isrcs):
+            for idx, similarity, isrc, track_id in zip(indices, similarities, isrcs, track_ids):
                 if idx in deduped_indices:
                     continue
                     
-                # Only add tracks without ISRC
-                if not isrc:
+                dedup_key = isrc if isrc else track_id
+                
+                # Only add tracks not already in results
+                if dedup_key not in seen_keys:
                     deduped_indices.append(idx)
                     deduped_similarities.append(similarity)
+                    seen_keys.add(dedup_key)
                     remaining -= 1
                     if remaining <= 0:
                         break

@@ -241,12 +241,13 @@ class PreprocessingEngine:
                             # Build vectors in parallel
                             vectors = list(executor.map(VectorBuilder.build_vector, batch))
                             
-                            # Write vectors
+                            # Write vectors with ISRC
                             for track_data, vector in zip(batch, vectors):
+                                isrc = track_data.get('external_id_isrc', '')
                                 writer.write_vector(
                                     track_data['track_id'], 
                                     vector,
-                                    track_data.get('external_id_isrc', '')
+                                    isrc
                                 )
                                 last_rowid = track_data['rowid']
                                 progress.update(1)

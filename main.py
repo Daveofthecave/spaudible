@@ -1,5 +1,4 @@
 # main.py
-import json
 import os
 import sys
 import time
@@ -12,13 +11,9 @@ from ui.cli.menu_system.preprocessing_prompt import screen_preprocessing_prompt
 from ui.cli.menu_system.preprocessing_screen import screen_preprocessing
 from ui.cli.menu_system.processing_complete import screen_processing_complete
 from ui.cli.menu_system.main_menu import screen_main_menu
+from core.utilities.setup_validator import is_setup_complete  # Import from shared module
 
 os.environ['PYTORCH_ALLOC_CONF'] = 'expandable_segments:True'
-
-def is_setup_complete():
-    """Check if all required files exist."""
-    required_files = PathConfig.all_required_files()
-    return all(file.exists() for file in required_files)
 
 def get_gpu_info():
     """Get GPU information if available"""

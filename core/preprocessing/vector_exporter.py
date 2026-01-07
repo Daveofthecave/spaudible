@@ -98,16 +98,20 @@ class VectorWriter:
         self.mask_buffer.extend(mask_bytes)
         
         # Prepare index entry components
-        padded_isrc = isrc.encode('utf-8').ljust(self.ISRC_SIZE, b'\0')[:self.ISRC_SIZE]
+        # Handle None ISRC values
+        safe_isrc = isrc if isrc is not None else ""
+        padded_isrc = safe_isrc.encode('utf-8').ljust(self.ISRC_SIZE, b'\0')[:self.ISRC_SIZE]
+        
         padded_id = track_id.ljust(self.TRACK_ID_SIZE, '\0').encode('utf-8')
         offset_bytes = struct.pack('Q', offset)
+        
         self.index_buffer.extend(padded_isrc)
         self.index_buffer.extend(padded_id)
         self.index_buffer.extend(offset_bytes)
         
         # Store metadata
         self.track_ids.append(track_id)
-        self.track_isrcs.append(isrc)
+        self.track_isrcs.append(safe_isrc)
         self.vector_offsets.append(offset)
         
         self.buffer_count += 1
