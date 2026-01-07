@@ -5,7 +5,7 @@ import math
 from collections import deque
 
 class ProgressTracker:
-    """Ultra-stable progress tracker with delayed ETA display."""
+    """Optimized progress tracker with reduced overhead."""
     
     def __init__(self, total_items, bar_width=50):
         """
@@ -19,7 +19,7 @@ class ProgressTracker:
         self.processed = 0
         self.start_time = time.time()
         self.bar_width = bar_width
-        self.last_update = 0
+        self.last_update = self.start_time
         self.speed_history = deque(maxlen=100)  # Keep last 100 speeds
         self.eta_history = deque(maxlen=10)     # Keep last 10 ETAs
         self.last_processed = 0
@@ -27,17 +27,23 @@ class ProgressTracker:
         self.last_eta = float('inf')
         self.stable_speed = None
         self.min_speed = float('inf')
-        self.min_samples = 100  # Minimum samples before showing ETA
+        self.min_samples = 10  # Reduced from 100 to 10 for faster stabilization
+        self.update_threshold = 10000  # Only update every 10k vectors
     
     def update(self, count=1):
         """Update progress and display if needed."""
         self.processed += count
+        
+        # Only update display if we've processed enough items
+        if self.processed - self.last_processed < self.update_threshold:
+            return
+            
         current_time = time.time()
         
         # Update speed history
-        if current_time > self.last_time:
-            elapsed = current_time - self.last_time
-            speed = count / elapsed
+        elapsed = current_time - self.last_time
+        if elapsed > 0:
+            speed = (self.processed - self.last_processed) / elapsed
             self.speed_history.append(speed)
             
             # Track minimum speed to avoid overestimating ETA
