@@ -1,7 +1,7 @@
 # core/vectorization/track_vectorizer.py
 import math
 import numpy as np
-from .genre_mapper import compute_genre_intensities
+from .genre_mapper import compute_genre_intensities_batch
 from typing import List
 
 def safe_float(value, default=-1.0):
@@ -134,57 +134,68 @@ def validate_vector(vector: List[float]) -> bool:
 
 def build_track_vector(track_dict):
     """Convert track dictionary to 32-dimensional vector."""
-    vector = [-1.0] * 32
+    return build_track_vectors_batch([track_dict])[0]
+
+def build_track_vectors_batch(track_dicts: List[dict]) -> List[List[float]]:
+    """Convert batch of track dictionaries to vectors efficiently."""
+    vectors = []
     
-    # Dim 1-7: Acoustic attributes (normalized by default to [0, 1])
-    features = ['acousticness', 'instrumentalness', 'speechiness', 'valence', 
-                'danceability', 'energy', 'liveness']
-    for i, feature in enumerate(features):
-        vector[i] = safe_float(track_dict.get(feature), -1.0)
+    # Precompute genre intensities in bulk
+    genre_lists = [t.get('genres', []) for t in track_dicts]
+    genre_intensities_batch = compute_genre_intensities_batch(genre_lists)
     
-    # Dim 8: Loudness
-    loudness = track_dict.get('loudness')
-    vector[7] = normalize_loudness(loudness)
+    for i, track_dict in enumerate(track_dicts):
+        vector = [-1.0] * 32
+        
+        # Dim 1-7: Acoustic attributes (normalized by default to [0, 1])
+        features = ['acousticness', 'instrumentalness', 'speechiness', 'valence', 
+                    'danceability', 'energy', 'liveness']
+        for j, feature in enumerate(features):
+            vector[j] = safe_float(track_dict.get(feature), -1.0)
+        
+        # Dim 8: Loudness
+        loudness = track_dict.get('loudness')
+        vector[7] = normalize_loudness(loudness)
+        
+        # Dim 9: Key
+        key = track_dict.get('key')
+        mode = track_dict.get('mode')
+        vector[8] = normalize_key(key, mode)
+        
+        # Dim 10: Mode
+        vector[9] = safe_float(mode, -1.0)
+
+        # Dim 11: Tempo
+        tempo = track_dict.get('tempo')
+        vector[10] = normalize_tempo(tempo)
+
+        # Dim 12-15: Time signature
+        time_sig = track_dict.get('time_signature')
+        time_vec = normalize_time_signature(time_sig)
+        vector[11:15] = time_vec
+
+        # Dim 16: Duration
+        duration = track_dict.get('duration_ms')
+        vector[15] = normalize_duration(duration)
+
+        # Dim 17: Release year
+        release_date = track_dict.get('release_date')
+        vector[16] = normalize_release_date(release_date)
+
+        # Dim 18: Artist popularity
+        popularity = track_dict.get('popularity')
+        vector[17] = normalize_popularity(popularity)
+        
+        # Dim 19: Artist followers
+        followers = track_dict.get('max_followers')
+        vector[18] = normalize_followers(followers)
+
+        # Dim 20-32: Genre intensities
+        vector[19:32] = genre_intensities_batch[i]
+
+        if not validate_vector(vector):
+            raise ValueError(f"Invalid vector for track {track_dict.get('track_id', 'unknown')}")
+        
+        vectors.append(vector)
     
-    # Dim 9: Key
-    key = track_dict.get('key')
-    mode = track_dict.get('mode')
-    vector[8] = normalize_key(key, mode)
-    
-    # Dim 10: Mode
-    vector[9] = safe_float(mode, -1.0)
-
-    # Dim 11: Tempo
-    tempo = track_dict.get('tempo')
-    vector[10] = normalize_tempo(tempo)
-
-    # Dim 12-15: Time signature
-    time_sig = track_dict.get('time_signature')
-    time_vec = normalize_time_signature(time_sig)
-    vector[11:15] = time_vec
-
-    # Dim 16: Duration
-    duration = track_dict.get('duration_ms')
-    vector[15] = normalize_duration(duration)
-
-    # Dim 17: Release year
-    release_date = track_dict.get('release_date')
-    vector[16] = normalize_release_date(release_date)
-
-    # Dim 18: Artist popularity
-    popularity = track_dict.get('popularity')
-    vector[17] = normalize_popularity(popularity)
-    
-    # Dim 19: Artist followers
-    followers = track_dict.get('max_followers')
-    vector[18] = normalize_followers(followers)
-
-    # Dim 20-32: Genre intensities
-    genre_list = track_dict.get('genres', [])
-    genre_intensities = compute_genre_intensities(genre_list)
-    vector[19:32] = genre_intensities
-
-    if not validate_vector(vector):
-        raise ValueError(f"Invalid vector for track {track_dict.get('track_id', 'unknown')}")
-    
-    return vector
+    return vectors

@@ -5,7 +5,7 @@ import math
 from collections import deque
 
 class ProgressTracker:
-    """Optimized progress tracker with reduced overhead."""
+    """Optimized progress tracker with speed display."""
     
     def __init__(self, total_items, bar_width=50):
         """
@@ -59,7 +59,7 @@ class ProgressTracker:
             self.last_update = current_time
     
     def _display(self):
-        """Display progress bar with ultra-stable ETA."""
+        """Display progress bar with ultra-stable ETA and speed."""
         percent = self.processed / self.total
         filled = int(self.bar_width * percent)
         bar = '█' * filled + '░' * (self.bar_width - filled)
@@ -77,6 +77,8 @@ class ProgressTracker:
             # Format speed
             if median_speed > 1000:
                 speed_str = f"{median_speed/1000:.1f}K vec/s"
+            elif median_speed > 1000000:
+                speed_str = f"{median_speed/1000000:.2f}M vec/s"
             else:
                 speed_str = f"{int(median_speed)} vec/s"
         else:
@@ -152,7 +154,9 @@ class ProgressTracker:
         
         # Calculate average speed
         avg_speed = self.total / total_time
-        if avg_speed > 1000:
+        if avg_speed > 1000000:
+            speed_str = f"{avg_speed/1000000:.2f}M vec/s"
+        elif avg_speed > 1000:
             speed_str = f"{avg_speed/1000:.1f}K vec/s"
         else:
             speed_str = f"{int(avg_speed)} vec/s"

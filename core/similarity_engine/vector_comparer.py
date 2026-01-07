@@ -666,7 +666,13 @@ class ChunkedSearch:
         eta = remaining / speed if speed > 0 else 0
         
         # Format speed and ETA
-        speed_str = f"{speed/1e6:.2f}M" if speed > 1e6 else f"{speed/1e3:.1f}K"
+        if speed > 1000000:
+            speed_str = f"{speed/1000000:.2f}M"
+        elif speed > 1000:
+            speed_str = f"{speed/1000:.1f}K"
+        else:
+            speed_str = f"{int(speed)}"
+            
         eta_str = self._format_time(eta)
         
         # Update progress bar
@@ -693,10 +699,10 @@ class ChunkedSearch:
         sys.stdout.write(f"  [{'█' * self.progress_bar_width}] 100.0%\n")
         
         # Format speed appropriately
-        if avg_speed > 1e6:
-            speed_str = f"{avg_speed/1e6:.2f}M"
-        elif avg_speed > 1e3:
-            speed_str = f"{avg_speed/1e3:.1f}K"
+        if avg_speed > 1000000:
+            speed_str = f"{avg_speed/1000000:.2f}M"
+        elif avg_speed > 1000:
+            speed_str = f"{avg_speed/1000:.1f}K"
         else:
             speed_str = f"{avg_speed:.0f}"
             

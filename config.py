@@ -64,4 +64,3 @@ class PathConfig:
     @classmethod
     def get_config_path(cls):
         return cls.BASE_DIR / "config.json"
-        

@@ -2,17 +2,18 @@
 import sqlite3
 import time
 from pathlib import Path
-from core.vectorization.track_vectorizer import build_track_vector
+from core.vectorization.track_vectorizer import build_track_vectors_batch
 from .vector_exporter import VectorWriter
 from .progress import ProgressTracker
 from .mask_generator import generate_mask_file
 import concurrent.futures
+import numpy as np
 
 class VectorBuilder:
     """Wrapper for vector building to enable multiprocessing."""
     @staticmethod
-    def build_vector(track_data):
-        return build_track_vector(track_data)
+    def build_vectors(track_data_batch):
+        return build_track_vectors_batch(track_data_batch)
 
 class DatabaseReader:
     """Efficient, memory-mapped reader for Spotify SQLite databases."""
@@ -95,6 +96,55 @@ class DatabaseReader:
         
         return None
     
+    def get_audio_features_batch(self, track_ids):
+        """Get audio features for multiple tracks in bulk with chunked queries."""
+        if not track_ids:
+            return {}
+        
+        # SQLite has a limit of 999 variables per query
+        chunk_size = 500
+        features_map = {}
+        
+        # Process track IDs in chunks
+        for i in range(0, len(track_ids), chunk_size):
+            chunk = track_ids[i:i+chunk_size]
+            placeholders = ','.join(['?'] * len(chunk))
+            
+            query = f"""
+            SELECT 
+                track_id,
+                duration_ms, time_signature, tempo, key, mode,
+                danceability, energy, loudness, speechiness,
+                acousticness, instrumentalness, liveness, valence
+            FROM track_audio_features
+            WHERE track_id IN ({placeholders})
+            """
+            
+            cursor = self.audio_conn.cursor()
+            cursor.execute(query, chunk)
+            rows = cursor.fetchall()
+            
+            for row in rows:
+                track_id = row[0]
+                features = {
+                    'duration_ms': row[1],
+                    'time_signature': row[2],
+                    'tempo': row[3],
+                    'key': row[4],
+                    'mode': row[5],
+                    'danceability': row[6],
+                    'energy': row[7],
+                    'loudness': row[8],
+                    'speechiness': row[9],
+                    'acousticness': row[10],
+                    'instrumentalness': row[11],
+                    'liveness': row[12],
+                    'valence': row[13]
+                }
+                features_map[track_id] = features
+        
+        return features_map
+
     def get_batch_tracks(self, batch_size=500000, last_rowid=0):
         """
         Efficiently fetch a batch of tracks starting after last_rowid.
@@ -127,7 +177,10 @@ class DatabaseReader:
         # Get column names
         columns = [desc[0] for desc in cursor.description]
         
-        # Yield tracks one by one
+        # Collect all tracks and track IDs
+        tracks = []
+        track_ids = []
+        
         for row in cursor:
             track_data = dict(zip(columns, row))
             
@@ -137,32 +190,19 @@ class DatabaseReader:
             else:
                 track_data['genres'] = []
             
-            # Fetch audio features for this track
-            track_data.update(self.get_audio_features(track_data['track_id']))
-            
-            yield track_data
-    
-    def get_audio_features(self, track_id):
-        """Get audio features for a specific track."""
-        query = """
-        SELECT 
-            duration_ms, time_signature, tempo, key, mode,
-            danceability, energy, loudness, speechiness,
-            acousticness, instrumentalness, liveness, valence
-        FROM track_audio_features
-        WHERE track_id = ?
-        """
+            tracks.append(track_data)
+            track_ids.append(track_data['track_id'])
         
-        cursor = self.audio_conn.cursor()
-        cursor.execute(query, (track_id,))
-        row = cursor.fetchone()
+        # Bulk fetch audio features for this batch
+        audio_features_map = self.get_audio_features_batch(track_ids)
         
-        if row:
-            columns = [desc[0] for desc in cursor.description]
-            return dict(zip(columns, row))
-        else:
-            # Return empty dict if no audio features found
-            return {}
+        # Add audio features to each track
+        for track_data in tracks:
+            track_id = track_data['track_id']
+            if track_id in audio_features_map:
+                track_data.update(audio_features_map[track_id])
+        
+        return tracks
 
 class PreprocessingEngine:
     """Optimized preprocessing engine with parallelization."""
@@ -176,7 +216,8 @@ class PreprocessingEngine:
         self.output_dir = output_dir
         self.batch_size = 500000  # Increased batch size
         self.estimated_total = 256_000_000
-        self.workers = 8  # Number of parallel workers
+        self.workers = 12  # Increased number of parallel workers
+        self.sub_batch_size = 5000  # Process in smaller sub-batches
     
     def _prewarm_cache(self, db_reader):
         """Warm up database cache to improve performance."""
@@ -212,7 +253,7 @@ class PreprocessingEngine:
                 actual_total = self.estimated_total
         
         print("\n  🔥 Processing tracks in batches of 500,000 with parallelization...")
-        print("  This will still take several hours. Press Ctrl+C to interrupt.")
+        print("  This will take about 15-30 minutes. Press Ctrl+C to interrupt.")
         print("\n  Progress:")
         
         progress = ProgressTracker(actual_total)
@@ -228,29 +269,28 @@ class PreprocessingEngine:
                 with concurrent.futures.ProcessPoolExecutor(max_workers=self.workers) as executor:
                     while processed_count < actual_total:
                         try:
-                            # Accumulate batch
-                            batch = []
-                            for track_data in db_reader.get_batch_tracks(self.batch_size, last_rowid):
-                                batch.append(track_data)
-                                if len(batch) >= 10000:  # Process every 10k tracks
-                                    break
-                            
+                            # Fetch batch of tracks
+                            batch = db_reader.get_batch_tracks(self.batch_size, last_rowid)
                             if not batch:
                                 break
                             
-                            # Build vectors in parallel
-                            vectors = list(executor.map(VectorBuilder.build_vector, batch))
-                            
-                            # Write vectors with ISRC
-                            for track_data, vector in zip(batch, vectors):
-                                isrc = track_data.get('external_id_isrc', '')
-                                writer.write_vector(
-                                    track_data['track_id'], 
-                                    vector,
-                                    isrc
-                                )
-                                last_rowid = track_data['rowid']
-                                progress.update(1)
+                            # Process in sub-batches for better memory management
+                            for i in range(0, len(batch), self.sub_batch_size):
+                                sub_batch = batch[i:i+self.sub_batch_size]
+                                
+                                # Build vectors in parallel
+                                vectors = list(executor.map(VectorBuilder.build_vectors, [sub_batch]))[0]
+                                
+                                # Write vectors with ISRC
+                                for track_data, vector in zip(sub_batch, vectors):
+                                    isrc = track_data.get('external_id_isrc', '')
+                                    writer.write_vector(
+                                        track_data['track_id'], 
+                                        vector,
+                                        isrc
+                                    )
+                                    last_rowid = track_data['rowid']
+                                    progress.update(1)
                             
                             processed_count += len(batch)
                             

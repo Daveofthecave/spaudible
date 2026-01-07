@@ -68,3 +68,32 @@ def compute_genre_intensities(genre_list):
                 intensities[meta_idx] = intensity
     
     return intensities
+
+def compute_genre_intensities_batch(genre_lists):
+    """Compute genre intensities for a batch of genre lists."""
+    genre_mapping = load_genre_mapping()
+    if not genre_mapping:
+        return [[-1.0] * 13 for _ in genre_lists]
+    
+    batch_intensities = []
+    
+    for genre_list in genre_lists:
+        if not genre_list:
+            batch_intensities.append([-1.0] * 13)
+            continue
+            
+        # Initialize with -1.0 (sentinel for missing)
+        intensities = [-1.0] * 13
+        
+        for genre in genre_list:
+            genre_lower = genre.strip().lower()
+            if genre_lower in genre_mapping:
+                meta_idx, intensity = genre_mapping[genre_lower]
+                
+                # Take the maximum intensity value for each meta-genre
+                if intensities[meta_idx] == -1.0 or intensity > intensities[meta_idx]:
+                    intensities[meta_idx] = intensity
+        
+        batch_intensities.append(intensities)
+    
+    return batch_intensities

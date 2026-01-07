@@ -16,7 +16,8 @@ class ConfigManager:
         'similarity_algorithm': 'cosine-euclidean',
         'force_cpu': False,
         'force_gpu': False,
-        'deduplicate': True
+        'deduplicate': True,
+        'dedupe_threshold': 0.92
     }
     
     _instance = None
@@ -98,6 +99,15 @@ class ConfigManager:
     
     def set_deduplicate(self, value):
         self.set('deduplicate', bool(value))
+        
+    def get_dedupe_threshold(self):
+        return self.get('dedupe_threshold', 0.92)
+    
+    def set_dedupe_threshold(self, value):
+        threshold = float(value)
+        if not 0.5 <= threshold <= 1.0:
+            raise ValueError("Deduplication threshold must be between 0.5 and 1.0")
+        self.set('dedupe_threshold', threshold)
 
 # Singleton access
 config_manager = ConfigManager()

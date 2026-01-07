@@ -379,7 +379,13 @@ class SearchOrchestrator:
             deduplicate = config_manager.get_deduplicate()
             
         if deduplicate:
-            indices, similarities = self._deduplicate_results(indices, similarities, top_k)
+            dedupe_threshold = config_manager.get_dedupe_threshold()
+            indices, similarities = self._advanced_deduplication(
+                indices, 
+                similarities, 
+                top_k,
+                dedupe_threshold
+            )
         
         # Validate results completeness
         if len(indices) < top_k:
@@ -402,56 +408,49 @@ class SearchOrchestrator:
         
         return results
 
-    def _deduplicate_results(self, indices: List[int], similarities: List[float], top_k: int) -> Tuple[List[int], List[float]]:
+    def _advanced_deduplication(self, indices: List[int], similarities: List[float], 
+                                top_k: int, threshold: float) -> Tuple[List[int], List[float]]:
         """
-        Deduplicate results using ISRC codes with fallback to track IDs.
-        
-        Args:
-            indices: Vector indices of results
-            similarities: Similarity scores
-            top_k: Desired number of unique results
-            
-        Returns:
-            Deduplicated (indices, similarities)
+        Advanced deduplication using ISRC + similarity threshold.
+        Removes near-duplicates while preserving diversity.
         """
-        # Get ISRCs and track IDs for all results
+        # Get ISRCs for all results
         isrcs = self.index_manager.get_isrcs_batch(indices)
-        track_ids = self.index_manager.get_track_ids_batch(indices)
         
-        seen_keys = set()
+        seen_isrcs = set()
         deduped_indices = []
         deduped_similarities = []
         
-        for idx, similarity, isrc, track_id in zip(indices, similarities, isrcs, track_ids):
-            # Create deduplication key: ISRC if available, else track ID
-            dedup_key = isrc if isrc else track_id
-            
-            # Skip duplicates
-            if dedup_key in seen_keys:
+        for idx, similarity, isrc in zip(indices, similarities, isrcs):
+            # Skip duplicates with same ISRC
+            if isrc and isrc in seen_isrcs:
                 continue
                 
-            seen_keys.add(dedup_key)
+            # Skip near-duplicates with different ISRC but high similarity
+            if any(sim >= threshold for sim in deduped_similarities):
+                continue
+                
+            seen_isrcs.add(isrc)
             deduped_indices.append(idx)
             deduped_similarities.append(similarity)
             
-            # Early exit if we have enough results
             if len(deduped_indices) >= top_k:
                 break
         
         # If we have fewer than top_k results, add remaining tracks
         if len(deduped_indices) < top_k:
             remaining = top_k - len(deduped_indices)
-            for idx, similarity, isrc, track_id in zip(indices, similarities, isrcs, track_ids):
+            for idx, similarity, isrc in zip(indices, similarities, isrcs):
                 if idx in deduped_indices:
                     continue
                     
-                dedup_key = isrc if isrc else track_id
+                dedup_key = isrc if isrc else str(idx)
                 
                 # Only add tracks not already in results
-                if dedup_key not in seen_keys:
+                if dedup_key not in seen_isrcs:
                     deduped_indices.append(idx)
                     deduped_similarities.append(similarity)
-                    seen_keys.add(dedup_key)
+                    seen_isrcs.add(dedup_key)
                     remaining -= 1
                     if remaining <= 0:
                         break
