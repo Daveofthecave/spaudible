@@ -318,17 +318,6 @@ class SearchOrchestrator:
     ) -> List[Tuple[str, float, Optional[Dict]]]:
         """
         Find similar tracks to a query vector.
-        
-        Args:
-            query_vector: 32D vector to search for
-            search_mode: One of "sequential", "random", "progressive"
-            top_k: Number of results to return
-            with_metadata: Whether to include metadata
-            deduplicate: Whether to deduplicate results (None = use config)
-            **kwargs: Additional search parameters
-            
-        Returns:
-            List of (track_id, similarity, metadata) tuples
         """
         # Convert query to numpy array
         if isinstance(query_vector, list):
@@ -343,7 +332,7 @@ class SearchOrchestrator:
                 self._vector_source,
                 self._mask_source,
                 self.total_vectors,
-                top_k=top_k,
+                top_k=top_k * 3,  # Get extra candidates for deduplication
                 show_progress=show_progress,
                 **kwargs
             )
@@ -354,7 +343,7 @@ class SearchOrchestrator:
                 self._mask_source,
                 self.total_vectors,
                 num_chunks=100,
-                top_k=top_k,
+                top_k=top_k * 3,  # Get extra candidates
                 show_progress=show_progress,
                 **kwargs
             )
@@ -367,7 +356,7 @@ class SearchOrchestrator:
                 min_chunks=1,
                 max_chunks=100,
                 quality_threshold=0.95,
-                top_k=top_k,
+                top_k=top_k * 3,  # Get extra candidates
                 show_progress=show_progress,
                 **kwargs
             )
@@ -388,7 +377,7 @@ class SearchOrchestrator:
             )
         
         # Validate results completeness
-        if len(indices) < top_k:
+        if len(indices) < top_k and not deduplicate:
             print(f"\n  ⚠️  Warning: Only {len(indices)} results found (requested {top_k})")
             print("  This may indicate incomplete processing due to low VRAM settings.")
             print("  Consider increasing VRAM_SCALING_FACTOR_MB in config.py")
@@ -406,56 +395,80 @@ class SearchOrchestrator:
         # Add secondary sort by popularity to break ties
         results = self._apply_secondary_sort(results, with_metadata)
         
-        return results
+        return results[:top_k]  # Ensure exactly top_k results
 
     def _advanced_deduplication(self, indices: List[int], similarities: List[float], 
-                                top_k: int, threshold: float) -> Tuple[List[int], List[float]]:
+                                top_k: int, dedupe_threshold: float) -> Tuple[List[int], List[float]]:
         """
-        Advanced deduplication using ISRC + similarity threshold.
-        Removes near-duplicates while preserving diversity.
+        Advanced deduplication using ISRC + artist/track name + similarity threshold.
+        Removes near-duplicates while preserving diversity and guaranteeing top_k results.
         """
         # Get ISRCs for all results
         isrcs = self.index_manager.get_isrcs_batch(indices)
         
+        # Get track IDs for name/artist deduplication
+        track_ids = self.index_manager.get_track_ids_batch(indices)
+        
+        # Fetch metadata in bulk for efficiency
+        metadata_list = self.metadata_manager.get_track_metadata_batch(track_ids)
+        
         seen_isrcs = set()
+        seen_name_artist = set()
         deduped_indices = []
         deduped_similarities = []
         
-        for idx, similarity, isrc in zip(indices, similarities, isrcs):
+        # Create a list of tuples for processing
+        items = list(zip(indices, similarities, isrcs, track_ids, metadata_list))
+        
+        # Process items while maintaining order
+        for idx, similarity, isrc, track_id, metadata in items:
+            artist = metadata.get('artist_name', 'Unknown').lower()
+            track_name = metadata.get('track_name', 'Unknown').lower()
+            name_artist_key = f"{artist}|{track_name}"
+            
             # Skip duplicates with same ISRC
             if isrc and isrc in seen_isrcs:
                 continue
                 
-            # Skip near-duplicates with different ISRC but high similarity
-            if any(sim >= threshold for sim in deduped_similarities):
+            # Skip duplicates with same name/artist (preserve highest similarity)
+            if name_artist_key in seen_name_artist:
                 continue
                 
+            # Skip near-duplicates with high similarity to existing results
+            if any(sim >= dedupe_threshold for sim in deduped_similarities):
+                continue
+                
+            # Add to results
             seen_isrcs.add(isrc)
+            seen_name_artist.add(name_artist_key)
             deduped_indices.append(idx)
             deduped_similarities.append(similarity)
             
+            # Stop when we have enough results
             if len(deduped_indices) >= top_k:
                 break
         
-        # If we have fewer than top_k results, add remaining tracks
+        # If we don't have enough results, fill with remaining items
         if len(deduped_indices) < top_k:
-            remaining = top_k - len(deduped_indices)
-            for idx, similarity, isrc in zip(indices, similarities, isrcs):
-                if idx in deduped_indices:
-                    continue
+            remaining_needed = top_k - len(deduped_indices)
+            remaining_items = items[len(deduped_indices):]
+            
+            for idx, similarity, isrc, track_id, metadata in remaining_items:
+                if len(deduped_indices) >= top_k:
+                    break
                     
-                dedup_key = isrc if isrc else str(idx)
+                artist = metadata.get('artist_name', 'Unknown').lower()
+                track_name = metadata.get('track_name', 'Unknown').lower()
+                name_artist_key = f"{artist}|{track_name}"
                 
-                # Only add tracks not already in results
-                if dedup_key not in seen_isrcs:
+                # Only add if not a duplicate
+                if name_artist_key not in seen_name_artist and isrc not in seen_isrcs:
                     deduped_indices.append(idx)
                     deduped_similarities.append(similarity)
-                    seen_isrcs.add(dedup_key)
-                    remaining -= 1
-                    if remaining <= 0:
-                        break
+                    seen_name_artist.add(name_artist_key)
+                    seen_isrcs.add(isrc)
         
-        return deduped_indices, deduped_similarities
+        return deduped_indices[:top_k], deduped_similarities[:top_k]
 
     def _apply_secondary_sort(self, results, with_metadata):
         """Apply secondary sort by popularity to break similarity ties"""

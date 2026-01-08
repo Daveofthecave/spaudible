@@ -1,5 +1,4 @@
 # core/preprocessing/db_to_vectors.py
-# core/preprocessing/db_to_vectors.py
 import sqlite3
 import time
 import numpy as np
