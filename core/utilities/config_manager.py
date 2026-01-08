@@ -99,10 +99,7 @@ class ConfigManager:
     
     def set_deduplicate(self, value):
         self.set('deduplicate', bool(value))
-        
-    def get_dedupe_threshold(self):
-        return self.get('dedupe_threshold', 0.92)
-    
+
     def set_dedupe_threshold(self, value):
         threshold = float(value)
         if not 0.5 <= threshold <= 1.0:

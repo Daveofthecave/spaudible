@@ -369,12 +369,10 @@ class SearchOrchestrator:
             deduplicate = config_manager.get_deduplicate()
             
         if deduplicate:
-            dedupe_threshold = config_manager.get_dedupe_threshold()
             indices, similarities = self._advanced_deduplication(
                 indices, 
                 similarities, 
-                top_k,
-                dedupe_threshold
+                top_k
             )
         
         # Validate results completeness
@@ -399,7 +397,7 @@ class SearchOrchestrator:
         return results[:top_k]  # Ensure exactly top_k results
 
     def _advanced_deduplication(self, indices: List[int], similarities: List[float], 
-                                top_k: int, dedupe_threshold: float) -> Tuple[List[int], List[float]]:
+                                top_k: int) -> Tuple[List[int], List[float]]:
         """
         Optimized deduplication using ISRC + core metadata signature.
         Removes duplicates while preserving version diversity and guaranteeing top_k results.
@@ -425,7 +423,8 @@ class SearchOrchestrator:
             release_year = self._get_release_year(metadata)
             
             # Create unique signature
-            signature = f"{artist}|{core_title}|{release_year}"
+            # signature = f"{artist}|{core_title}|{release_year}"
+            signature = f"{artist}|{core_title}"
             
             track_info.append({
                 'index': idx,

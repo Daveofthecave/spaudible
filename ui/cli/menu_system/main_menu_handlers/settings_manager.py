@@ -38,7 +38,6 @@ def handle_settings() -> str:
     force_gpu = config_manager.get_force_gpu()
     algorithm_name = config_manager.get_algorithm_name()
     deduplicate = config_manager.get_deduplicate()
-    dedupe_threshold = config_manager.get_dedupe_threshold()
     
     # Ensure mutual exclusivity
     if force_cpu and force_gpu:
@@ -56,7 +55,6 @@ def handle_settings() -> str:
         f"🐆 Force GPU Mode: {gpu_status}",
         f"🧮 Select Similarity Algorithm: {algorithm_name}", 
         f"🧦 Deduplicate Results: {deduplicate_status}",
-        f"⚖️  Deduplication Threshold: {dedupe_threshold:.2f}",
         "⚖️  Adjust Feature Weights",
         "❔ Check System Status",
         "📊 Performance Test",
@@ -77,51 +75,17 @@ def handle_settings() -> str:
     elif choice == 4:
         return _toggle_deduplicate()
     elif choice == 5:
-        return _adjust_dedupe_threshold()
-    elif choice == 6:
         return _adjust_feature_weights()
-    elif choice == 7:
+    elif choice == 6:
         return _handle_system_status()
-    elif choice == 8:
+    elif choice == 7:
         return _handle_performance_test()
-    elif choice == 9:
+    elif choice == 8:
         return _handle_rerun_setup()
-    elif choice == 10:
+    elif choice == 9:
         return _handle_about()
     else:
         return "main_menu"
-
-def _toggle_deduplicate() -> str:
-    """Toggle deduplication setting"""
-    current = config_manager.get_deduplicate()
-    new_setting = not current
-    
-    config_manager.set_deduplicate(new_setting)
-    
-    status = "ON" if new_setting else "OFF"
-    print(f"\n  ✅ Deduplication set to: {status}")
-    
-    input("\n  Press Enter to continue...")
-    return "settings"
-
-def _adjust_dedupe_threshold() -> str:
-    """Adjust deduplication threshold"""
-    current_threshold = config_manager.get_dedupe_threshold()
-    print(f"\n  Current deduplication threshold: {current_threshold:.2f}")
-    print("  (Higher values remove more similar tracks)")
-    
-    while True:
-        try:
-            new_threshold = float(input("  Enter new threshold (0.5-1.0): "))
-            if 0.5 <= new_threshold <= 1.0:
-                config_manager.set_dedupe_threshold(new_threshold)
-                print(f"  ✅ Deduplication threshold set to: {new_threshold:.2f}")
-                input("\n  Press Enter to continue...")
-                return "settings"
-            else:
-                print("  ❌ Value must be between 0.5 and 1.0")
-        except ValueError:
-            print("  ❌ Please enter a valid number")
 
 def _force_cpu_mode() -> str:
     """Toggle CPU mode setting"""
@@ -183,6 +147,19 @@ def _select_algorithm() -> str:
     
     input("\n  Press Enter to continue...")
     return "settings" 
+
+def _toggle_deduplicate() -> str:
+    """Toggle deduplication setting"""
+    current = config_manager.get_deduplicate()
+    new_setting = not current
+    
+    config_manager.set_deduplicate(new_setting)
+    
+    status = "ON" if new_setting else "OFF"
+    print(f"\n  ✅ Deduplication set to: {status}")
+    
+    input("\n  Press Enter to continue...")
+    return "settings"    
 
 def _adjust_feature_weights() -> str:
     """Adjust feature weights for similarity calculations."""

@@ -121,7 +121,7 @@ def _search_by_track_id(track_id: str) -> str:
         results = orchestrator.search(
             query_vector=vector,
             search_mode=search_mode,
-            top_k=10,
+            top_k=25,
             with_metadata=True
         )
         
