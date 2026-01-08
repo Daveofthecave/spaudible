@@ -1,5 +1,6 @@
 # core/similarity_engine/orchestrator.py
 import numpy as np
+import re
 import time
 import torch
 from config import PathConfig, VRAM_SAFETY_FACTOR, VRAM_SCALING_FACTOR_MB
@@ -400,7 +401,7 @@ class SearchOrchestrator:
     def _advanced_deduplication(self, indices: List[int], similarities: List[float], 
                                 top_k: int, dedupe_threshold: float) -> Tuple[List[int], List[float]]:
         """
-        Advanced deduplication using ISRC + artist/track name + similarity threshold.
+        Advanced deduplication using ISRC + normalized artist/track name.
         Removes near-duplicates while preserving diversity and guaranteeing top_k results.
         """
         # Get ISRCs for all results
@@ -413,25 +414,28 @@ class SearchOrchestrator:
         metadata_list = self.metadata_manager.get_track_metadata_batch(track_ids)
         
         seen_isrcs = set()
-        seen_name_artist = set()
+        seen_normalized_keys = set()
         deduped_indices = []
         deduped_similarities = []
         
         # Create a list of tuples for processing
-        items = list(zip(indices, similarities, isrcs, track_ids, metadata_list))
+        items = list(zip(indices, similarities, isrcs, metadata_list))
         
         # Process items while maintaining order
-        for idx, similarity, isrc, track_id, metadata in items:
+        for idx, similarity, isrc, metadata in items:
             artist = metadata.get('artist_name', 'Unknown').lower()
             track_name = metadata.get('track_name', 'Unknown').lower()
-            name_artist_key = f"{artist}|{track_name}"
+            
+            # Normalize track name by removing version info
+            normalized_name = self._normalize_track_name(track_name)
+            normalized_key = f"{artist}|{normalized_name}"
             
             # Skip duplicates with same ISRC
             if isrc and isrc in seen_isrcs:
                 continue
                 
-            # Skip duplicates with same name/artist (preserve highest similarity)
-            if name_artist_key in seen_name_artist:
+            # Skip duplicates with same normalized key
+            if normalized_key in seen_normalized_keys:
                 continue
                 
             # Skip near-duplicates with high similarity to existing results
@@ -440,7 +444,7 @@ class SearchOrchestrator:
                 
             # Add to results
             seen_isrcs.add(isrc)
-            seen_name_artist.add(name_artist_key)
+            seen_normalized_keys.add(normalized_key)
             deduped_indices.append(idx)
             deduped_similarities.append(similarity)
             
@@ -453,22 +457,51 @@ class SearchOrchestrator:
             remaining_needed = top_k - len(deduped_indices)
             remaining_items = items[len(deduped_indices):]
             
-            for idx, similarity, isrc, track_id, metadata in remaining_items:
+            for idx, similarity, isrc, metadata in remaining_items:
                 if len(deduped_indices) >= top_k:
                     break
                     
                 artist = metadata.get('artist_name', 'Unknown').lower()
                 track_name = metadata.get('track_name', 'Unknown').lower()
-                name_artist_key = f"{artist}|{track_name}"
+                normalized_name = self._normalize_track_name(track_name)
+                normalized_key = f"{artist}|{normalized_name}"
                 
                 # Only add if not a duplicate
-                if name_artist_key not in seen_name_artist and isrc not in seen_isrcs:
+                if normalized_key not in seen_normalized_keys and isrc not in seen_isrcs:
                     deduped_indices.append(idx)
                     deduped_similarities.append(similarity)
-                    seen_name_artist.add(name_artist_key)
+                    seen_normalized_keys.add(normalized_key)
                     seen_isrcs.add(isrc)
         
         return deduped_indices[:top_k], deduped_similarities[:top_k]
+
+    def _normalize_track_name(self, track_name: str) -> str:
+        """
+        Normalize track name by removing version indicators and non-alphanumeric characters.
+        """
+        # Remove content in parentheses/brackets
+        normalized = re.sub(r'$$[^)]*$$', '', track_name)
+        normalized = re.sub(r'$$[^$$]*$$', '', normalized)
+        
+        # Remove common version indicators
+        version_indicators = [
+            'remaster', 'version', 'edit', 'mix', 'remastered', 
+            'live', 'acoustic', 'radio', 'album', 'single', 
+            'cd', 'pro', 'demo', 'original', 're-record'
+        ]
+        
+        # Split into words and filter out version indicators
+        words = []
+        for word in normalized.split():
+            if word not in version_indicators:
+                words.append(word)
+        
+        # Reconstruct name and remove non-alphanumeric characters
+        normalized = ' '.join(words)
+        normalized = re.sub(r'[^a-z0-9 ]', '', normalized)
+        normalized = re.sub(r'\s+', ' ', normalized).strip()
+        
+        return normalized
 
     def _apply_secondary_sort(self, results, with_metadata):
         """Apply secondary sort by popularity to break similarity ties"""
