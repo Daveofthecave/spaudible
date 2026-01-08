@@ -3,9 +3,11 @@ import time
 import sys
 import math
 from collections import deque
+import gc
+import psutil
 
 class ProgressTracker:
-    """Optimized progress tracker with speed display."""
+    """Optimized progress tracker with rolling average speed and memory management."""
     
     def __init__(self, total_items, bar_width=50):
         """
@@ -27,8 +29,11 @@ class ProgressTracker:
         self.last_eta = float('inf')
         self.stable_speed = None
         self.min_speed = float('inf')
-        self.min_samples = 10  # Reduced from 100 to 10 for faster stabilization
-        self.update_threshold = 10000  # Only update every 10k vectors
+        self.min_samples = 10
+        self.update_threshold = 10000
+        self.memory_history = deque(maxlen=100)
+        self.last_memory_check = self.start_time
+        self.memory_check_interval = 30  # Check memory every 30 seconds
     
     def update(self, count=1):
         """Update progress and display if needed."""
@@ -53,13 +58,32 @@ class ProgressTracker:
         self.last_time = current_time
         self.last_processed = self.processed
         
+        # Check memory periodically
+        if current_time - self.last_memory_check >= self.memory_check_interval:
+            self._check_memory()
+            self.last_memory_check = current_time
+        
         # Only update display every 0.5 seconds
         if current_time - self.last_update >= 0.5:
             self._display()
             self.last_update = current_time
     
+    def _check_memory(self):
+        """Check memory usage and trigger GC if needed."""
+        try:
+            process = psutil.Process(os.getpid())
+            mem = process.memory_info().rss / (1024 ** 3)  # GB
+            self.memory_history.append(mem)
+            
+            # If memory increased by more than 0.5GB since last check, trigger GC
+            if len(self.memory_history) > 1 and mem - self.memory_history[0] > 0.5:
+                gc.collect()
+                print(f"  🧹 GC triggered (memory: {mem:.2f} GB)")
+        except Exception:
+            pass
+    
     def _display(self):
-        """Display progress bar with ultra-stable ETA and speed."""
+        """Display progress bar with rolling average speed."""
         percent = self.processed / self.total
         filled = int(self.bar_width * percent)
         bar = '█' * filled + '░' * (self.bar_width - filled)
@@ -68,19 +92,19 @@ class ProgressTracker:
         processed_str = f"{self.processed:,}"
         total_str = f"{self.total:,}"
         
-        # Always show current speed
+        # Calculate rolling average speed
         if self.speed_history:
-            # Use median speed for display
-            sorted_speeds = sorted(self.speed_history)
-            median_speed = sorted_speeds[len(sorted_speeds) // 2]
+            # Calculate rolling average of last 20 speeds
+            recent_speeds = list(self.speed_history)[-20:]
+            avg_speed = sum(recent_speeds) / len(recent_speeds)
             
             # Format speed
-            if median_speed > 1000:
-                speed_str = f"{median_speed/1000:.1f}K vec/s"
-            elif median_speed > 1000000:
-                speed_str = f"{median_speed/1000000:.2f}M vec/s"
+            if avg_speed > 1000:
+                speed_str = f"{avg_speed/1000:.1f}K vec/s"
+            elif avg_speed > 1000000:
+                speed_str = f"{avg_speed/1000000:.2f}M vec/s"
             else:
-                speed_str = f"{int(median_speed)} vec/s"
+                speed_str = f"{int(avg_speed)} vec/s"
         else:
             speed_str = "Calculating..."
         
@@ -135,12 +159,13 @@ class ProgressTracker:
         if seconds >= 3600:
             hours = int(seconds // 3600)
             minutes = int((seconds % 3600) // 60)
-            return f"{hours}h {minutes}m    "
+            return f"{hours}h {minutes}m"
         elif seconds >= 60:
             minutes = max(1, int(seconds // 60))  # Minimum 1 minute
-            return f"{minutes}m    "
+            seconds = int(seconds % 60)
+            return f"{minutes}m {seconds}s"
         else:
-            return "<1m    "
+            return f"{int(seconds)}s"
     
     def complete(self):
         """Display completion message."""
