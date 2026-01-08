@@ -401,107 +401,89 @@ class SearchOrchestrator:
     def _advanced_deduplication(self, indices: List[int], similarities: List[float], 
                                 top_k: int, dedupe_threshold: float) -> Tuple[List[int], List[float]]:
         """
-        Advanced deduplication using ISRC + normalized artist/track name.
-        Removes near-duplicates while preserving diversity and guaranteeing top_k results.
+        Optimized deduplication using ISRC + core metadata signature.
+        Removes duplicates while preserving version diversity and guaranteeing top_k results.
         """
-        # Get ISRCs for all results
+        # Get ISRCs and track IDs
         isrcs = self.index_manager.get_isrcs_batch(indices)
-        
-        # Get track IDs for name/artist deduplication
         track_ids = self.index_manager.get_track_ids_batch(indices)
         
-        # Fetch metadata in bulk for efficiency
+        # Fetch metadata in bulk
         metadata_list = self.metadata_manager.get_track_metadata_batch(track_ids)
         
+        # Create track info list with signatures
+        track_info = []
+        for i, idx in enumerate(indices):
+            metadata = metadata_list[i]
+            artist = metadata.get('artist_name', 'Unknown').lower()
+            title = metadata.get('track_name', 'Unknown').lower()
+            
+            # Extract core title (before any modifiers)
+            core_title = title.split('(')[0].split('-')[0].split('[')[0].strip()
+            
+            # Extract year (first 4 characters if available)
+            release_year = self._get_release_year(metadata)
+            
+            # Create unique signature
+            signature = f"{artist}|{core_title}|{release_year}"
+            
+            track_info.append({
+                'index': idx,
+                'similarity': similarities[i],
+                'isrc': isrcs[i],
+                'signature': signature
+            })
+        
+        # Sort by similarity descending (prioritize higher quality matches)
+        track_info.sort(key=lambda x: x['similarity'], reverse=True)
+        
+        seen_signatures = set()
         seen_isrcs = set()
-        seen_normalized_keys = set()
         deduped_indices = []
         deduped_similarities = []
         
-        # Create a list of tuples for processing
-        items = list(zip(indices, similarities, isrcs, metadata_list))
-        
-        # Process items while maintaining order
-        for idx, similarity, isrc, metadata in items:
-            artist = metadata.get('artist_name', 'Unknown').lower()
-            track_name = metadata.get('track_name', 'Unknown').lower()
-            
-            # Normalize track name by removing version info
-            normalized_name = self._normalize_track_name(track_name)
-            normalized_key = f"{artist}|{normalized_name}"
-            
-            # Skip duplicates with same ISRC
-            if isrc and isrc in seen_isrcs:
-                continue
-                
-            # Skip duplicates with same normalized key
-            if normalized_key in seen_normalized_keys:
-                continue
-                
-            # Skip near-duplicates with high similarity to existing results
-            if any(sim >= dedupe_threshold for sim in deduped_similarities):
-                continue
-                
-            # Add to results
-            seen_isrcs.add(isrc)
-            seen_normalized_keys.add(normalized_key)
-            deduped_indices.append(idx)
-            deduped_similarities.append(similarity)
-            
-            # Stop when we have enough results
+        # First pass: Strict deduplication
+        for track in track_info:
             if len(deduped_indices) >= top_k:
                 break
+                
+            # Skip duplicate ISRCs (exact recording match)
+            if track['isrc'] and track['isrc'] in seen_isrcs:
+                continue
+                
+            # Skip duplicate signatures (same song version)
+            if track['signature'] in seen_signatures:
+                continue
+                
+            deduped_indices.append(track['index'])
+            deduped_similarities.append(track['similarity'])
+            seen_signatures.add(track['signature'])
+            seen_isrcs.add(track['isrc'])
         
-        # If we don't have enough results, fill with remaining items
+        # Second pass: Fill remaining slots (only check ISRC duplicates)
         if len(deduped_indices) < top_k:
-            remaining_needed = top_k - len(deduped_indices)
-            remaining_items = items[len(deduped_indices):]
-            
-            for idx, similarity, isrc, metadata in remaining_items:
+            for track in track_info:
                 if len(deduped_indices) >= top_k:
                     break
                     
-                artist = metadata.get('artist_name', 'Unknown').lower()
-                track_name = metadata.get('track_name', 'Unknown').lower()
-                normalized_name = self._normalize_track_name(track_name)
-                normalized_key = f"{artist}|{normalized_name}"
-                
-                # Only add if not a duplicate
-                if normalized_key not in seen_normalized_keys and isrc not in seen_isrcs:
-                    deduped_indices.append(idx)
-                    deduped_similarities.append(similarity)
-                    seen_normalized_keys.add(normalized_key)
-                    seen_isrcs.add(isrc)
+                # Skip if already added
+                if track['index'] in deduped_indices:
+                    continue
+                    
+                # Skip duplicate ISRCs
+                if track['isrc'] and track['isrc'] in seen_isrcs:
+                    continue
+                    
+                deduped_indices.append(track['index'])
+                deduped_similarities.append(track['similarity'])
+                seen_isrcs.add(track['isrc'])
         
         return deduped_indices[:top_k], deduped_similarities[:top_k]
 
-    def _normalize_track_name(self, track_name: str) -> str:
-        """
-        Normalize track name by removing version indicators and non-alphanumeric characters.
-        """
-        # Remove content in parentheses/brackets
-        normalized = re.sub(r'$$[^)]*$$', '', track_name)
-        normalized = re.sub(r'$$[^$$]*$$', '', normalized)
-        
-        # Remove common version indicators
-        version_indicators = [
-            'remaster', 'version', 'edit', 'mix', 'remastered', 
-            'live', 'acoustic', 'radio', 'album', 'single', 
-            'cd', 'pro', 'demo', 'original', 're-record'
-        ]
-        
-        # Split into words and filter out version indicators
-        words = []
-        for word in normalized.split():
-            if word not in version_indicators:
-                words.append(word)
-        
-        # Reconstruct name and remove non-alphanumeric characters
-        normalized = ' '.join(words)
-        normalized = re.sub(r'[^a-z0-9 ]', '', normalized)
-        normalized = re.sub(r'\s+', ' ', normalized).strip()
-        
-        return normalized
+    def _get_release_year(self, metadata: Dict) -> str:
+        """Safely extract first 4 characters of release year."""
+        year = metadata.get('album_release_year', '')
+        return year[:4] if year and len(year) >= 4 else ''
 
     def _apply_secondary_sort(self, results, with_metadata):
         """Apply secondary sort by popularity to break similarity ties"""
