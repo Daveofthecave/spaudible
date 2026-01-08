@@ -10,6 +10,7 @@ from .vector_exporter import VectorWriter
 from .progress import ProgressTracker
 from .mask_generator import generate_mask_file
 import gc
+import mmap
 
 class VectorBuilder:
     """Wrapper for vector building to enable multiprocessing."""
@@ -27,12 +28,17 @@ class DatabaseReader:
         self.audio_conn = None
         self.artist_followers = {}
         self.artist_genres = {}
+        self.main_mmap = None
+        self.audio_mmap = None
         
     def __enter__(self):
         """Open database connections with aggressive optimizations."""
         # Open connections with timeout disabled
         self.main_conn = sqlite3.connect(self.main_db_path, timeout=0)
         self.audio_conn = sqlite3.connect(self.audio_db_path, timeout=0)
+        
+        # Memory map databases for faster access
+        self._memory_map_databases()
         
         # Preload artist metadata into memory
         self._preload_artist_metadata()
@@ -57,6 +63,25 @@ class DatabaseReader:
             self.main_conn.close()
         if self.audio_conn:
             self.audio_conn.close()
+        if self.main_mmap:
+            self.main_mmap.close()
+        if self.audio_mmap:
+            self.audio_mmap.close()
+    
+    def _memory_map_databases(self):
+        """Memory-map database files for faster access."""
+        try:
+            # Memory-map main database
+            with open(self.main_db_path, 'rb') as f:
+                self.main_mmap = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            
+            # Memory-map audio database
+            with open(self.audio_db_path, 'rb') as f:
+                self.audio_mmap = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            
+            print("  ✅ Memory-mapped databases for faster access")
+        except Exception as e:
+            print(f"  ⚠️  Could not memory-map databases: {e}")
     
     def _preload_artist_metadata(self):
         """Preload all artist metadata into memory for fast access."""
@@ -233,11 +258,11 @@ class PreprocessingEngine:
         self.main_db_path = main_db_path
         self.audio_db_path = audio_db_path
         self.output_dir = output_dir
-        self.batch_size = 500_000  # Batch size
+        self.batch_size = 1_000_000  # Increased batch size
         self.estimated_total = 256_000_000
         self.workers = min(8, os.cpu_count())  # Limit workers
-        self.sub_batch_size = 50_000  # Sub-batch size
-        self.memory_monitor_interval = 100_000  # Monitor memory every 100k tracks
+        self.sub_batch_size = 100_000  # Larger sub-batches
+        self.memory_monitor_interval = 500_000  # Monitor memory every 500k tracks
     
     def _prewarm_cache(self, db_reader):
         """Warm up database cache to improve performance."""
@@ -272,7 +297,7 @@ class PreprocessingEngine:
                 print(f"  Using estimated total: {self.estimated_total:,} tracks")
                 actual_total = self.estimated_total
         
-        print("\n  🔥 Processing tracks in batches of 500,000 with parallelization...")
+        print("\n  🔥 Processing tracks in batches of 1,000,000 with parallelization...")
         print(f"  Using {self.workers} workers with sub-batch size {self.sub_batch_size}")
         print("  This will take about 30-60 minutes. Press Ctrl+C to interrupt.")
         
@@ -280,6 +305,7 @@ class PreprocessingEngine:
         progress = ProgressTracker(actual_total)
         last_rowid = 0
         processed_since_last_gc = 0
+        batch_count = 0
 
         with VectorWriter(self.output_dir) as writer:
             with DatabaseReader(self.main_db_path, self.audio_db_path) as db_reader:
@@ -290,6 +316,8 @@ class PreprocessingEngine:
                 with concurrent.futures.ProcessPoolExecutor(max_workers=self.workers) as executor:
                     while last_rowid < actual_total:
                         try:
+                            batch_count += 1
+                            
                             # Fetch batch of tracks
                             batch = db_reader.get_batch_tracks(self.batch_size, last_rowid)
                             if not batch:
@@ -326,6 +354,10 @@ class PreprocessingEngine:
                             # End of batch cleanup
                             del batch
                             gc.collect()
+                            
+                            # Periodically flush write buffers
+                            if batch_count % 10 == 0:
+                                writer._flush_buffers()
                             
                         except KeyboardInterrupt:
                             print("\n\n  ⏸️  Processing interrupted by user.")
