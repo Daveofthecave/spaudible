@@ -1,13 +1,15 @@
 # core/preprocessing/db_to_vectors.py
 import sqlite3
 import time
+import os
+import concurrent.futures
+import numpy as np
 from pathlib import Path
 from core.vectorization.track_vectorizer import build_track_vectors_batch
 from .vector_exporter import VectorWriter
 from .progress import ProgressTracker
 from .mask_generator import generate_mask_file
-import concurrent.futures
-import numpy as np
+import gc
 
 class VectorBuilder:
     """Wrapper for vector building to enable multiprocessing."""
@@ -16,29 +18,36 @@ class VectorBuilder:
         return build_track_vectors_batch(track_data_batch)
 
 class DatabaseReader:
-    """Efficient, memory-mapped reader for Spotify SQLite databases."""
+    """Highly optimized reader for Spotify SQLite databases."""
     
     def __init__(self, main_db_path, audio_db_path):
         self.main_db_path = main_db_path
         self.audio_db_path = audio_db_path
         self.main_conn = None
         self.audio_conn = None
+        self.artist_followers = {}
+        self.artist_genres = {}
         
     def __enter__(self):
-        """Open database connections."""
-        self.main_conn = sqlite3.connect(self.main_db_path, timeout=60)
-        self.audio_conn = sqlite3.connect(self.audio_db_path, timeout=60)
+        """Open database connections with aggressive optimizations."""
+        # Open connections with timeout disabled
+        self.main_conn = sqlite3.connect(self.main_db_path, timeout=0)
+        self.audio_conn = sqlite3.connect(self.audio_db_path, timeout=0)
         
-        # Performance optimizations
-        self.main_conn.execute("PRAGMA cache_size = -2000000")  # 2GB cache
-        self.main_conn.execute("PRAGMA mmap_size = 30000000000")  # 30GB memory mapping
-        self.main_conn.execute("PRAGMA temp_store = MEMORY")  # Store temp tables in RAM
+        # Preload artist metadata into memory
+        self._preload_artist_metadata()
+        
+        # Set aggressive performance settings
+        self.main_conn.execute("PRAGMA journal_mode = MEMORY")
+        self.main_conn.execute("PRAGMA cache_size = -200000")  # 200GB cache
+        self.main_conn.execute("PRAGMA temp_store = MEMORY")
         self.main_conn.execute("PRAGMA synchronous = OFF")
-        self.main_conn.execute("PRAGMA journal_mode = OFF")
         self.main_conn.execute("PRAGMA locking_mode = EXCLUSIVE")
+        self.main_conn.execute("PRAGMA mmap_size = 30000000000")  # 30GB memory mapping
         
+        self.audio_conn.execute("PRAGMA journal_mode = MEMORY")
         self.audio_conn.execute("PRAGMA synchronous = OFF")
-        self.audio_conn.execute("PRAGMA journal_mode = OFF")
+        self.audio_conn.execute("PRAGMA temp_store = MEMORY")
         
         return self
         
@@ -49,82 +58,66 @@ class DatabaseReader:
         if self.audio_conn:
             self.audio_conn.close()
     
+    def _preload_artist_metadata(self):
+        """Preload all artist metadata into memory for fast access."""
+        print("  Preloading artist metadata into memory...")
+        
+        # Use explicit cursor management
+        cursor = self.main_conn.cursor()
+        try:
+            # Load artist followers
+            cursor.execute("SELECT rowid, followers_total FROM artists")
+            self.artist_followers = {rowid: followers for rowid, followers in cursor}
+            
+            # Load artist genres
+            cursor.execute("SELECT artist_rowid, genre FROM artist_genres")
+            self.artist_genres = {}
+            for artist_rowid, genre in cursor:
+                if artist_rowid not in self.artist_genres:
+                    self.artist_genres[artist_rowid] = []
+                self.artist_genres[artist_rowid].append(genre)
+        finally:
+            cursor.close()
+        
+        print(f"  Loaded {len(self.artist_followers):,} artists and "
+              f"{sum(len(g) for g in self.artist_genres.values()):,} genres")
+    
     def get_track_count(self):
         """Get total number of tracks in the database."""
         cursor = self.main_conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM tracks")
-        return cursor.fetchone()[0]
+        try:
+            cursor.execute("SELECT COUNT(*) FROM tracks")
+            return cursor.fetchone()[0]
+        finally:
+            cursor.close()
 
-    def get_track_by_id(self, track_id):
-        """Fetch a single track by its Spotify ID."""
-        query = """
-        SELECT 
-            t.rowid,
-            t.id as track_id,
-            t.external_id_isrc,
-            t.duration_ms,
-            t.popularity,
-            a.release_date,
-            MAX(art.followers_total) as max_followers,
-            GROUP_CONCAT(DISTINCT ag.genre) as genres
-        FROM tracks t
-        JOIN albums a ON t.album_rowid = a.rowid
-        JOIN track_artists ta ON t.rowid = ta.track_rowid
-        JOIN artists art ON ta.artist_rowid = art.rowid
-        LEFT JOIN artist_genres ag ON art.rowid = ag.artist_rowid
-        WHERE t.id = ?
-        GROUP BY t.rowid
-        """
-        
-        cursor = self.main_conn.cursor()
-        cursor.execute(query, (track_id,))
-        row = cursor.fetchone()
-        
-        if row:
-            columns = [desc[0] for desc in cursor.description]
-            track_data = dict(zip(columns, row))
-            
-            if track_data['genres']:
-                track_data['genres'] = track_data['genres'].split(',')
-            else:
-                track_data['genres'] = []
-            
-            # Add audio features
-            track_data.update(self.get_audio_features(track_data['track_id']))
-            
-            return track_data
-        
-        return None
-    
     def get_audio_features_batch(self, track_ids):
-        """Get audio features for multiple tracks in bulk with chunked queries."""
+        """Get audio features for multiple tracks using temporary table."""
         if not track_ids:
             return {}
         
-        # SQLite has a limit of 999 variables per query
-        chunk_size = 500
-        features_map = {}
-        
-        # Process track IDs in chunks
-        for i in range(0, len(track_ids), chunk_size):
-            chunk = track_ids[i:i+chunk_size]
-            placeholders = ','.join(['?'] * len(chunk))
+        cursor = self.audio_conn.cursor()
+        try:
+            # Create temporary table for batch IDs
+            cursor.execute("CREATE TEMP TABLE batch_ids (track_id TEXT)")
             
-            query = f"""
-            SELECT 
-                track_id,
-                duration_ms, time_signature, tempo, key, mode,
-                danceability, energy, loudness, speechiness,
-                acousticness, instrumentalness, liveness, valence
-            FROM track_audio_features
-            WHERE track_id IN ({placeholders})
-            """
+            # Insert all track IDs in bulk (allow duplicates)
+            cursor.executemany("INSERT INTO batch_ids VALUES (?)", [(tid,) for tid in track_ids])
             
-            cursor = self.audio_conn.cursor()
-            cursor.execute(query, chunk)
-            rows = cursor.fetchall()
+            # Execute single bulk query
+            cursor.execute("""
+                SELECT 
+                    track_id,
+                    duration_ms, time_signature, tempo, key, mode,
+                    danceability, energy, loudness, speechiness,
+                    acousticness, instrumentalness, liveness, valence
+                FROM track_audio_features
+                WHERE track_id IN (SELECT DISTINCT track_id FROM batch_ids)
+            """)
             
-            for row in rows:
+            # Build features map
+            features_map = {}
+            for row in cursor:
                 track_id = row[0]
                 features = {
                     'duration_ms': row[1],
@@ -142,14 +135,22 @@ class DatabaseReader:
                     'valence': row[13]
                 }
                 features_map[track_id] = features
-        
-        return features_map
+            
+            # Clean up temporary table
+            cursor.execute("DROP TABLE batch_ids")
+            
+            return features_map
+        finally:
+            cursor.close()
 
     def get_batch_tracks(self, batch_size=500000, last_rowid=0):
         """
-        Efficiently fetch a batch of tracks starting after last_rowid.
-        Uses keyset pagination for constant-time performance.
+        Optimized batch fetching using keyset pagination.
         """
+        # Calculate end position
+        end_idx = last_rowid + batch_size
+        
+        # Prepare query to get distinct tracks
         query = """
         SELECT 
             t.rowid,
@@ -158,54 +159,72 @@ class DatabaseReader:
             t.duration_ms,
             t.popularity,
             a.release_date,
-            MAX(art.followers_total) as max_followers,
-            GROUP_CONCAT(DISTINCT ag.genre) as genres
+            ta.artist_rowid
         FROM tracks t
         JOIN albums a ON t.album_rowid = a.rowid
         JOIN track_artists ta ON t.rowid = ta.track_rowid
-        JOIN artists art ON ta.artist_rowid = art.rowid
-        LEFT JOIN artist_genres ag ON art.rowid = ag.artist_rowid
-        WHERE t.rowid > ?
+        WHERE t.rowid > ? AND t.rowid <= ?
         GROUP BY t.rowid
-        ORDER BY t.rowid
-        LIMIT ?
         """
         
         cursor = self.main_conn.cursor()
-        cursor.execute(query, (last_rowid, batch_size))
-        
-        # Get column names
-        columns = [desc[0] for desc in cursor.description]
-        
-        # Collect all tracks and track IDs
-        tracks = []
-        track_ids = []
-        
-        for row in cursor:
-            track_data = dict(zip(columns, row))
+        try:
+            cursor.execute(query, (last_rowid, end_idx))
             
-            # Parse comma-separated genres into list
-            if track_data['genres']:
-                track_data['genres'] = track_data['genres'].split(',')
-            else:
-                track_data['genres'] = []
+            # Get column names
+            columns = [desc[0] for desc in cursor.description]
             
-            tracks.append(track_data)
-            track_ids.append(track_data['track_id'])
-        
-        # Bulk fetch audio features for this batch
-        audio_features_map = self.get_audio_features_batch(track_ids)
-        
-        # Add audio features to each track
-        for track_data in tracks:
-            track_id = track_data['track_id']
-            if track_id in audio_features_map:
-                track_data.update(audio_features_map[track_id])
-        
-        return tracks
+            # Collect tracks and track IDs
+            tracks = []
+            track_ids = []
+            artist_map = {}
+            
+            for row in cursor:
+                track_data = dict(zip(columns, row))
+                
+                # Store artist IDs for later enrichment
+                artist_rowid = track_data['artist_rowid']
+                if track_data['rowid'] not in artist_map:
+                    artist_map[track_data['rowid']] = []
+                artist_map[track_data['rowid']].append(artist_rowid)
+                
+                tracks.append(track_data)
+                track_ids.append(track_data['track_id'])
+            
+            # Enrich tracks with artist metadata
+            for track in tracks:
+                artist_ids = artist_map.get(track['rowid'], [])
+                
+                # Get max followers
+                max_followers = 0
+                for artist_id in artist_ids:
+                    followers = self.artist_followers.get(artist_id, 0)
+                    if followers > max_followers:
+                        max_followers = followers
+                track['max_followers'] = max_followers
+                
+                # Get genres
+                genres = set()
+                for artist_id in artist_ids:
+                    if artist_id in self.artist_genres:
+                        genres.update(self.artist_genres[artist_id])
+                track['genres'] = list(genres)
+            
+            # Bulk fetch audio features
+            audio_features_map = self.get_audio_features_batch(track_ids)
+            
+            # Add audio features to each track
+            for track_data in tracks:
+                track_id = track_data['track_id']
+                if track_id in audio_features_map:
+                    track_data.update(audio_features_map[track_id])
+            
+            return tracks
+        finally:
+            cursor.close()
 
 class PreprocessingEngine:
-    """Optimized preprocessing engine with parallelization."""
+    """Highly optimized preprocessing engine with memory management."""
     
     def __init__(self, 
                  main_db_path="data/databases/spotify_clean.sqlite3",
@@ -214,10 +233,11 @@ class PreprocessingEngine:
         self.main_db_path = main_db_path
         self.audio_db_path = audio_db_path
         self.output_dir = output_dir
-        self.batch_size = 500000  # Increased batch size
+        self.batch_size = 500_000  # Batch size
         self.estimated_total = 256_000_000
-        self.workers = 12  # Increased number of parallel workers
-        self.sub_batch_size = 5000  # Process in smaller sub-batches
+        self.workers = min(8, os.cpu_count())  # Limit workers
+        self.sub_batch_size = 50_000  # Sub-batch size
+        self.memory_monitor_interval = 100_000  # Monitor memory every 100k tracks
     
     def _prewarm_cache(self, db_reader):
         """Warm up database cache to improve performance."""
@@ -227,7 +247,7 @@ class PreprocessingEngine:
             pass
     
     def run(self):
-        """Run optimized preprocessing pipeline."""
+        """Run optimized preprocessing pipeline with memory management."""
         print("\n" + "═" * 65)
         print("  🚀 Starting Optimized Database Preprocessing")
         print("═" * 65)
@@ -253,28 +273,29 @@ class PreprocessingEngine:
                 actual_total = self.estimated_total
         
         print("\n  🔥 Processing tracks in batches of 500,000 with parallelization...")
-        print("  This will take about 15-30 minutes. Press Ctrl+C to interrupt.")
-        print("\n  Progress:")
+        print(f"  Using {self.workers} workers with sub-batch size {self.sub_batch_size}")
+        print("  This will take about 30-60 minutes. Press Ctrl+C to interrupt.")
         
+        # Initialize progress tracker
         progress = ProgressTracker(actual_total)
-        processed_count = 0
         last_rowid = 0
+        processed_since_last_gc = 0
 
         with VectorWriter(self.output_dir) as writer:
             with DatabaseReader(self.main_db_path, self.audio_db_path) as db_reader:
                 # Pre-warm database cache
                 self._prewarm_cache(db_reader)
                 
-                # Create process pool
+                # Create process pool with limited workers
                 with concurrent.futures.ProcessPoolExecutor(max_workers=self.workers) as executor:
-                    while processed_count < actual_total:
+                    while last_rowid < actual_total:
                         try:
                             # Fetch batch of tracks
                             batch = db_reader.get_batch_tracks(self.batch_size, last_rowid)
                             if not batch:
                                 break
                             
-                            # Process in sub-batches for better memory management
+                            # Process in sub-batches
                             for i in range(0, len(batch), self.sub_batch_size):
                                 sub_batch = batch[i:i+self.sub_batch_size]
                                 
@@ -290,9 +311,21 @@ class PreprocessingEngine:
                                         isrc
                                     )
                                     last_rowid = track_data['rowid']
-                                    progress.update(1)
+                                
+                                # Update progress
+                                progress.update(len(sub_batch))
+                                processed_since_last_gc += len(sub_batch)
+                                
+                                # Memory management
+                                if processed_since_last_gc >= self.memory_monitor_interval:
+                                    # Explicit garbage collection
+                                    del vectors
+                                    gc.collect()
+                                    processed_since_last_gc = 0
                             
-                            processed_count += len(batch)
+                            # End of batch cleanup
+                            del batch
+                            gc.collect()
                             
                         except KeyboardInterrupt:
                             print("\n\n  ⏸️  Processing interrupted by user.")
@@ -316,7 +349,7 @@ class PreprocessingEngine:
         
         if mask_success:
             print(f"✅ Mask generation completed in {mask_time:.1f} seconds")
-            self._show_statistics(processed_count, masks_path)
+            self._show_statistics(progress.total, masks_path)
             return True
         else:
             print(f"❌ Mask generation failed after {mask_time:.1f} seconds")
