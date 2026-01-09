@@ -12,7 +12,7 @@ MAX_YEAR = 2025
 MAX_FOLLOWERS = 141_174_367
 
 def safe_float(value, default=-1.0):
-    """Vectorized float conversion"""
+    """Safely convert a value to float, returning default if conversion fails."""
     if isinstance(value, np.ndarray):
         return value.astype(np.float32)
     if value is None:
@@ -23,7 +23,7 @@ def safe_float(value, default=-1.0):
         return default
 
 def normalize_loudness(loudness_db):
-    """Vectorized loudness normalization"""
+    """Linearly normalize loudness from [-60, 0] dB to [0, 1]."""
     if isinstance(loudness_db, np.ndarray):
         clipped = np.clip(loudness_db, -60.0, 0.0)
         return (clipped + 60.0) / 60.0
@@ -32,7 +32,7 @@ def normalize_loudness(loudness_db):
     return (max(min(loudness_db, 0.0), -60.0) + 60.0) / 60.0
 
 def normalize_key(key_number, mode):
-    """Vectorized key normalization with validation"""
+    """Linearly normalize key to [0, 1] based on the number of accidentals (0-6)."""
     if isinstance(key_number, np.ndarray) and isinstance(mode, np.ndarray):
         # Create mask for valid keys (0-11)
         valid_mask = (key_number >= 0) & (key_number <= 11)
@@ -64,7 +64,7 @@ def normalize_key(key_number, mode):
     return accidentals_map[adjusted_key] / 6.0
 
 def normalize_tempo(tempo_bpm):
-    """Vectorized tempo normalization"""
+    """Normalize tempo from [40, 250] to [0, 1] using log2 scaling."""
     if isinstance(tempo_bpm, np.ndarray):
         clipped = np.clip(tempo_bpm, MIN_TEMPO, MAX_TEMPO)
         log_min = np.log2(MIN_TEMPO)
@@ -76,7 +76,7 @@ def normalize_tempo(tempo_bpm):
     return (np.log2(tempo) - np.log2(MIN_TEMPO)) / (np.log2(MAX_TEMPO) - np.log2(MIN_TEMPO))
 
 def normalize_time_signature(time_sig):
-    """Vectorized time signature normalization"""
+    """One-hot encode time signature into a 4D binary vector."""
     if isinstance(time_sig, np.ndarray):
         result = np.zeros((len(time_sig), 4), dtype=np.float32)
         result[time_sig == 4, 0] = 1.0
@@ -96,7 +96,7 @@ def normalize_time_signature(time_sig):
         return [0.0, 0.0, 0.0, 1.0]
 
 def normalize_duration(duration_ms, c=5.0):
-    """Vectorized duration normalization"""
+    """Normalize duration to [0, 1) using a rational function."""
     if isinstance(duration_ms, np.ndarray):
         minutes = np.abs(duration_ms) / 60000.0
         return minutes / (minutes + np.abs(c))
@@ -106,7 +106,7 @@ def normalize_duration(duration_ms, c=5.0):
     return minutes / (minutes + abs(c))
 
 def normalize_release_date(release_date_str):
-    """Vectorized release date normalization"""
+    """Linearly normalize release year to [0, 1]."""
     if isinstance(release_date_str, np.ndarray):
         years = np.full(len(release_date_str), -1.0, dtype=np.float32)
         
@@ -141,7 +141,7 @@ def normalize_release_date(release_date_str):
         return -1.0
 
 def normalize_popularity(popularity):
-    """Vectorized popularity normalization"""
+    """Normalize track popularity to [0, 1] using square root scaling."""
     if isinstance(popularity, np.ndarray):
         clipped = np.clip(popularity, 0, 100)
         return np.sqrt(clipped / 100.0)
@@ -151,7 +151,7 @@ def normalize_popularity(popularity):
     return math.sqrt(popularity / 100.0)
 
 def normalize_followers(followers):
-    """Vectorized followers normalization"""
+    """Normalize artist followers to [0, 1] using log10 scaling."""
     if isinstance(followers, np.ndarray):
         clipped = np.clip(followers, 0, MAX_FOLLOWERS)
         return np.log10(clipped + 1) / np.log10(MAX_FOLLOWERS + 1)
@@ -181,7 +181,7 @@ def build_track_vector(track_dict):
     return build_track_vectors_batch([track_dict])[0]
 
 def build_track_vectors_batch(track_dicts: List[dict]) -> List[List[float]]:
-    """Highly optimized vectorization using NumPy batch processing"""
+    """Batch-convert a list of track dictionaries to a list of 32-dimensional vectors."""
     n = len(track_dicts)
     if n == 0:
         return []
