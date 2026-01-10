@@ -7,6 +7,7 @@ from core.vectorization.track_vectorizer import build_track_vectors_batch
 from .vector_exporter import VectorWriter
 from .progress import ProgressTracker
 from .mask_generator import generate_mask_file
+from .region_mask_generator import RegionMaskGenerator
 import mmap
 import gc
 
@@ -244,30 +245,50 @@ class PreprocessingEngine:
         if mask_success:
             print(f"✅ Mask generation completed in {mask_time:.1f} seconds")
             self._show_statistics(self.total_vectors, masks_path)
-            return True
         else:
             print(f"❌ Mask generation failed after {mask_time:.1f} seconds")
+            return False
+        
+        # Generate region file track_regions.bin
+        print("\n⚙️  Generating region file from index...")
+        index_path = Path(self.output_dir) / "track_index.bin"
+        region_path = Path(self.output_dir) / "track_regions.bin"
+        
+        region_start = time.time()
+        region_generator = RegionMaskGenerator(index_path, region_path)
+        region_success = region_generator.generate()
+        region_time = time.time() - region_start
+        
+        if region_success:
+            print(f"✅ Region file generation completed in {region_time:.1f} seconds")
+            return True
+        else:
+            print(f"❌ Region file generation failed after {region_time:.1f} seconds")
             return False
     
     def _show_statistics(self, total_processed, masks_path: Path):
         """Display processing statistics."""
         vectors_path = Path(self.output_dir) / "track_vectors.bin"
         index_path = Path(self.output_dir) / "track_index.bin"
+        region_path = Path(self.output_dir) / "track_regions.bin"
         
         vectors_size = vectors_path.stat().st_size if vectors_path.exists() else 0
         masks_size = masks_path.stat().st_size if masks_path.exists() else 0
         index_size = index_path.stat().st_size if index_path.exists() else 0
+        region_size = region_path.stat().st_size if region_path.exists() else 0
         
         vectors_gb = vectors_size / (1024**3)
         masks_gb = masks_size / (1024**3)
         index_gb = index_size / (1024**3)
-        total_gb = vectors_gb + masks_gb + index_gb
+        region_gb = region_size / (1024**3)
+        total_gb = vectors_gb + masks_gb + index_gb + region_gb
         
         print("\n  📊 Processing Statistics:")
         print(f"    Total tracks processed: {total_processed:,}")
         print(f"    Vector file size: {vectors_gb:.1f} GB")
         print(f"    Mask file size: {masks_gb:.1f} GB")
         print(f"    Index file size: {index_gb:.1f} GB")
+        print(f"    Region file size: {region_gb:.1f} GB")
         print(f"    Total disk space used: {total_gb:.1f} GB")
         print(f"    Output directory: {self.output_dir}")
         print("\n  ✅ Preprocessing complete! Ready for similarity search.")
