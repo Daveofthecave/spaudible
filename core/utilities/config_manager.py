@@ -17,7 +17,8 @@ class ConfigManager:
         'force_cpu': False,
         'force_gpu': False,
         'deduplicate': True,
-        'dedupe_threshold': 0.92
+        'dedupe_threshold': 0.92,
+        'region_filter': 1.0
     }
     
     _instance = None
@@ -105,6 +106,16 @@ class ConfigManager:
         if not 0.5 <= threshold <= 1.0:
             raise ValueError("Deduplication threshold must be between 0.5 and 1.0")
         self.set('dedupe_threshold', threshold)
+
+    # Region filter methods
+    def get_region_filter(self):
+        return self.get('region_filter', 1.0)
+    
+    def set_region_filter(self, value):
+        value = float(value)
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("Region filter must be between 0.0 and 1.0")
+        self.set('region_filter', value)
 
 # Singleton access
 config_manager = ConfigManager()

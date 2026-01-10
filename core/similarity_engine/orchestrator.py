@@ -10,8 +10,8 @@ from .chunk_size_optimizer import ChunkSizeOptimizer
 from .index_manager import IndexManager
 from .metadata_service import MetadataManager
 from .vector_comparer import ChunkedSearch
-from .vector_io import VectorReader
-from .vector_io_gpu import VectorReaderGPU
+from .vector_io import VectorReader, RegionReader
+from .vector_io_gpu import VectorReaderGPU, RegionReaderGPU
 from .vector_math import VectorOps
 from .vector_math_gpu import VectorOpsGPU
 from core.utilities.gpu_utils import get_gpu_info, recommend_max_batch_size
@@ -28,6 +28,7 @@ class SearchOrchestrator:
                 vectors_path: Optional[str] = None, 
                 index_path: Optional[str] = None,
                 masks_path: Optional[str] = None,
+                region_path: Optional[str] = None,
                 metadata_db: Optional[str] = None,
                 chunk_size: int = 100_000_000,
                 use_gpu: bool = True,
@@ -44,6 +45,7 @@ class SearchOrchestrator:
         Args:
             vectors_path: Path to track_vectors.bin (default: from PathConfig)
             masks_path: Path to track_masks.bin (default: from PathConfig)
+            region_path: Path to track_regions.bin (default: from PathConfig)
             index_path: Path to track_index.bin (default: from PathConfig)
             metadata_db: Path to metadata database
             chunk_size: Chunk size for vector processing
@@ -65,15 +67,24 @@ class SearchOrchestrator:
         self.vram_scaling_factor_mb = vram_scaling_factor_mb
         self._is_gpu_available(verbose=False)
 
+        self.device = "cpu"
+        if torch.cuda.is_available() and self.use_gpu and not self.force_cpu:
+            self.device = "cuda"
+        # print(f"  ℹ️  Using device: {self.device.upper()}")
+
         # Set default paths if not provided
         vectors_path = vectors_path or str(PathConfig.get_vector_file())
         masks_path = masks_path or str(PathConfig.get_mask_file())
+        region_path = region_path or str(PathConfig.get_region_file())
         index_path = index_path or str(PathConfig.get_index_file())
 
         # Initialize components
         self.vector_reader = self._init_vector_reader(vectors_path, masks_path)
+        self.total_vectors = self.vector_reader.get_total_vectors()
+        self.region_reader = self._init_region_reader(region_path, self.total_vectors)
         self.algorithm = config_manager.get_algorithm()
-        self.vector_ops = VectorOps(algorithm=self.algorithm)  # Initialize first
+        self.vector_ops = VectorOps(algorithm=self.algorithm, 
+                                    region_filter=config_manager.get_region_filter())
 
         # Apply user-defined weights AFTER initialization
         weights = config_manager.get_weights()
@@ -152,8 +163,6 @@ class SearchOrchestrator:
             max_batch_size=max_batch_size,
             vector_ops=self.vector_ops
         )
-        
-        self.total_vectors = self.vector_reader.get_total_vectors()
 
         # Validate implementations (only when not forced)
         if not self.force_cpu and not self.force_gpu:
@@ -299,6 +308,13 @@ class SearchOrchestrator:
         else:
             return VectorReader(vectors_path, masks_path)  
     
+    def _init_region_reader(self, region_path: str, total_vectors: int):
+        """Initialize region reader with preloading"""
+        if self.use_gpu and torch.cuda.is_available():
+            return RegionReaderGPU(region_path, total_vectors, device=self.device)
+        else:
+            return RegionReader(region_path, total_vectors)
+
     def _vector_source(self, start_idx: int, num_vectors: int) -> np.ndarray:
         """Wrapper for vector reader."""
         return self.vector_reader.read_chunk(start_idx, num_vectors)
@@ -307,18 +323,23 @@ class SearchOrchestrator:
         """Wrapper for mask reader."""
         return self.vector_reader.read_masks(start_idx, num_vectors)
     
+    def _region_source(self, start_idx: int, num_vectors: int) -> np.ndarray:
+        """Wrapper for region reader."""
+        return self.region_reader.read_chunk(start_idx, num_vectors)
+    
     def search(
         self,
         query_vector: Union[List[float], np.ndarray],
+        query_track_id: str,
         search_mode: str = "sequential",
         top_k: int = 10,
         with_metadata: bool = True,
         show_progress: bool = True,
-        deduplicate: Optional[bool] = None,  # None means use config setting
+        deduplicate: Optional[bool] = None,
         **kwargs
     ) -> List[Tuple[str, float, Optional[Dict]]]:
         """
-        Find similar tracks to a query vector.
+        Find similar tracks to a query vector with region filtering.
         """
         # Convert query to numpy array
         if isinstance(query_vector, list):
@@ -326,12 +347,34 @@ class SearchOrchestrator:
         else:
             query_np = query_vector
         
+        # Get query region
+        query_idx = self.index_manager.get_index_from_track_id(query_track_id)
+        if query_idx is None:
+            query_region = 0  # Default to Anglo region
+            print(f"  ⚠️  Track ID {query_track_id} not found in index. Using default Anglo region.")
+        else:
+            region_data = self.region_reader.read_chunk(query_idx, 1)
+            if len(region_data) > 0:
+                query_region = region_data[0]
+                print(f"  ✅ Query region: {query_region} (Anglo=0)")
+            else:
+                query_region = 0
+                print(f"  ⚠️  Region data not found for track {query_track_id}. Using default Anglo region.")
+        
+        # Set query region in vector operations
+        self.vector_ops.set_query_region(query_region)
+        
+        # For GPU operations, set region directly on GPU ops
+        if self.use_gpu and hasattr(self.chunked_search, 'gpu_ops'):
+            self.chunked_search.gpu_ops.set_query_region(query_region)
+        
         # Execute chosen search algorithm
         if search_mode == "sequential":
             indices, similarities = self.chunked_search.sequential_scan(
                 query_np,
                 self._vector_source,
                 self._mask_source,
+                self._region_source,
                 self.total_vectors,
                 top_k=top_k * 3,  # Get extra candidates for deduplication
                 show_progress=show_progress,
@@ -342,7 +385,9 @@ class SearchOrchestrator:
                 query_np,
                 self._vector_source,
                 self._mask_source,
+                self._region_source,
                 self.total_vectors,
+                self.vector_ops,
                 num_chunks=100,
                 top_k=top_k * 3,  # Get extra candidates
                 show_progress=show_progress,
@@ -353,7 +398,9 @@ class SearchOrchestrator:
                 query_np,
                 self._vector_source,
                 self._mask_source,
+                self._region_source,
                 self.total_vectors,
+                self.vector_ops,
                 min_chunks=1,
                 max_chunks=100,
                 quality_threshold=0.95,
@@ -517,24 +564,26 @@ class SearchOrchestrator:
         test_vector = np.random.rand(32).astype(np.float32)
         test_vectors = np.random.rand(1000, 32).astype(np.float32)
         test_masks = np.random.randint(0, 2**32, size=1000, dtype=np.uint32)
+        test_regions = np.random.randint(0, 8, size=1000, dtype=np.uint8)
         
         # CPU results
         cpu_ops = VectorOps(algorithm=self.algorithm)
-        cpu_results = cpu_ops.compute_similarity(test_vector, test_vectors, test_masks)
+        cpu_results = cpu_ops.compute_similarity(test_vector, test_vectors, test_masks, test_regions)
         
         # GPU results
         if torch.cuda.is_available():
             gpu_ops = VectorOpsGPU()
             gpu_tensor = torch.tensor(test_vectors, device='cuda')
             gpu_masks = torch.tensor(test_masks, device='cuda')
+            gpu_regions = torch.tensor(test_regions, device='cuda')
             
             # Call the correct GPU method based on current algorithm
             if self.algorithm == 'cosine':
-                gpu_results = gpu_ops.masked_weighted_cosine_similarity(test_vector, gpu_tensor, gpu_masks)
+                gpu_results = gpu_ops.masked_weighted_cosine_similarity(test_vector, gpu_tensor, gpu_masks, gpu_regions)
             elif self.algorithm == 'cosine-euclidean':
-                gpu_results = gpu_ops.masked_weighted_cosine_euclidean_similarity(test_vector, gpu_tensor, gpu_masks)
+                gpu_results = gpu_ops.masked_weighted_cosine_euclidean_similarity(test_vector, gpu_tensor, gpu_masks, gpu_regions)
             elif self.algorithm == 'euclidean':
-                gpu_results = gpu_ops.masked_euclidean_similarity(test_vector, gpu_tensor, gpu_masks)
+                gpu_results = gpu_ops.masked_euclidean_similarity(test_vector, gpu_tensor, gpu_masks, gpu_regions)
             else:
                 raise ValueError(f"Unknown algorithm: {self.algorithm}")
             
@@ -578,6 +627,7 @@ class SearchOrchestrator:
         
         return self.search(
             vector,
+            query_track_id=track_id,
             search_mode=search_mode,
             top_k=top_k,
             with_metadata=with_metadata,
@@ -594,6 +644,7 @@ class SearchOrchestrator:
         # Warm-up run (suppress progress)
         self.search(
             query_vector,
+            query_track_id="0eGsygTp906u18L0Oimnem",  # Test track ID
             search_mode="sequential",
             top_k=10,
             with_metadata=False,
@@ -618,6 +669,7 @@ class SearchOrchestrator:
         # Run search with progress control
         results = self.search(
             query_vector,
+            query_track_id="0eGsygTp906u18L0Oimnem",  # Test track ID
             search_mode="sequential",
             top_k=10,
             with_metadata=False,

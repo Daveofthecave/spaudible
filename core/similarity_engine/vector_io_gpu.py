@@ -1,11 +1,10 @@
 # core/similarity_engine/vector_io_gpu.py
+import os
 import torch
 import numpy as np
 from pathlib import Path
 from typing import Optional, Tuple
-from core.utilities.gpu_utils import recommend_max_batch_size
-from config import VRAM_SAFETY_FACTOR, PathConfig
-import os
+from config import PathConfig
 
 class VectorReaderGPU:
     """GPU-optimized vector reader with VRAM-aware batch sizing and mask support."""
@@ -176,3 +175,89 @@ class VectorReaderGPU:
         
         query_valid = (query_vector != -1)
         return torch.where(vector_valid & query_valid)[0]
+
+class RegionReaderGPU:
+    """GPU region reader with robust bit unpacking and validation"""
+    
+    def __init__(self, region_path: str, total_vectors: int, device="cuda"):
+        self.device = device
+        self.region_path = Path(region_path)
+        self.total_vectors = total_vectors
+        self.regions = None
+        
+        if not self.region_path.exists():
+            print(f"  ⚠️  Region file not found: {self.region_path}")
+            return
+        
+        try:
+            # Load entire file into GPU memory
+            with open(self.region_path, 'rb') as f:
+                data = f.read()
+                self.regions = torch.tensor(
+                    np.frombuffer(data, dtype=np.uint8),
+                    device=device
+                )
+            
+            # Validate region data size
+            expected_size = (self.total_vectors * 3 + 7) // 8
+            if len(self.regions) != expected_size:
+                print(f"  ⚠️  Region file size mismatch: expected {expected_size} bytes, got {len(self.regions)}")
+                print(f"  ⚠️  Region data may be incomplete. Using default regions.")
+                self.regions = None
+            else:
+                print(f"  ✅ Preloaded region data: {len(self.regions)/1e6:.1f}M regions")
+        except Exception as e:
+            print(f"  ❗ Error loading region data: {e}")
+            self.regions = None
+    
+    def read_chunk(self, start_idx: int, num_vectors: int) -> torch.Tensor:
+        """Read a chunk of region indices with guaranteed size and bounds checking"""
+        # Create default regions (Anglo)
+        result = torch.zeros(num_vectors, dtype=torch.uint8, device=self.device)
+        
+        if self.regions is None:
+            return result
+        
+        # Calculate byte range needed
+        start_byte = (start_idx * 3) // 8
+        end_byte = ((start_idx + num_vectors) * 3 + 7) // 8
+        byte_count = end_byte - start_byte
+        
+        # Validate bounds
+        if start_byte >= len(self.regions):
+            return result
+        
+        # Adjust for partial read at end of file
+        actual_byte_count = min(byte_count, len(self.regions) - start_byte)
+        if actual_byte_count <= 0:
+            return result
+        
+        # Get packed bytes
+        packed_chunk = self.regions[start_byte:start_byte+actual_byte_count]
+        
+        # Create bit offsets tensor
+        indices = torch.arange(num_vectors, device=self.device)
+        bit_offsets = (indices * 3) % 8
+        byte_offsets = (indices * 3) // 8 - start_byte
+        
+        # Create valid mask (within packed chunk bounds)
+        valid_mask = (byte_offsets >= 0) & (byte_offsets < actual_byte_count)
+        
+        # Extract valid regions
+        if torch.any(valid_mask):
+            valid_byte_offsets = byte_offsets[valid_mask].long()
+            valid_bit_offsets = bit_offsets[valid_mask]
+            
+            # Ensure byte offsets are within bounds
+            valid_byte_offsets = torch.clamp(valid_byte_offsets, 0, actual_byte_count - 1)
+            
+            words = packed_chunk[valid_byte_offsets]
+            
+            # Ensure shift amounts are positive
+            shift_amounts = 5 - valid_bit_offsets
+            shift_amounts = torch.clamp(shift_amounts, 0, 7)
+            
+            regions_valid = (words >> shift_amounts) & 0x07
+            result[valid_mask] = regions_valid.byte()
+        
+        return result

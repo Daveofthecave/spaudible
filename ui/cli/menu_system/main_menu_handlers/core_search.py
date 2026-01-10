@@ -10,7 +10,8 @@ from .utils import (
     check_preprocessed_files,
     get_metadata_db_path,
     format_track_display,
-    get_similarity_color
+    get_similarity_color,
+    save_playlist
 )
 from core.similarity_engine.orchestrator import SearchOrchestrator
 from core.vectorization.canonical_track_resolver import build_canonical_vector
@@ -120,6 +121,7 @@ def _search_by_track_id(track_id: str) -> str:
         search_start = time.time()
         results = orchestrator.search(
             query_vector=vector,
+            query_track_id=track_id,
             search_mode=search_mode,
             top_k=25,
             with_metadata=True

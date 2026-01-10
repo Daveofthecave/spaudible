@@ -45,7 +45,11 @@ class ChunkedSearch:
                     print("⚠️ Low VRAM available, disabling GPU acceleration")
                     self.use_gpu = False
                 else:
-                    self.gpu_ops = VectorOpsGPU(device=self.device)
+                    # Create GPU operations instance
+                    self.gpu_ops = VectorOpsGPU(
+                        device=self.device,
+                        region_filter=self.vector_ops.region_filter
+                    )
                     # print("✅ GPU acceleration enabled")
             except Exception as e:
                 print(f"⚠️ GPU initialization failed: {e}")
@@ -58,6 +62,7 @@ class ChunkedSearch:
         query_vector: np.ndarray,
         vector_source: Callable[[int, int], np.ndarray],
         mask_source: Callable[[int, int], np.ndarray],
+        region_source: Callable[[int, int], np.ndarray],
         total_vectors: int,
         top_k: int = 10,
         max_vectors: Optional[int] = None,
@@ -65,21 +70,7 @@ class ChunkedSearch:
         **kwargs
     ) -> Tuple[List[int], List[float]]:
         """
-        Perform a sequential scan of the vector cache.
-        
-        Args:
-            query_vector: Query vector (32D numpy array)
-            vector_source: Function that returns vectors given (start_idx, num_vectors)
-            mask_source: Function that returns masks given (start_idx, num_vectors)
-            total_vectors: Total number of vectors available
-            vector_ops: Vector operations instance
-            top_k: Number of top results to return
-            max_vectors: Maximum vectors to scan (None = all)
-            show_progress: Whether to display progress bars
-            **kwargs: Additional search parameters
-            
-        Returns:
-            Tuple of (indices, similarities)
+        Perform a sequential scan of the vector cache with region filtering.
         """
         # If GPU is available and initialized, use GPU path
         if self.use_gpu and self.gpu_ops:
@@ -87,6 +78,7 @@ class ChunkedSearch:
                 query_vector,
                 vector_source,
                 mask_source,
+                region_source,
                 total_vectors,
                 top_k=top_k,
                 max_vectors=max_vectors,
@@ -98,6 +90,7 @@ class ChunkedSearch:
                 query_vector,
                 vector_source,
                 mask_source,
+                region_source,
                 total_vectors,
                 top_k=top_k,
                 max_vectors=max_vectors,
@@ -110,6 +103,7 @@ class ChunkedSearch:
         query_vector: np.ndarray,
         vector_source: Callable[[int, int], np.ndarray],
         mask_source: Callable[[int, int], np.ndarray],
+        region_source: Callable[[int, int], np.ndarray],
         total_vectors: int,
         top_k: int = 10,
         max_vectors: Optional[int] = None,
@@ -142,6 +136,14 @@ class ChunkedSearch:
 
         processed_vectors = 0  # Track actual vectors processed
         
+        # Preload all regions if possible
+        if hasattr(region_source, 'regions') and region_source.regions is not None:
+            all_regions = region_source.regions
+            print("  ✅ Using preloaded region data")
+        else:
+            all_regions = None
+            print("  ⚠️ Region data not preloaded")
+        
         for chunk_idx in range(num_chunks):
             try:
                 # Process one batch
@@ -149,16 +151,33 @@ class ChunkedSearch:
                 chunk_end = min(chunk_start + self.chunk_size, vectors_to_scan)
                 actual_chunk_size = chunk_end - chunk_start
                 
+                # Skip empty chunks
+                if actual_chunk_size <= 0:
+                    continue
+                
                 # Read vectors and masks
                 transfer_start = time.time()
                 vectors = vector_source(chunk_start, actual_chunk_size)
                 masks = mask_source(chunk_start, actual_chunk_size)
+                
+                # Get regions from preloaded data if available
+                if all_regions is not None:
+                    regions = all_regions[chunk_start:chunk_start+actual_chunk_size]
+                else:
+                    regions = region_source(chunk_start, actual_chunk_size)
+                
                 transfer_time = time.time() - transfer_start
                 total_transfer_time += transfer_time
                 
                 # Convert to GPU tensors
-                vectors_gpu = vectors.clone().detach().to(device=self.device, dtype=torch.float32)
-                masks_gpu = masks.clone().detach().to(device=self.device, dtype=torch.int64)
+                vectors_gpu = torch.as_tensor(vectors, device=self.device)
+                masks_gpu = torch.as_tensor(masks, device=self.device)
+                
+                # Convert regions to GPU tensor
+                if not isinstance(regions, torch.Tensor):
+                    regions = torch.tensor(regions, device=self.device, dtype=torch.uint8)
+                else:
+                    regions = regions.to(device=self.device, dtype=torch.uint8)
 
                 # Determine which GPU function to use based on algorithm
                 if self.vector_ops.algorithm == 'cosine':
@@ -172,22 +191,44 @@ class ChunkedSearch:
 
                 # Compute similarities
                 compute_start = time.time()
-                similarities = gpu_similarity_func(query_vector, vectors_gpu, masks_gpu)
+                similarities = gpu_similarity_func(
+                    query_vector, 
+                    vectors_gpu, 
+                    masks_gpu,
+                    regions
+                )
                 compute_time = time.time() - compute_start
                 total_compute_time += compute_time
                 
-                # Update top-k
-                similarities_tensor = torch.tensor(similarities, device=self.device)
-                batch_top_values, batch_top_indices = torch.topk(similarities_tensor, min(top_k, actual_chunk_size))
+                # Create valid mask (exclude tracks with similarity <= -9999)
+                valid_mask = similarities > -9999.0
+                valid_count = torch.sum(valid_mask).item()
                 
-                # Combine with global top-k
-                combined_values = torch.cat([top_similarities, batch_top_values])
-                combined_indices = torch.cat([top_indices, batch_top_indices + chunk_start])
-                
-                # Get new global top-k
-                global_top_values, global_top_indices = torch.topk(combined_values, top_k)
-                top_similarities = global_top_values
-                top_indices = combined_indices[global_top_indices]
+                # Only process if we have valid results
+                if valid_count > 0:
+                    # Get top-k from valid results
+                    batch_top_k = min(top_k, valid_count)
+                    valid_similarities = similarities[valid_mask]
+                    
+                    # Create indices for valid results
+                    valid_indices = torch.arange(
+                        chunk_start, 
+                        chunk_start + actual_chunk_size, 
+                        device=self.device
+                    )[valid_mask]
+                    
+                    # Get top-k valid results
+                    batch_top_values, batch_top_indices_in_valid = torch.topk(valid_similarities, batch_top_k)
+                    batch_top_indices = valid_indices[batch_top_indices_in_valid]
+                    
+                    # Combine with global top-k
+                    combined_values = torch.cat([top_similarities, batch_top_values])
+                    combined_indices = torch.cat([top_indices, batch_top_indices])
+                    
+                    # Get new global top-k
+                    global_top_values, global_top_indices = torch.topk(combined_values, top_k)
+                    top_similarities = global_top_values
+                    top_indices = combined_indices[global_top_indices]
                 
                 # Update progress
                 processed_vectors += actual_chunk_size
@@ -209,9 +250,7 @@ class ChunkedSearch:
 
         if show_progress:
             self._complete_progress_bar(vectors_to_scan, vectors_to_scan, start_time)
-            # print(f"\n✅ Sequential scan complete (GPU)")
 
-        # Return CPU arrays
         return top_indices.cpu().numpy(), top_similarities.cpu().numpy()
 
     def _cpu_sequential_scan(
@@ -219,6 +258,7 @@ class ChunkedSearch:
         query_vector: np.ndarray,
         vector_source: Callable[[int, int], np.ndarray],
         mask_source: Callable[[int, int], np.ndarray],
+        region_source: Callable[[int, int], np.ndarray],
         total_vectors: int,
         top_k: int = 10,
         max_vectors: Optional[int] = None,
@@ -256,6 +296,14 @@ class ChunkedSearch:
         processed_count = 0      # Total vectors processed so far
         adjustment_counter = 0   # Count chunks since last adjustment
         
+        # Preload all regions if possible
+        if hasattr(region_source, 'regions') and region_source.regions is not None:
+            all_regions = region_source.regions
+            print("  ✅ Using preloaded region data")
+        else:
+            all_regions = None
+            print("  ⚠️ Region data not preloaded")
+        
         while processed_count < vectors_to_scan:
             # Adjust chunk size every 5 chunks based on recent performance
             if len(speed_history) >= 3 and adjustment_counter >= 5:
@@ -265,14 +313,14 @@ class ChunkedSearch:
                 if avg_speed < 1_000_000 and current_chunk_size > min_chunk_size:
                     new_size = max(min_chunk_size, int(current_chunk_size * 0.8))
                     if new_size != current_chunk_size:
-                        # print(f"\n  ⚙️  Reducing chunk size from {current_chunk_size:,} to {new_size:,} (avg speed: {avg_speed/1e6:.2f}M vec/sec)")
+                        print(f"\n  ⚙️  Reducing chunk size from {current_chunk_size:,} to {new_size:,} (avg speed: {avg_speed/1e6:.2f}M vec/sec)")
                         current_chunk_size = new_size
                 
                 # Increase chunk size if performance is fast
                 elif avg_speed > 5_000_000 and current_chunk_size < max_chunk_size:
                     new_size = min(max_chunk_size, int(current_chunk_size * 1.2))
                     if new_size != current_chunk_size:
-                        # print(f"\n  ⚙️  Increasing chunk size from {current_chunk_size:,} to {new_size:,} (avg speed: {avg_speed/1e6:.2f}M vec/sec)")
+                        print(f"\n  ⚙️  Increasing chunk size from {current_chunk_size:,} to {new_size:,} (avg speed: {avg_speed/1e6:.2f}M vec/sec)")
                         current_chunk_size = new_size
                 
                 adjustment_counter = 0
@@ -285,9 +333,20 @@ class ChunkedSearch:
             vectors = vector_source(chunk_start, actual_chunk_size)
             masks = mask_source(chunk_start, actual_chunk_size)
             
+            # Get regions from preloaded data if available
+            if all_regions is not None:
+                regions = all_regions[chunk_start:chunk_start+actual_chunk_size]
+            else:
+                regions = region_source(chunk_start, actual_chunk_size)
+            
             # Compute similarities
             chunk_start_time = time.time()
-            similarities = self.vector_ops.compute_similarity(query_vector, vectors, masks)
+            similarities = self.vector_ops.compute_similarity(
+                query_vector, 
+                vectors, 
+                masks,
+                regions
+            )
             chunk_time = time.time() - chunk_start_time
             
             # Update GLOBAL top-k
@@ -326,32 +385,24 @@ class ChunkedSearch:
         
         if show_progress:
             self._complete_progress_bar(vectors_to_scan, vectors_to_scan, start_time)
-            # print(f"\n✅ Sequential scan complete")
+            print(f"\n✅ Sequential scan complete")
 
         return top_indices.tolist(), top_similarities.tolist()
 
-    def random_chunk_search(self,
-                           query_vector: np.ndarray,
-                           vector_source: Callable[[int, int], np.ndarray],
-                           mask_source: Callable[[int, int], np.ndarray],
-                           total_vectors: int,
-                           vector_ops: VectorOps,
-                           num_chunks: int = 100,
-                           top_k: int = 10) -> Tuple[List[int], List[float]]:
+    def random_chunk_search(
+        self,
+        query_vector: np.ndarray,
+        vector_source: Callable[[int, int], np.ndarray],
+        mask_source: Callable[[int, int], np.ndarray],
+        region_source: Callable[[int, int], np.ndarray],
+        total_vectors: int,
+        vector_ops: VectorOps,
+        num_chunks: int = 100,
+        top_k: int = 10,
+        **kwargs
+    ) -> Tuple[List[int], List[float]]:
         """
-        Scan the vector cache by sampling random chunks.
-        
-        Args:
-            query_vector: Query vector (32D numpy array)
-            vector_source: Function that returns vectors given (start_idx, num_vectors)
-            mask_source: Function that returns masks given (start_idx, num_vectors)
-            total_vectors: Total number of vectors available
-            vector_ops: Vector operations instance
-            num_chunks: Number of random chunks to sample
-            top_k: Number of top results to return
-            
-        Returns:
-            Tuple of (indices, similarities)
+        Scan the vector cache by sampling random chunks with region support.
         """
         # If no GPU is available, execute the CPU-based version of this search
         if not self.use_gpu:
@@ -359,6 +410,7 @@ class ChunkedSearch:
                 query_vector,
                 vector_source,
                 mask_source,
+                region_source,
                 total_vectors,
                 vector_ops,
                 num_chunks,
@@ -397,6 +449,7 @@ class ChunkedSearch:
             transfer_start = time.time()
             vectors = vector_source(chunk_start, actual_chunk_size)
             masks = mask_source(chunk_start, actual_chunk_size)
+            regions = region_source(chunk_start, actual_chunk_size)
             transfer_time = time.time() - transfer_start
             total_transfer_time += transfer_time
             
@@ -407,13 +460,24 @@ class ChunkedSearch:
             compute_start = time.time()
             # GPU acceleration for large batches
             if self.gpu_ops and actual_chunk_size > 50000 and is_gpu_tensor:
-                similarities = self.gpu_ops.masked_weighted_cosine_similarity(query_vector, vectors, masks)
+                similarities = self.gpu_ops.masked_weighted_cosine_euclidean_similarity(
+                    query_vector, 
+                    vectors, 
+                    masks,
+                    regions
+                )
             else:
                 # Convert GPU tensor to NumPy if needed
                 if is_gpu_tensor:
                     vectors = vectors.cpu().numpy()
                     masks = masks.cpu().numpy()
-                similarities = vector_ops.compute_similarity(query_vector, vectors, masks)
+                    regions = regions.cpu().numpy()
+                similarities = vector_ops.compute_similarity(
+                    query_vector, 
+                    vectors, 
+                    masks,
+                    regions
+                )
             compute_time = time.time() - compute_start
             total_compute_time += compute_time
             
@@ -471,10 +535,12 @@ class ChunkedSearch:
                                 query_vector: np.ndarray,
                                 vector_source: Callable[[int, int], np.ndarray],
                                 mask_source: Callable[[int, int], np.ndarray],
+                                region_source: Callable[[int, int], np.ndarray],
                                 total_vectors: int,
                                 vector_ops: VectorOps,
                                 num_chunks: int = 100,
-                                top_k: int = 10) -> Tuple[List[int], List[float]]:
+                                top_k: int = 10,
+                                query_region: Optional[int] = None) -> Tuple[List[int], List[float]]:
         """
         Pure CPU implementation of random chunk search.
         """
@@ -501,12 +567,18 @@ class ChunkedSearch:
             chunk_end = min(chunk_start + self.chunk_size, total_vectors)
             actual_chunk_size = chunk_end - chunk_start
             
-            # Read vectors and masks for this chunk
+            # Read vectors, masks, and regions for this chunk
             vectors = vector_source(chunk_start, actual_chunk_size)
             masks = mask_source(chunk_start, actual_chunk_size)
+            regions = region_source(chunk_start, actual_chunk_size)
             
             # Compute similarities
-            similarities = vector_ops.compute_similarity(query_vector, vectors, masks)
+            similarities = vector_ops.compute_similarity(
+                query_vector, 
+                vectors, 
+                masks,
+                regions
+            )
             
             # Update top-k for this chunk
             if actual_chunk_size > 0:
@@ -542,33 +614,22 @@ class ChunkedSearch:
 
         return top_indices.tolist(), top_similarities.tolist()
     
-    def progressive_search(self,
-                          query_vector: np.ndarray,
-                          vector_source: Callable[[int, int], np.ndarray],
-                          mask_source: Callable[[int, int], np.ndarray],
-                          total_vectors: int,
-                          vector_ops: VectorOps,
-                          min_chunks: int = 1,
-                          max_chunks: int = 100,
-                          quality_threshold: float = 0.95,
-                          top_k: int = 10) -> Tuple[List[int], List[float]]:
+    def progressive_search(
+        self,
+        query_vector: np.ndarray,
+        vector_source: Callable[[int, int], np.ndarray],
+        mask_source: Callable[[int, int], np.ndarray],
+        region_source: Callable[[int, int], np.ndarray],
+        total_vectors: int,
+        vector_ops: VectorOps,
+        min_chunks: int = 1,
+        max_chunks: int = 100,
+        quality_threshold: float = 0.95,
+        top_k: int = 10,
+        **kwargs
+    ) -> Tuple[List[int], List[float]]:
         """
-        Perform a progressive search on the vector cache 
-        until the desired quality threshold is reached.
-        
-        Args:
-            query_vector: Query vector (32D numpy array)
-            vector_source: Function that returns vectors given (start_idx, num_vectors)
-            mask_source: Function that returns masks given (start_idx, num_vectors)
-            total_vectors: Total number of vectors available
-            vector_ops: Vector operations instance
-            min_chunks: Minimum chunks to sample
-            max_chunks: Maximum chunks to sample
-            quality_threshold: Stop when top similarity > threshold
-            top_k: Number of top results to return
-            
-        Returns:
-            Tuple of (indices, similarities)
+        Perform a progressive search with region filtering.
         """
         print(f"   Progressive search (target quality: {quality_threshold})")
         
@@ -588,6 +649,7 @@ class ChunkedSearch:
                 query_vector,
                 vector_source,
                 mask_source,
+                region_source,
                 total_vectors,
                 vector_ops,
                 num_chunks=current_chunks,

@@ -1,4 +1,7 @@
 # core/similarity_engine/vector_io.py
+"""
+Vector Input/Output Operations (CPU)
+"""
 import numpy as np
 import os
 from pathlib import Path
@@ -80,3 +83,74 @@ class VectorReader:
 
     def get_total_vectors(self) -> int:
         return self.total_vectors
+
+class RegionReader:
+    """CPU-based region reader with full preloading and validation"""
+    
+    def __init__(self, region_path: str, total_vectors: int):
+        self.region_path = Path(region_path)
+        self.total_vectors = total_vectors
+        self.regions = None
+        
+        if not self.region_path.exists():
+            print(f"  ⚠️  Region file not found: {self.region_path}")
+            return
+        
+        try:
+            # Load entire file into memory
+            with open(self.region_path, 'rb') as f:
+                data = f.read()
+                self.regions = np.frombuffer(data, dtype=np.uint8)
+            
+            # Validate region data size
+            expected_size = (self.total_vectors * 3 + 7) // 8  # 3 bits per vector
+            if len(self.regions) != expected_size:
+                print(f"  ⚠️  Region file size mismatch: expected {expected_size} bytes, got {len(self.regions)}")
+                print(f"  ⚠️  Region data may be incomplete. Using default regions.")
+                self.regions = None
+            else:
+                print(f"  ✅ Preloaded region data: {len(self.regions)/1e6:.1f}M regions")
+        except Exception as e:
+            print(f"  ❗ Error loading region data: {e}")
+            self.regions = None
+    
+    def read_chunk(self, start_idx: int, num_vectors: int) -> np.ndarray:
+        """Read a chunk of region indices with guaranteed size"""
+        # Create default regions (Anglo)
+        result = np.zeros(num_vectors, dtype=np.uint8)
+        
+        if self.regions is None:
+            return result
+        
+        # Calculate byte range needed
+        start_byte = (start_idx * 3) // 8
+        end_byte = ((start_idx + num_vectors) * 3 + 7) // 8
+        byte_count = end_byte - start_byte
+        
+        # Validate bounds
+        if start_byte >= len(self.regions):
+            return result
+        
+        # Read packed bytes
+        packed_bytes = self.regions[start_byte:start_byte+byte_count]
+        
+        # Unpack regions
+        for i in range(num_vectors):
+            byte_offset = (start_idx + i) * 3 // 8 - start_byte
+            bit_offset = (start_idx + i) * 3 % 8
+            
+            if byte_offset < len(packed_bytes):
+                byte_val = packed_bytes[byte_offset]
+                region = (byte_val >> (5 - bit_offset)) & 0x07
+                result[i] = region
+            else:
+                result[i] = 0  # Default to Anglo
+        
+        return result
+    
+    def __del__(self):
+        """Clean up resources"""
+        if hasattr(self, 'mmap'):
+            self.mmap.close()
+        if hasattr(self, 'file'):
+            self.file.close()

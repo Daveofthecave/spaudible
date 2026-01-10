@@ -1,9 +1,10 @@
 # config.py
 VERSION = "0.1.5"
 AUTO_OPTIMIZE_CHUNK_SIZE = True
-VRAM_SAFETY_FACTOR = 0.85 # What percentage of available VRAM to use
+VRAM_SAFETY_FACTOR = 0.85  # What percentage of available VRAM to use
 VRAM_SCALING_FACTOR_MB = 2**8
 FORCE_CPU_MODE = False
+REGION_FILTER_STRENGTH = 1.0  # Default = 1: strict filtering (0 = no filtering)
 
 import os
 from pathlib import Path
@@ -43,6 +44,10 @@ class PathConfig:
         return cls.GENRE_MAPPING
 
     @classmethod
+    def get_region_file(cls):
+        return cls.VECTORS / "track_regions.bin"
+
+    @classmethod
     def all_required_files(cls):
         """Return all required files for setup completion"""
         return [
@@ -51,7 +56,8 @@ class PathConfig:
             cls.get_vector_file(),
             cls.get_index_file(),
             cls.get_mask_file(),
-            cls.get_metadata_file()
+            cls.get_metadata_file(),
+            cls.get_region_file()
         ]
 
     def get_gpu_config():

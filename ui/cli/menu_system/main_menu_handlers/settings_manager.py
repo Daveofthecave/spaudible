@@ -38,6 +38,7 @@ def handle_settings() -> str:
     force_gpu = config_manager.get_force_gpu()
     algorithm_name = config_manager.get_algorithm_name()
     deduplicate = config_manager.get_deduplicate()
+    region_filter = config_manager.get_region_filter()
     
     # Ensure mutual exclusivity
     if force_cpu and force_gpu:
@@ -55,6 +56,7 @@ def handle_settings() -> str:
         f"🐆 Force GPU Mode: {gpu_status}",
         f"🧮 Select Similarity Algorithm: {algorithm_name}", 
         f"🧦 Deduplicate Results: {deduplicate_status}",
+        f"🌎️ Region Filter Strength: {region_filter:.2f}",
         "⚖️  Adjust Feature Weights",
         "❔ Check System Status",
         "📊 Performance Test",
@@ -75,14 +77,16 @@ def handle_settings() -> str:
     elif choice == 4:
         return _toggle_deduplicate()
     elif choice == 5:
-        return _adjust_feature_weights()
+        return _adjust_region_filter()
     elif choice == 6:
-        return _handle_system_status()
+        return _adjust_feature_weights()
     elif choice == 7:
-        return _handle_performance_test()
+        return _handle_system_status()
     elif choice == 8:
-        return _handle_rerun_setup()
+        return _handle_performance_test()
     elif choice == 9:
+        return _handle_rerun_setup()
+    elif choice == 10:
         return _handle_about()
     else:
         return "main_menu"
@@ -160,6 +164,25 @@ def _toggle_deduplicate() -> str:
     
     input("\n  Press Enter to continue...")
     return "settings"    
+
+def _adjust_region_filter() -> str:
+    """Adjust region filter strength"""
+    current = config_manager.get_region_filter()
+    print(f"\n  Current region filter strength: {current:.1f}")
+    print("  0 = No filtering, 1 = Strict region matching")
+    
+    try:
+        new_value = float(input("  Enter new value (0.0-1.0): "))
+        if 0 <= new_value <= 1:
+            config_manager.set_region_filter(new_value)
+            print(f"  ✅ Region filter set to {new_value:.1f}")
+        else:
+            print("  ❌ Value must be between 0 and 1")
+    except ValueError:
+        print("  ❌ Invalid number format")
+    
+    input("\n  Press Enter to continue...")
+    return "settings"
 
 def _adjust_feature_weights() -> str:
     """Adjust feature weights for similarity calculations."""
@@ -271,6 +294,12 @@ def _handle_system_status() -> str:
     print(f"   • Vector Masks: {mask_file.name}")
     print(f"       Size: {mask_size}")
     
+    # Region file
+    region_file = PathConfig.get_region_file()
+    region_size = format_file_size(region_file.stat().st_size) if region_file.exists() else "Not found"
+    print(f"   • Region File: {region_file.name}")
+    print(f"       Size: {region_size}")
+    
     metadata_file = PathConfig.get_metadata_file()
     metadata_size = format_file_size(metadata_file.stat().st_size) if metadata_file.exists() else "Not found"
     print(f"   • Vector Metadata: {metadata_file.name}")
@@ -285,7 +314,7 @@ def _handle_system_status() -> str:
     # Total disk usage
     total_size = 0
     files_to_check = [
-        main_db, audio_db, vector_file, index_file, mask_file, metadata_file, genre_file
+        main_db, audio_db, vector_file, index_file, mask_file, region_file, metadata_file, genre_file
     ]
     for file in files_to_check:
         if file.exists():
@@ -357,6 +386,7 @@ def _handle_performance_test() -> str:
         start_time = time.time()
         cpu_orchestrator.search(
             test_vector,
+            query_track_id=test_track_id,
             max_vectors=1_000_000,
             show_progress=False
         )
@@ -406,6 +436,7 @@ def _handle_performance_test() -> str:
             start_time = time.time()
             gpu_orchestrator.search(
                 test_vector,
+                query_track_id=test_track_id,
                 max_vectors=batch_size,
                 show_progress=False
             )
@@ -457,6 +488,7 @@ def _handle_performance_test() -> str:
     start_time = time.time()
     results = track_orchestrator.search(
         track_vector,
+        query_track_id=test_track_id,
         top_k=10,
         with_metadata=False
     )
@@ -481,6 +513,8 @@ def _handle_rerun_setup() -> str:
         vector_files = [
             PathConfig.get_vector_file(),
             PathConfig.get_index_file(),
+            PathConfig.get_mask_file(),
+            PathConfig.get_region_file(),
             PathConfig.VECTORS / "metadata.json"
         ]
         for file_path in vector_files:
