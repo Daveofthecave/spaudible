@@ -176,3 +176,152 @@ class VectorReaderGPU:
         
         query_valid = (query_vector != -1)
         return torch.where(vector_valid & query_valid)[0]
+
+class RegionReaderGPU:
+    """GPU-optimized region data reader with packed bit storage"""
+    
+    BITS_PER_REGION = 3
+    BYTES_PER_REGION = BITS_PER_REGION / 8  # 0.375 bytes
+    REGION_COUNT = 8  # 0-7 regions
+    
+    def __init__(self, region_path: Optional[Path] = None):
+        """
+        Initialize region reader.
+        
+        Args:
+            region_path: Path to track_regions.bin file
+        """
+        self.region_path = region_path or PathConfig.VECTORS / "track_regions.bin"
+        self.packed_data = None
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.total_regions = 0
+        self.is_loaded = False
+        
+    def load(self) -> bool:
+        """Load packed region data into GPU memory."""
+        if not self.region_path.exists():
+            print(f"Region file not found: {self.region_path}")
+            return False
+        
+        try:
+            # Get file size to calculate total regions
+            file_size = self.region_path.stat().st_size
+            self.total_regions = int(file_size / self.BYTES_PER_REGION)
+            
+            # Read entire file into memory
+            with open(self.region_path, 'rb') as f:
+                data = np.frombuffer(f.read(), dtype=np.uint8)
+            
+            # Transfer to GPU tensor
+            self.packed_data = torch.tensor(data, dtype=torch.uint8, device=self.device)
+            self.is_loaded = True
+            return True
+        except Exception as e:
+            print(f"Error loading region data: {e}")
+            return False
+    
+    def get_region_batch(self, indices: torch.Tensor) -> torch.Tensor:
+        """
+        Get regions for a batch of indices.
+        
+        Args:
+            indices: Tensor of vector indices (0-based)
+            
+        Returns:
+            Tensor of region codes (0-7) with same shape as indices
+        """
+        if not self.is_loaded:
+            raise RuntimeError("Region data not loaded. Call load() first.")
+        
+        # Convert indices to long if needed
+        indices = indices.to(dtype=torch.long, device=self.device)
+        
+        # Calculate byte positions
+        byte_offsets = (indices * self.BITS_PER_REGION) // 8
+        bit_offsets = (indices * self.BITS_PER_REGION) % 8
+        
+        # Convert to long
+        byte_offsets = byte_offsets.long()
+        bit_offsets = bit_offsets.long()
+        
+        # Get packed bytes containing the regions
+        packed_bytes = self.packed_data[byte_offsets]
+        
+        # Create mask for different extraction cases
+        mask_low = bit_offsets <= 5  # Bits within single byte
+        mask_high = ~mask_low        # Bits span two bytes
+        
+        # Initialize output tensor
+        regions = torch.zeros_like(indices, dtype=torch.long, device=self.device)  # CHANGED TO LONG
+        
+        # Case 1: All bits within a single byte
+        if torch.any(mask_low):
+            # Calculate shift amount (5 - bit_offset)
+            shifts = 5 - bit_offsets[mask_low]
+            
+            # Extract 3-bit region value
+            regions[mask_low] = (packed_bytes[mask_low].long() >> shifts) & 0x07
+        
+        # Case 2: Bits span two bytes
+        if torch.any(mask_high):
+            # Get next byte for cross-byte regions
+            next_bytes = self.packed_data[byte_offsets[mask_high] + 1]
+            
+            # Calculate bits from first byte
+            first_part = packed_bytes[mask_high].long() << (bit_offsets[mask_high] - 5)
+            
+            # Calculate bits from second byte
+            second_part = next_bytes.long() >> (13 - bit_offsets[mask_high])
+            
+            # Combine and mask to 3 bits
+            regions[mask_high] = (first_part | second_part) & 0x07
+        
+        return regions.to(torch.uint8)  # Convert to uint8 at the end
+
+    def get_region(self, index: int) -> int:
+        """
+        Get region for a single index.
+        
+        Args:
+            index: Vector index (0-based)
+            
+        Returns:
+            Region code (0-7)
+        """
+        if not self.is_loaded:
+            self.load()
+        
+        # Create tensor for single index
+        index_tensor = torch.tensor([index], dtype=torch.long, device=self.device)
+        return self.get_region_batch(index_tensor).item()
+    
+    def get_total_regions(self) -> int:
+        """Get total number of regions (should match vector count)."""
+        return self.total_regions
+    
+    def is_available(self) -> bool:
+        """Check if region data is available."""
+        return self.is_loaded
+    
+    def get_region_distribution(self, sample_size: int = 1000000) -> dict:
+        """Get distribution of regions in the dataset."""
+        if not self.is_loaded:
+            self.load()
+        
+        # Create random sample indices
+        indices = torch.randint(0, self.total_regions, (sample_size,), device=self.device)
+        
+        # Get regions for sample
+        regions = self.get_region_batch(indices)
+        
+        # Count distribution
+        counts = torch.bincount(regions, minlength=self.REGION_COUNT)
+        return {
+            region: count.item() / sample_size
+            for region, count in enumerate(counts)
+        }
+    
+    def __del__(self):
+        """Clean up resources."""
+        if self.packed_data is not None:
+            del self.packed_data

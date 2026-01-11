@@ -11,7 +11,7 @@ from .index_manager import IndexManager
 from .metadata_service import MetadataManager
 from .vector_comparer import ChunkedSearch
 from .vector_io import VectorReader
-from .vector_io_gpu import VectorReaderGPU
+from .vector_io_gpu import VectorReaderGPU, RegionReaderGPU
 from .vector_math import VectorOps
 from .vector_math_gpu import VectorOpsGPU
 from core.utilities.gpu_utils import get_gpu_info, recommend_max_batch_size
@@ -25,19 +25,19 @@ class SearchOrchestrator:
     _benchmark_results = None
     
     def __init__(self, 
-                vectors_path: Optional[str] = None, 
-                index_path: Optional[str] = None,
-                masks_path: Optional[str] = None,
-                metadata_db: Optional[str] = None,
-                chunk_size: int = 100_000_000,
-                use_gpu: bool = True,
-                vram_scaling_factor_mb: int = VRAM_SCALING_FACTOR_MB,
-                skip_cpu_benchmark: bool = False,
-                skip_gpu_benchmark: bool = False,
-                skip_benchmark: bool = False,
-                force_cpu: bool = False,
-                force_gpu: bool = False,
-                **kwargs):
+                 vectors_path: Optional[str] = None, 
+                 index_path: Optional[str] = None,
+                 masks_path: Optional[str] = None,
+                 metadata_db: Optional[str] = None,
+                 chunk_size: int = 100_000_000,
+                 use_gpu: bool = True,
+                 vram_scaling_factor_mb: int = VRAM_SCALING_FACTOR_MB,
+                 skip_cpu_benchmark: bool = False,
+                 skip_gpu_benchmark: bool = False,
+                 skip_benchmark: bool = False,
+                 force_cpu: bool = False,
+                 force_gpu: bool = False,
+                 **kwargs):
         """
         Initialize the search orchestrator.
         
@@ -81,6 +81,15 @@ class SearchOrchestrator:
 
         self.index_manager = IndexManager(index_path)
         self.metadata_manager = MetadataManager(metadata_db)
+        
+        # Region filtering components
+        self.region_reader = RegionReaderGPU()
+        try:
+            self.region_reader.load()
+            print(f"  ✅ Region data loaded ({self.region_reader.get_total_regions():,} tracks)")
+        except Exception as e:
+            print(f"  ⚠️  Could not load region data: {e}")
+            self.region_reader = None
         
         # Get max batch size from vector reader
         max_batch_size = None
@@ -314,7 +323,9 @@ class SearchOrchestrator:
         top_k: int = 10,
         with_metadata: bool = True,
         show_progress: bool = True,
-        deduplicate: Optional[bool] = None,  # None means use config setting
+        deduplicate: Optional[bool] = None,
+        query_track_id: Optional[str] = None,
+        region_strength: float = 1.0,
         **kwargs
     ) -> List[Tuple[str, float, Optional[Dict]]]:
         """
@@ -326,6 +337,12 @@ class SearchOrchestrator:
         else:
             query_np = query_vector
         
+        # NEW: Get query region if track ID provided
+        query_region = -1
+        if query_track_id:
+            query_region = self._get_query_region(query_track_id)
+            print(f"  🔍 Query region resolved: {query_region}")
+        
         # Execute chosen search algorithm
         if search_mode == "sequential":
             indices, similarities = self.chunked_search.sequential_scan(
@@ -335,6 +352,9 @@ class SearchOrchestrator:
                 self.total_vectors,
                 top_k=top_k * 3,  # Get extra candidates for deduplication
                 show_progress=show_progress,
+                region_reader=self.region_reader,
+                query_region=query_region,
+                region_strength=region_strength,
                 **kwargs
             )
         elif search_mode == "random":
@@ -346,6 +366,8 @@ class SearchOrchestrator:
                 num_chunks=100,
                 top_k=top_k * 3,  # Get extra candidates
                 show_progress=show_progress,
+                region_reader=self.region_reader,
+                query_region=query_region,
                 **kwargs
             )
         elif search_mode == "progressive":
@@ -359,6 +381,8 @@ class SearchOrchestrator:
                 quality_threshold=0.95,
                 top_k=top_k * 3,  # Get extra candidates
                 show_progress=show_progress,
+                region_reader=self.region_reader,
+                query_region=query_region,
                 **kwargs
             )
         else:
@@ -546,7 +570,52 @@ class SearchOrchestrator:
                 )
         
         return True
-    
+
+    def _get_query_region(self, track_id: str) -> int:
+        """
+        Resolve query track to region by looking up its vector index
+        and extracting its region from track_regions.bin
+        """
+        try:
+            # Get vector index for this track ID
+            vector_index = self.index_manager.get_index_from_track_id(track_id)
+            if vector_index is None:
+                print(f"  ⚠️  Track ID not found in index: {track_id}")
+                return -1
+            
+            # Read region directly from region reader
+            if not (self.region_reader and self.region_reader.is_available()):
+                print("  ⚠️  Region reader not available")
+                return -1
+                
+            # Create tensor with single index
+            index_tensor = torch.tensor([vector_index], 
+                                        dtype=torch.long,
+                                        device=self.region_reader.device)
+            
+            # Debug: Print tensor properties
+            print(f"  Region lookup - index_tensor: dtype={index_tensor.dtype}, device={index_tensor.device}")
+            
+            # Get region
+            region_tensor = self.region_reader.get_region_batch(index_tensor)
+            
+            # Debug: Print region tensor properties
+            print(f"  Region tensor: dtype={region_tensor.dtype}, device={region_tensor.device}, value={region_tensor.item()}")
+            
+            region_value = region_tensor.item()
+            
+            # Validate region value
+            if region_value < 0 or region_value > 7:
+                print(f"  ⚠️  Invalid region value: {region_value} for track {track_id}")
+                return -1
+                
+            return region_value
+        except Exception as e:
+            print(f"  ⚠️  Error resolving region for {track_id}: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return -1
+
     def find_similar_to_track(
         self,
         track_id: str,

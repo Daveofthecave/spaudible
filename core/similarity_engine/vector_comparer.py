@@ -11,6 +11,7 @@ from typing import List, Tuple, Optional, Callable
 from .vector_math import VectorOps
 from .vector_math_gpu import VectorOpsGPU
 from ui.cli.console_utils import format_elapsed_time
+from .vector_io_gpu import RegionReaderGPU
 
 class ChunkedSearch:
     """Search algorithms for finding similar vectors."""
@@ -114,6 +115,9 @@ class ChunkedSearch:
         top_k: int = 10,
         max_vectors: Optional[int] = None,
         show_progress: bool = True,
+        region_reader: Optional[RegionReaderGPU] = None,
+        query_region: int = 0,
+        region_strength: float = 1.0,
         **kwargs
     ) -> Tuple[List[int], List[float]]:
         # Convert query to PyTorch tensor
@@ -122,6 +126,12 @@ class ChunkedSearch:
         # Initialize GLOBAL results
         top_similarities = torch.full((top_k,), -1.0, dtype=torch.float32, device=self.device)
         top_indices = torch.full((top_k,), -1, dtype=torch.long, device=self.device)
+        
+        # Initialize region filtering
+        use_region_filter = False
+        if region_reader and region_reader.is_available() and query_region >= 0:
+            use_region_filter = True
+            print(f"  🔍 Region filtering enabled (query region: {query_region})")
         
         vectors_to_scan = total_vectors if max_vectors is None else min(max_vectors, total_vectors)
         num_chunks = (vectors_to_scan + self.chunk_size - 1) // self.chunk_size
@@ -160,19 +170,41 @@ class ChunkedSearch:
                 vectors_gpu = vectors.clone().detach().to(device=self.device, dtype=torch.float32)
                 masks_gpu = masks.clone().detach().to(device=self.device, dtype=torch.int64)
 
-                # Determine which GPU function to use based on algorithm
-                if self.vector_ops.algorithm == 'cosine':
-                    gpu_similarity_func = self.gpu_ops.masked_weighted_cosine_similarity
-                elif self.vector_ops.algorithm == 'cosine-euclidean':
-                    gpu_similarity_func = self.gpu_ops.masked_weighted_cosine_euclidean_similarity
-                elif self.vector_ops.algorithm == 'euclidean':
-                    gpu_similarity_func = self.gpu_ops.masked_euclidean_similarity
-                else:
-                    raise ValueError(f"Unknown algorithm: {self.vector_ops.algorithm}")
+                # Get regions if filtering enabled
+                regions_gpu = None
+                if use_region_filter:
+                    batch_indices = torch.arange(
+                        chunk_start, 
+                        chunk_start + actual_chunk_size,
+                        dtype=torch.long,
+                        device=self.device
+                    )
+                    regions_gpu = region_reader.get_region_batch(batch_indices)
 
                 # Compute similarities
                 compute_start = time.time()
-                similarities = gpu_similarity_func(query_vector, vectors_gpu, masks_gpu)
+                if use_region_filter and regions_gpu is not None:
+                    # Use fused similarity with region filtering
+                    similarities = self.gpu_ops.fused_similarity_batch(
+                        query_vector,
+                        vectors_gpu,
+                        masks_gpu,
+                        regions_gpu,
+                        query_region,
+                        region_strength,
+                        self.vector_ops.algorithm
+                    )
+                else:
+                    # Original similarity calculation
+                    if self.vector_ops.algorithm == 'cosine':
+                        similarities = self.gpu_ops.masked_weighted_cosine_similarity(query_vector, vectors_gpu, masks_gpu)
+                    elif self.vector_ops.algorithm == 'cosine-euclidean':
+                        similarities = self.gpu_ops.masked_weighted_cosine_euclidean_similarity(query_vector, vectors_gpu, masks_gpu)
+                    elif self.vector_ops.algorithm == 'euclidean':
+                        similarities = self.gpu_ops.masked_euclidean_similarity(query_vector, vectors_gpu, masks_gpu)
+                    else:
+                        raise ValueError(f"Unknown algorithm: {self.vector_ops.algorithm}")
+                
                 compute_time = time.time() - compute_start
                 total_compute_time += compute_time
                 
@@ -209,7 +241,7 @@ class ChunkedSearch:
 
         if show_progress:
             self._complete_progress_bar(vectors_to_scan, vectors_to_scan, start_time)
-            # print(f"\n✅ Sequential scan complete (GPU)")
+            print(f"\n✅ Sequential scan complete (GPU)")
 
         # Return CPU arrays
         return top_indices.cpu().numpy(), top_similarities.cpu().numpy()

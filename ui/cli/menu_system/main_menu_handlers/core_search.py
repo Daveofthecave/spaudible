@@ -10,11 +10,12 @@ from .utils import (
     check_preprocessed_files,
     get_metadata_db_path,
     format_track_display,
-    get_similarity_color
+    get_similarity_color,
+    save_playlist
 )
 from core.similarity_engine.orchestrator import SearchOrchestrator
 from core.vectorization.canonical_track_resolver import build_canonical_vector
-from config import PathConfig
+from config import PathConfig, REGION_FILTER_STRENGTH
 from core.utilities.config_manager import config_manager
 
 def handle_core_search() -> str:
@@ -67,8 +68,17 @@ def handle_core_search() -> str:
             print("  Please try again.")
             continue
 
-def _search_by_track_id(track_id: str) -> str:
-    """Core search function for track IDs."""
+
+def _search_by_track_id(
+    track_id: str,
+    top_k: int = 25,
+    search_mode: str = "sequential",
+    with_metadata: bool = True,
+    deduplicate: Optional[bool] = None
+) -> str:
+    """
+    Core search function for track IDs.
+    """
     print(f"   Finding songs similar to track: {track_id}")
     print(f"   Using algorithm: {config_manager.get_algorithm_name()}")     
     
@@ -80,7 +90,7 @@ def _search_by_track_id(track_id: str) -> str:
         return "main_menu"
     
     try:
-        # Build track vector
+        # Build vector for the track
         start_time = time.time()
         vector, track_data = build_canonical_vector(track_id)
         
@@ -91,7 +101,7 @@ def _search_by_track_id(track_id: str) -> str:
             return "main_menu"
         
         vector_time = time.time() - start_time
-        # print(f"   Track converted to vector in {format_elapsed_time(vector_time)}")
+        print(f"   Track converted to vector in {format_elapsed_time(vector_time)}")
         
         # Show track info
         if track_data:
@@ -116,13 +126,16 @@ def _search_by_track_id(track_id: str) -> str:
 
         search_mode = "sequential"   
         
-        # Run search
+        # Run search - pass query_track_id for region filtering
         search_start = time.time()
         results = orchestrator.search(
-            query_vector=vector,
+            vector,
             search_mode=search_mode,
-            top_k=25,
-            with_metadata=True
+            top_k=top_k,
+            with_metadata=with_metadata,
+            deduplicate=deduplicate,
+            query_track_id=track_id,
+            region_strength=REGION_FILTER_STRENGTH
         )
         
         search_time = time.time() - search_start
@@ -138,15 +151,15 @@ def _search_by_track_id(track_id: str) -> str:
             
             for i, result in enumerate(results, 1):
                 if len(result) == 3:
-                    track_id, similarity, metadata = result
+                    result_track_id, similarity, metadata = result
                     color = get_similarity_color(similarity)
                     track_name = metadata.get('track_name', 'Unknown')
                     artist_name = metadata.get('artist_name', 'Unknown')
                     print(f"  {i:2d}. {color} {similarity:.4f} - {track_name} - {artist_name}")
                 else:
-                    track_id, similarity = result
+                    result_track_id, similarity = result
                     color = get_similarity_color(similarity)
-                    print(f"  {i:2d}. {color} {similarity:.4f} - {track_id}")
+                    print(f"  {i:2d}. {color} {similarity:.4f} - {result_track_id}")
 
             # Post-search options
             print("\n  📋 Options:")
@@ -186,7 +199,6 @@ def _search_by_track_id(track_id: str) -> str:
         traceback.print_exc()
         input("\n  Press Enter to return...")
         return "main_menu"
-
 
 # Placeholder implementations for other handlers
 def _handle_audio_file(file_path: str) -> str:

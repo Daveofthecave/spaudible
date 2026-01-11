@@ -5,7 +5,7 @@ from .weight_layers import WeightLayers
 from typing import List
 
 class VectorOpsGPU:
-    """GPU-accelerated vector operations using PyTorch with unified mask and weight support."""
+    """GPU-accelerated vector operations using PyTorch."""
     
     VECTOR_DIMENSIONS = 32
     DTYPE = torch.float32
@@ -218,6 +218,104 @@ class VectorOpsGPU:
         
         return similarities.cpu().numpy()
 
+    def fused_similarity(
+        self,
+        query: np.ndarray,
+        vectors: torch.Tensor,
+        masks: torch.Tensor,
+        regions: torch.Tensor,
+        query_region: int,
+        region_strength: float,
+        algorithm: str = 'cosine-euclidean'
+    ) -> torch.Tensor:
+        """
+        Combined feature + region similarity with multiplicative penalty
+        """
+        # Convert query to tensor
+        query_t = torch.tensor(query, dtype=vectors.dtype, device=vectors.device)
+        if query_t.ndim == 1:
+            query_t = query_t.unsqueeze(0).expand(vectors.shape[0], -1)
+        
+        # Compute base similarity
+        if algorithm == 'cosine':
+            feature_sim = self.masked_weighted_cosine_similarity(query, vectors, masks)
+        elif algorithm == 'euclidean':
+            feature_sim = self.masked_euclidean_similarity(query, vectors, masks)
+        else:  # Default to hybrid
+            feature_sim = self.masked_weighted_cosine_euclidean_similarity(query, vectors, masks)
+        
+        # Convert to tensor if needed
+        if not isinstance(feature_sim, torch.Tensor):
+            feature_sim = torch.tensor(feature_sim, dtype=torch.float32, device=vectors.device)
+        
+        # Calculate region match (1 if same region, 0 otherwise)
+        region_match = (regions == query_region).float()
+        
+        # For matching regions: region_compensation_factor = 1
+        # For non-matching regions: region_compensation_factor = (1 - region_strength)
+        region_compensation_factor = torch.where(
+            region_match == 1,
+            torch.tensor(1.0, device=feature_sim.device),
+            torch.tensor(1.0 - region_strength, device=feature_sim.device)
+        )
+        
+        # Apply multiplicative penalty
+        blended_sim = feature_sim * region_compensation_factor
+        
+        # Synchronize GPU before returning
+        if self.device_str == 'cuda':
+            torch.cuda.synchronize()
+            
+        return blended_sim
+
+    def fused_similarity_batch(
+        self,
+        query: np.ndarray,
+        vectors: torch.Tensor,
+        masks: torch.Tensor,
+        regions: torch.Tensor,
+        query_region: int,
+        region_strength: float,
+        algorithm: str
+    ) -> torch.Tensor:
+        """
+        Combined feature + region similarity with multiplicative penalty
+        """
+        # Compute base similarity using existing function
+        if algorithm == 'cosine':
+            feature_sim = self.masked_weighted_cosine_similarity(query, vectors, masks)
+        elif algorithm == 'euclidean':
+            feature_sim = self.masked_euclidean_similarity(query, vectors, masks)
+        else:
+            feature_sim = self.masked_weighted_cosine_euclidean_similarity(query, vectors, masks)
+        
+        # Convert to tensor if needed
+        if not isinstance(feature_sim, torch.Tensor):
+            feature_sim = torch.tensor(feature_sim, dtype=torch.float32, device=vectors.device)
+        
+        # Calculate region match (1 if same region, 0 otherwise)
+        region_match = (regions == query_region).float()
+        
+        # For matching regions: region_compensation_factor = 1
+        # For non-matching regions: region_compensation_factor = (1 - region_strength)
+        region_compensation_factor = torch.where(
+            region_match == 1,
+            torch.tensor(1.0, device=feature_sim.device),
+            torch.tensor(1.0 - region_strength, device=feature_sim.device)
+        )
+        
+        # Apply multiplicative penalty
+        blended_sim = feature_sim * region_compensation_factor
+        
+        # Debug output
+        # print(f"  Region strength: {region_strength}")
+        # print(f"  Matching regions: {torch.sum(region_match == 1).item()}")
+        # print(f"  Non-matching regions: {torch.sum(region_match == 0).item()}")
+        # print(f"  Feature sim range: {feature_sim.min().item():.4f} - {feature_sim.max().item():.4f}")
+        # print(f"  Blended sim range: {blended_sim.min().item():.4f} - {blended_sim.max().item():.4f}")
+        
+        return blended_sim
+
     def _unpack_masks(self, masks: torch.Tensor) -> torch.Tensor:
         """
         Unpack batch of masks into boolean tensors.
@@ -239,3 +337,85 @@ class VectorOpsGPU:
         
         # Compute validity
         return (masks_exp & bitmask_exp) != 0
+
+    def _extract_region_bits(self, packed_regions: torch.Tensor, index: int) -> int:
+        """
+        Extract region bits for a single index
+        """
+        byte_offset = (index * 3) // 8
+        bit_offset = (index * 3) % 8
+        
+        byte_val = packed_regions[byte_offset].item()
+        
+        if bit_offset <= 5:
+            return (byte_val >> (5 - bit_offset)) & 0x07
+        else:
+            next_byte_val = packed_regions[byte_offset + 1].item()
+            return ((byte_val << (bit_offset - 5)) | 
+                   (next_byte_val >> (13 - bit_offset))) & 0x07
+
+    def _batch_extract_regions(self, packed_regions: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
+        """
+        Batch extract regions from packed data
+        """
+        byte_offsets = (indices * 3) // 8
+        bit_offsets = (indices * 3) % 8
+        
+        # Get packed bytes
+        packed_bytes = packed_regions[byte_offsets]
+        
+        # Create masks for extraction cases
+        mask_low = bit_offsets <= 5
+        mask_high = ~mask_low
+        
+        regions = torch.zeros_like(indices, dtype=torch.uint8)
+        
+        # Case 1: Bits within single byte
+        if torch.any(mask_low):
+            shift = 5 - bit_offsets[mask_low]
+            regions[mask_low] = (packed_bytes[mask_low] >> shift) & 0x07
+        
+        # Case 2: Bits span two bytes
+        if torch.any(mask_high):
+            next_bytes = packed_regions[byte_offsets[mask_high] + 1]
+            shift_amount = bit_offsets[mask_high] - 5
+            first_part = packed_bytes[mask_high] << shift_amount
+            second_part = next_bytes >> (8 - shift_amount)
+            regions[mask_high] = (first_part | second_part) & 0x07
+        
+        return regions
+
+    def region_aware_similarity(
+        self,
+        query: np.ndarray,
+        vectors: torch.Tensor,
+        masks: torch.Tensor,
+        packed_regions: torch.Tensor,
+        indices: torch.Tensor,
+        query_region: int,
+        region_strength: float,
+        algorithm: str = 'cosine-euclidean'
+    ) -> torch.Tensor:
+        """
+        Fully integrated region-aware similarity with bit extraction
+        """
+        # Extract regions for this batch
+        regions = self._batch_extract_regions(packed_regions, indices)
+        
+        # Compute base similarity
+        if algorithm == 'cosine':
+            feature_sim = self.masked_weighted_cosine_similarity(query, vectors, masks)
+        elif algorithm == 'euclidean':
+            feature_sim = self.masked_euclidean_similarity(query, vectors, masks)
+        else:  # Default to hybrid
+            feature_sim = self.masked_weighted_cosine_euclidean_similarity(query, vectors, masks)
+        
+        # Convert to tensor if needed
+        if not isinstance(feature_sim, torch.Tensor):
+            feature_sim = torch.tensor(feature_sim, dtype=torch.float32, device=vectors.device)
+        
+        # Blend with region similarity
+        region_match = (regions == query_region).float()
+        blended_sim = (1 - region_strength) * feature_sim + region_strength * region_match
+        
+        return blended_sim
