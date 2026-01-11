@@ -135,7 +135,7 @@ def _search_by_track_id(
             with_metadata=with_metadata,
             deduplicate=deduplicate,
             query_track_id=track_id,
-            region_strength=REGION_FILTER_STRENGTH
+            region_strength=config_manager.get_region_strength()
         )
         
         search_time = time.time() - search_start

@@ -38,7 +38,8 @@ def handle_settings() -> str:
     force_gpu = config_manager.get_force_gpu()
     algorithm_name = config_manager.get_algorithm_name()
     deduplicate = config_manager.get_deduplicate()
-    
+    region_strength = config_manager.get_region_strength()
+
     # Ensure mutual exclusivity
     if force_cpu and force_gpu:
         config_manager.set_force_gpu(False)
@@ -47,6 +48,7 @@ def handle_settings() -> str:
     cpu_status = "ON" if force_cpu else "OFF"
     gpu_status = "ON" if force_gpu else "OFF"
     deduplicate_status = "ON" if deduplicate else "OFF"
+    region_strength_str = f"{region_strength:.2f}"
     
     print("\n  ⚙️  Configuration & Diagnostics")
     
@@ -55,6 +57,7 @@ def handle_settings() -> str:
         f"🐆 Force GPU Mode: {gpu_status}",
         f"🧮 Select Similarity Algorithm: {algorithm_name}", 
         f"🧦 Deduplicate Results: {deduplicate_status}",
+        f"🌎️ Region Filter Strength: {region_strength_str}",
         "⚖️  Adjust Feature Weights",
         "❔ Check System Status",
         "📊 Performance Test",
@@ -75,14 +78,16 @@ def handle_settings() -> str:
     elif choice == 4:
         return _toggle_deduplicate()
     elif choice == 5:
-        return _adjust_feature_weights()
+        return _adjust_region_strength()
     elif choice == 6:
-        return _handle_system_status()
+        return _adjust_feature_weights()
     elif choice == 7:
-        return _handle_performance_test()
+        return _handle_system_status()
     elif choice == 8:
-        return _handle_rerun_setup()
+        return _handle_performance_test()
     elif choice == 9:
+        return _handle_rerun_setup()
+    elif choice == 10:
         return _handle_about()
     else:
         return "main_menu"
@@ -159,7 +164,28 @@ def _toggle_deduplicate() -> str:
     print(f"\n  ✅ Deduplication set to: {status}")
     
     input("\n  Press Enter to continue...")
-    return "settings"    
+    return "settings"
+
+def _adjust_region_strength() -> str:
+    """Adjust region filter strength."""
+    print_header("Adjust Region Filter Strength")
+    
+    current = config_manager.get_region_strength()
+    print(f"\n  Current region filter strength: {current:.2f}")
+    print("  (1.0 = Stick to the same region, 0.0 = Any region is ok)")
+    
+    while True:
+        try:
+            new_value = float(input("\n  Enter new strength [0.0-1.0]: "))
+            if 0.0 <= new_value <= 1.0:
+                config_manager.set_region_strength(new_value)
+                print(f"\n  ✅ Region filter strength set to: {new_value:.2f}")
+                input("\n  Press Enter to continue...")
+                return "settings"
+            else:
+                print("  ❌ Value must be between 0.0 and 1.0")
+        except ValueError:
+            print("  ❌ Please enter a valid number")
 
 def _adjust_feature_weights() -> str:
     """Adjust feature weights for similarity calculations."""

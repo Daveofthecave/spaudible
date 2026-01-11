@@ -86,9 +86,9 @@ class SearchOrchestrator:
         self.region_reader = RegionReaderGPU()
         try:
             self.region_reader.load()
-            print(f"  ✅ Region data loaded ({self.region_reader.get_total_regions():,} tracks)")
+            # print(f"✅ Region data loaded ({self.region_reader.get_total_regions():,} tracks)")
         except Exception as e:
-            print(f"  ⚠️  Could not load region data: {e}")
+            print(f"⚠️  Could not load region data: {e}")
             self.region_reader = None
         
         # Get max batch size from vector reader
@@ -325,7 +325,7 @@ class SearchOrchestrator:
         show_progress: bool = True,
         deduplicate: Optional[bool] = None,
         query_track_id: Optional[str] = None,
-        region_strength: float = 1.0,
+        region_strength: Optional[float] = None,
         **kwargs
     ) -> List[Tuple[str, float, Optional[Dict]]]:
         """
@@ -336,8 +336,12 @@ class SearchOrchestrator:
             query_np = self.vector_ops.to_numpy_array(query_vector)
         else:
             query_np = query_vector
+
+        # Use region strength from config if not provided
+        if region_strength is None:
+            region_strength = config_manager.get_region_strength()        
         
-        # NEW: Get query region if track ID provided
+        # Get query region if track ID provided
         query_region = -1
         if query_track_id:
             query_region = self._get_query_region(query_track_id)

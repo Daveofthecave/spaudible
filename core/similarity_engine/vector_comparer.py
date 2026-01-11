@@ -178,7 +178,7 @@ class ChunkedSearch:
                         chunk_start + actual_chunk_size,
                         dtype=torch.long,
                         device=self.device
-                    )
+                    ).clone().detach()
                     regions_gpu = region_reader.get_region_batch(batch_indices)
 
                 # Compute similarities
@@ -209,7 +209,10 @@ class ChunkedSearch:
                 total_compute_time += compute_time
                 
                 # Update top-k
-                similarities_tensor = torch.tensor(similarities, device=self.device)
+                if isinstance(similarities, torch.Tensor):
+                    similarities_tensor = similarities.clone().detach().to(self.device)
+                else:
+                    similarities_tensor = torch.tensor(similarities, device=self.device)
                 batch_top_values, batch_top_indices = torch.topk(similarities_tensor, min(top_k, actual_chunk_size))
                 
                 # Combine with global top-k
