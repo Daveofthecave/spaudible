@@ -93,7 +93,7 @@ class DatabaseReader:
 
     def stream_tracks(self, batch_size=500000, last_rowid=0):
         """
-        Optimized track streaming with minimal memory footprint.
+        Optimized track streaming with batched audio feature loading.
         """
         cursor = self.main_conn.cursor()
         query = """
@@ -124,6 +124,7 @@ class DatabaseReader:
             
             # Convert to dictionaries and enrich with artist metadata
             enriched_batch = []
+            track_ids = []
             for row in batch:
                 track_data = dict(zip(columns, row))
                 artist_ids = [int(id) for id in track_data['artist_ids'].split(',')] if track_data['artist_ids'] else []
@@ -144,11 +145,79 @@ class DatabaseReader:
                 track_data['genres'] = list(genres)
                 
                 enriched_batch.append(track_data)
+                track_ids.append(track_data['track_id'])
+                last_rowid = track_data['rowid']
+            
+            # Fetch audio features in bulk for this batch
+            self._fetch_audio_features(enriched_batch, track_ids)
             
             yield enriched_batch
             gc.collect()
             
         cursor.close()
+
+    def _fetch_audio_features(self, track_batch, track_ids):
+        """Fetch audio features for a batch of tracks efficiently."""
+        if not track_ids:
+            return
+        
+        # Create lookup dictionary
+        features_map = {}
+        audio_cursor = self.audio_conn.cursor()
+        
+        # Process in chunks to avoid SQLite parameter limits
+        chunk_size = 10000
+        for i in range(0, len(track_ids), chunk_size):
+            chunk_ids = track_ids[i:i+chunk_size]
+            placeholders = ','.join(['?'] * len(chunk_ids))
+            
+            query = f"""
+            SELECT track_id, danceability, energy, loudness, speechiness,
+                acousticness, instrumentalness, liveness, valence,
+                tempo, time_signature, key, mode
+            FROM track_audio_features
+            WHERE track_id IN ({placeholders})
+            """
+            audio_cursor.execute(query, chunk_ids)
+            
+            for row in audio_cursor:
+                track_id = row[0]
+                features_map[track_id] = {
+                    'danceability': row[1],
+                    'energy': row[2],
+                    'loudness': row[3],
+                    'speechiness': row[4],
+                    'acousticness': row[5],
+                    'instrumentalness': row[6],
+                    'liveness': row[7],
+                    'valence': row[8],
+                    'tempo': row[9],
+                    'time_signature': row[10],
+                    'key': row[11],
+                    'mode': row[12]
+                }
+        
+        # Merge audio features into track data
+        for track_data in track_batch:
+            track_id = track_data['track_id']
+            if track_id in features_map:
+                track_data.update(features_map[track_id])
+            else:
+                # Set default values for missing audio features
+                track_data.update({
+                    'danceability': -1.0,
+                    'energy': -1.0,
+                    'loudness': -1.0,
+                    'speechiness': -1.0,
+                    'acousticness': -1.0,
+                    'instrumentalness': -1.0,
+                    'liveness': -1.0,
+                    'valence': -1.0,
+                    'tempo': -1.0,
+                    'time_signature': -1.0,
+                    'key': -1.0,
+                    'mode': -1.0
+                })
 
 class PreprocessingEngine:
     """Optimized preprocessing engine with unified vector format."""

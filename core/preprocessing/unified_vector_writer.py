@@ -149,12 +149,15 @@ class UnifiedVectorWriter:
     
     def _pack_binary_dims_batch(self, vectors: np.ndarray) -> np.ndarray:
         """Pack binary dimensions for a batch of vectors."""
+        # Replace NaNs with -1.0
+        vectors = np.nan_to_num(vectors, nan=-1.0)
+        
         # Initialize with zeros
         binary_bytes = np.zeros(vectors.shape[0], dtype=np.uint8)
         
         # Mode (dimension 9)
         mode_vals = vectors[:, 9]
-        valid_mask = (mode_vals != -1.0) & ~np.isnan(mode_vals)
+        valid_mask = (mode_vals != -1.0)
         mode_bits = np.clip(mode_vals[valid_mask], 0, 1).astype(np.uint8)
         binary_bytes[valid_mask] |= mode_bits
         
@@ -162,7 +165,7 @@ class UnifiedVectorWriter:
         time_sig_dims = [11, 12, 13, 14]
         for i, dim_idx in enumerate(time_sig_dims, start=1):
             vals = vectors[:, dim_idx]
-            valid_mask = (vals != -1.0) & ~np.isnan(vals)
+            valid_mask = (vals != -1.0)
             sig_bits = np.clip(vals[valid_mask], 0, 1).astype(np.uint8) << i
             binary_bytes[valid_mask] |= sig_bits
         
@@ -170,6 +173,9 @@ class UnifiedVectorWriter:
         
     def _pack_scaled_dims_batch(self, vectors: np.ndarray) -> List[List[int]]:
         """Pack scaled dimensions for a batch of vectors."""
+        # Replace NaNs with -1.0
+        vectors = np.nan_to_num(vectors, nan=-1.0)
+        
         # Initialize output
         scaled_dims = []
         
@@ -177,16 +183,18 @@ class UnifiedVectorWriter:
         scaled_indices = [0, 1, 2, 3, 4, 5, 6, 8, 16]
         for i in scaled_indices:
             dim_vals = vectors[:, i]
-            # Clip and scale to 0-10000 range
-            clipped = np.clip(dim_vals, 0, 1)
-            scaled = (clipped * 10000).astype(np.uint16)
+            # Handle missing values
+            valid_mask = dim_vals != -1.0
+            scaled = np.zeros_like(dim_vals, dtype=np.uint16)
+            scaled[valid_mask] = (np.clip(dim_vals[valid_mask], 0, 1) * 10000).astype(np.uint16)
             scaled_dims.append(scaled)
         
         # Meta-genres (dimensions 20-32)
         for i in range(19, 32):
             dim_vals = vectors[:, i]
-            clipped = np.clip(dim_vals, 0, 1)
-            scaled = (clipped * 10000).astype(np.uint16)
+            valid_mask = dim_vals != -1.0
+            scaled = np.zeros_like(dim_vals, dtype=np.uint16)
+            scaled[valid_mask] = (np.clip(dim_vals[valid_mask], 0, 1) * 10000).astype(np.uint16)
             scaled_dims.append(scaled)
         
         # Transpose to match record format
