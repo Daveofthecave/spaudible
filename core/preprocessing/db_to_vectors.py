@@ -3,16 +3,15 @@ import sqlite3
 import time
 import numpy as np
 from pathlib import Path
-from core.vectorization.track_vectorizer import build_track_vectors_batch
-from .vector_exporter import VectorWriter
-from .progress import ProgressTracker
-from .mask_generator import generate_mask_file
-from .region_mask_generator import RegionMaskGenerator
 import mmap
 import gc
+from core.vectorization.track_vectorizer import build_track_vectors_batch
+from core.preprocessing.unified_vector_writer import UnifiedVectorWriter
+from core.preprocessing.progress import ProgressTracker
+import os
 
 class DatabaseReader:
-    """Highly optimized reader for Spotify SQLite databases using memory mapping."""
+    """Optimized database reader with memory mapping and efficient audio feature handling."""
     
     def __init__(self, main_db_path, audio_db_path):
         self.main_db_path = main_db_path
@@ -25,12 +24,12 @@ class DatabaseReader:
         self.artist_genres_cache = {}
         
     def __enter__(self):
-        """Open database connections with aggressive optimizations."""
-        # Open connections with timeout disabled
+        """Open database connections with optimizations."""
+        # Open connections
         self.main_conn = sqlite3.connect(self.main_db_path, timeout=0)
         self.audio_conn = sqlite3.connect(self.audio_db_path, timeout=0)
         
-        # Set aggressive performance settings
+        # Set performance settings
         self.main_conn.execute("PRAGMA journal_mode = MEMORY")
         self.main_conn.execute("PRAGMA cache_size = -200000")  # 200GB cache
         self.main_conn.execute("PRAGMA temp_store = MEMORY")
@@ -42,16 +41,16 @@ class DatabaseReader:
         self.audio_conn.execute("PRAGMA synchronous = OFF")
         self.audio_conn.execute("PRAGMA temp_store = MEMORY")
         
-        # Memory map databases for faster access
+        # Memory map databases
         self._memory_map_databases()
         
-        # Preload artist metadata into memory
+        # Preload artist metadata only
         self._preload_artist_metadata()
         
         return self
         
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Close database connections."""
+        """Clean up resources."""
         if self.main_conn:
             self.main_conn.close()
         if self.audio_conn:
@@ -64,24 +63,18 @@ class DatabaseReader:
     def _memory_map_databases(self):
         """Memory-map database files for faster access."""
         try:
-            # Memory-map main database
             with open(self.main_db_path, 'rb') as f:
                 self.main_mmap = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
-            
-            # Memory-map audio database
             with open(self.audio_db_path, 'rb') as f:
                 self.audio_mmap = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
         except Exception as e:
             print(f"  ⚠️  Could not memory-map databases: {e}")
     
     def _preload_artist_metadata(self):
-        """Preload all artist metadata into memory for fast access."""
-        # Load artist followers
+        """Preload artist metadata into memory."""
         cursor = self.main_conn.cursor()
         cursor.execute("SELECT rowid, followers_total FROM artists")
         self.artist_followers_cache = {rowid: followers for rowid, followers in cursor}
-        
-        # Load artist genres
         cursor.execute("SELECT artist_rowid, genre FROM artist_genres")
         self.artist_genres_cache = {}
         for artist_rowid, genre in cursor:
@@ -100,8 +93,7 @@ class DatabaseReader:
 
     def stream_tracks(self, batch_size=500000, last_rowid=0):
         """
-        Generator that streams tracks with optimized data fetching.
-        Yields batches of track data dictionaries.
+        Optimized track streaming with minimal memory footprint.
         """
         cursor = self.main_conn.cursor()
         query = """
@@ -152,16 +144,52 @@ class DatabaseReader:
                 track_data['genres'] = list(genres)
                 
                 enriched_batch.append(track_data)
-                last_rowid = track_data['rowid']
             
             yield enriched_batch
-            gc.collect()  # Prevent memory bloat
+            gc.collect()
             
         cursor.close()
 
 class PreprocessingEngine:
-    """Highly optimized preprocessing engine with streaming architecture."""
+    """Optimized preprocessing engine with unified vector format."""
     
+    # Region dictionary: 8 geographical/cultural/linguistic regions
+    REGION_MAPPING = {
+        0: ["AU", "CA", "CB", "GB", "GG", "GX", "IE", "IM", "JE", "NZ", 
+            "QM", "QT", "QZ", "UK", "US"],  # Anglo
+        1: ["AD", "AT", "BE", "CH", "DE", "DK", "EE", "FI", "FO", "FR", 
+            "FX", "GI", "GL", "IS", "IT", "LI", "LU", "MC", "MT", "NL", 
+            "NO", "PT", "SE", "SM"],  # Western European
+        2: ["AL", "BA", "BG", "BY", "CS", "CY", "CZ", "GR", "HR", "HU", 
+            "LT", "LV", "MD", "ME", "MK", "PL", "RO", "RS", "RU", "SI", 
+            "SK", "UA", "XK", "YU"],  # Eastern European
+        3: ["AR", "BC", "BK", "BO", "BP", "BR", "BX", "BZ", "CL", "CO", 
+            "CR", "CU", "DO", "EC", "ES", "GT", "HN", "MX", "NI", "PA", 
+            "PE", "PR", "PY", "SV", "UY", "VE"],  # Hispanic
+        4: ["BN", "CN", "HK", "ID", "JP", "KG", "KH", "KR", "KS", "KZ", 
+            "LA", "MM", "MN", "MO", "MY", "PG", "PH", "SG", "TH", "TL", 
+            "TW", "UZ", "VN"],  # Asian
+        5: ["BD", "BT", "IN", "LK", "MV", "NP", "PK"],  # Indian
+        6: ["AE", "AF", "AM", "AZ", "BH", "DZ", "EG", "GE", "IL", "IQ", 
+            "IR", "JO", "KW", "LB", "MA", "OM", "PS", "QA", "SA", "SY", 
+            "TN", "TR", "YE"],  # Middle Eastern
+        7: ["AG", "AI", "AO", "AW", "BB", "BF", "BI", "BJ", "BM", "BS", 
+            "BW", "CD", "CF", "CG", "CI", "CM", "CP", "CV", "CW", "DG", 
+            "DM", "ET", "FJ", "GA", "GD", "GH", "GM", "GN", "GQ", "GY", 
+            "HT", "JM", "KE", "KM", "KN", "KY", "LC", "LR", "LS", "MF", 
+            "MG", "ML", "MP", "MR", "MS", "MU", "MW", "MZ", "NA", "NE", 
+            "NG", "PF", "QN", "RW", "SB", "SC", "SD", "SL", "SN", "SO", 
+            "SR", "SS", "ST", "SX", "SZ", "TC", "TD", "TG", "TO", "TT", 
+            "TZ", "UG", "VC", "VG", "VU", "VV", "ZA", "ZB", "ZM", "ZW", 
+            "ZZ"]  # Other
+    }
+    
+    # Reverse lookup for country codes
+    COUNTRY_TO_REGION = {}
+    for region_id, countries in REGION_MAPPING.items():
+        for country in countries:
+            COUNTRY_TO_REGION[country] = region_id
+
     def __init__(self, 
                  main_db_path="data/databases/spotify_clean.sqlite3",
                  audio_db_path="data/databases/spotify_clean_audio_features.sqlite3",
@@ -173,10 +201,27 @@ class PreprocessingEngine:
         self.vector_batch_size = 100_000  # Vector processing batch size
         self.total_vectors = 256_000_000
     
+    def get_region_from_isrc(self, isrc: str) -> int:
+        """
+        Convert ISRC to region index (0-7).
+        
+        Args:
+            isrc: ISRC code (first 2 characters are country code)
+            
+        Returns:
+            Region index (0-7), defaults to 7 (Other)
+        """
+        if not isrc or not isrc.strip():
+            return 7
+        if len(isrc) < 2:
+            return 7
+        country_code = isrc[:2].upper()
+        return self.COUNTRY_TO_REGION.get(country_code, 7)
+    
     def run(self):
         """Run optimized preprocessing pipeline."""
         print("\n" + "═" * 65)
-        print("  🚀 Starting Optimized Database Preprocessing")
+        print("  🚀 Starting High-Performance Preprocessing")
         print("═" * 65)
         
         # Validate databases
@@ -194,17 +239,17 @@ class PreprocessingEngine:
                 print(f"  Found {actual_total:,} tracks in database")
                 self.total_vectors = actual_total
             except Exception:
-                print(f"  Using estimated total: {self.total_vectors:,} tracks")
+                print(f"  Using estimated total: {self.total_vectors:,}")
         
-        print("\n  🔥 Processing tracks with streaming architecture...")
+        print("\n  🔥 Processing tracks with optimized pipeline...")
         print("  This will take 30-90 minutes. Press Ctrl+C to interrupt.")
         
         # Initialize progress tracker
         progress = ProgressTracker(self.total_vectors)
         processed_count = 0
         
-        # Initialize vector writer
-        with VectorWriter(self.output_dir) as writer:
+        # Initialize unified vector writer
+        with UnifiedVectorWriter(Path(self.output_dir)) as writer:
             with DatabaseReader(self.main_db_path, self.audio_db_path) as db_reader:
                 # Process in streaming batches
                 for batch in db_reader.stream_tracks(self.batch_size):
@@ -212,83 +257,50 @@ class PreprocessingEngine:
                     for i in range(0, len(batch), self.vector_batch_size):
                         vector_batch = batch[i:i+self.vector_batch_size]
                         
-                        # Build vectors
+                        # Build vectors - THIS IS WHERE AUDIO FEATURES ARE HANDLED
                         vectors = build_track_vectors_batch(vector_batch)
                         
                         # Write vectors
-                        for track_data, vector in zip(vector_batch, vectors):
-                            writer.write_vector(
+                        for j, track_data in enumerate(vector_batch):
+                            # Get ISRC and resolve region
+                            isrc = track_data.get('external_id_isrc', '') or ''
+                            region = self.get_region_from_isrc(isrc)
+                            
+                            writer.write_record(
                                 track_data['track_id'], 
-                                vector,
-                                track_data.get('external_id_isrc', '')
+                                vectors[j],
+                                isrc,
+                                region
                             )
                         
                         # Update progress
                         progress.update(len(vector_batch))
                         processed_count += len(vector_batch)
                 
-                # Final progress update
-                progress.update(self.total_vectors - processed_count)
+                # Finalize processing
+                writer.finalize()
+                progress.complete()
         
-        # Finalize processing
-        progress.complete()
-        
-        # Generate mask file
-        print("\n⚙️  Generating mask file from vectors...")
-        vectors_path = Path(self.output_dir) / "track_vectors.bin"
-        masks_path = Path(self.output_dir) / "track_masks.bin"
-        
-        mask_start = time.time()
-        mask_success = generate_mask_file(vectors_path, masks_path)
-        mask_time = time.time() - mask_start
-        
-        if mask_success:
-            print(f"✅ Mask generation completed in {mask_time:.1f} seconds")
-            self._show_statistics(self.total_vectors, masks_path)
-        else:
-            print(f"❌ Mask generation failed after {mask_time:.1f} seconds")
-            return False
-        
-        # Generate region file track_regions.bin
-        print("\n⚙️  Generating region file from index...")
-        index_path = Path(self.output_dir) / "track_index.bin"
-        region_path = Path(self.output_dir) / "track_regions.bin"
-        
-        region_start = time.time()
-        region_generator = RegionMaskGenerator(index_path, region_path)
-        region_success = region_generator.generate()
-        region_time = time.time() - region_start
-        
-        if region_success:
-            print(f"✅ Region file generation completed in {region_time:.1f} seconds")
-            return True
-        else:
-            print(f"❌ Region file generation failed after {region_time:.1f} seconds")
-            return False
+        # Show statistics
+        self._show_statistics(processed_count)
+        return True
     
-    def _show_statistics(self, total_processed, masks_path: Path):
+    def _show_statistics(self, total_processed):
         """Display processing statistics."""
         vectors_path = Path(self.output_dir) / "track_vectors.bin"
         index_path = Path(self.output_dir) / "track_index.bin"
-        region_path = Path(self.output_dir) / "track_regions.bin"
         
         vectors_size = vectors_path.stat().st_size if vectors_path.exists() else 0
-        masks_size = masks_path.stat().st_size if masks_path.exists() else 0
         index_size = index_path.stat().st_size if index_path.exists() else 0
-        region_size = region_path.stat().st_size if region_path.exists() else 0
         
         vectors_gb = vectors_size / (1024**3)
-        masks_gb = masks_size / (1024**3)
         index_gb = index_size / (1024**3)
-        region_gb = region_size / (1024**3)
-        total_gb = vectors_gb + masks_gb + index_gb + region_gb
+        total_gb = vectors_gb + index_gb
         
         print("\n  📊 Processing Statistics:")
         print(f"    Total tracks processed: {total_processed:,}")
         print(f"    Vector file size: {vectors_gb:.1f} GB")
-        print(f"    Mask file size: {masks_gb:.1f} GB")
         print(f"    Index file size: {index_gb:.1f} GB")
-        print(f"    Region file size: {region_gb:.1f} GB")
         print(f"    Total disk space used: {total_gb:.1f} GB")
         print(f"    Output directory: {self.output_dir}")
         print("\n  ✅ Preprocessing complete! Ready for similarity search.")
