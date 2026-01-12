@@ -101,7 +101,6 @@ class UnifiedVectorWriter:
             
         # Convert to NumPy arrays for vectorized operations
         vectors = np.array(self.vectors)
-        isrcs = np.array(self.isrcs)
         regions = np.array(self.regions)
         
         # Pack binary dimensions
@@ -116,12 +115,23 @@ class UnifiedVectorWriter:
         # Generate validity masks
         validity_masks = self._get_validity_masks_batch(vectors)
         
-        # Clean ISRCs
-        clean_isrcs = [''.join(filter(str.isalnum, isrc))[:12].ljust(12, '\0') 
-                      for isrc in isrcs]
-        
-        # Format track IDs
-        clean_track_ids = [tid.ljust(22, '\0') for tid in self.track_ids]
+        # Clean ISRCs - handle non-ASCII characters
+        clean_isrcs = []
+        for isrc in self.isrcs:
+            # Remove non-ASCII characters
+            clean = ''.join(c for c in isrc if ord(c) < 128)
+            # Truncate to 12 characters and pad with nulls
+            clean = clean[:12].ljust(12, '\0')
+            clean_isrcs.append(clean)
+            
+        # Format track IDs - ensure ASCII-only
+        clean_track_ids = []
+        for tid in self.track_ids:
+            # Remove non-ASCII characters
+            clean = ''.join(c for c in tid if ord(c) < 128)
+            # Truncate to 22 characters and pad with nulls
+            clean = clean[:22].ljust(22, '\0')
+            clean_track_ids.append(clean)
         
         # Write records
         for i in range(self.batch_count):
