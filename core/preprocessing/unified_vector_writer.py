@@ -5,6 +5,45 @@ from pathlib import Path
 from typing import Tuple, List
 import zlib
 import os
+import tempfile
+import shutil
+from numba import njit, prange
+import csv
+from config import PathConfig
+from core.utilities.region_utils import REGION_MAPPING
+
+# Precomputed genre mappings
+GENRE_MAPPING = {}
+GENRE_ID_MAP = {}
+GENRE_INTENSITY_MAP = {}
+
+def _preload_genre_data():
+    """Preload genre mapping data once at module import"""
+    csv_path = PathConfig.get_genre_mapping()
+    if not csv_path.exists():
+        return
+    
+    with open(csv_path, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        next(reader)  # Skip header
+        
+        for row in reader:
+            if len(row) < 4:
+                continue
+            try:
+                meta_genre = int(row[1])
+                genre = row[2].strip().lower()
+                intensity = float(row[3])
+                
+                # Store mappings
+                GENRE_MAPPING[genre] = (meta_genre, intensity)
+                GENRE_ID_MAP[genre] = len(GENRE_ID_MAP)
+                GENRE_INTENSITY_MAP[genre] = intensity
+            except (ValueError, IndexError):
+                continue
+
+# Load genre data on import
+_preload_genre_data()
 
 class UnifiedVectorWriter:
     """Highly optimized writer with vectorized packing and batched I/O."""
@@ -41,12 +80,31 @@ class UnifiedVectorWriter:
         self.regions = []
         self.batch_count = 0
         self.total_records = 0
+        
+        # Precomputed mappings
+        self.region_map = self._preload_region_map()
+        
+        # Temporary index storage
+        self.temp_index_dir = Path(tempfile.mkdtemp())
+        self.temp_index_file = None
+
+    def _preload_region_map(self):
+        """Precompute region mappings for faster lookup"""
+        region_map = {}
+        for region_id, countries in REGION_MAPPING.items():
+            for country in countries:
+                region_map[country] = region_id
+        return region_map
 
     def __enter__(self):
         """Open files for writing and write header"""
         self.vector_file = open(self.vectors_path, "wb")
         self.index_file = open(self.index_path, "wb")
         self._write_header()
+        
+        # Open temporary index file
+        self.temp_index_file = open(self.temp_index_dir / "temp_index.bin", "wb")
+        
         return self
         
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -62,6 +120,11 @@ class UnifiedVectorWriter:
             self.vector_file.close()
         if self.index_file:
             self.index_file.close()
+        if self.temp_index_file:
+            self.temp_index_file.close()
+        
+        # Clean up temporary directory
+        shutil.rmtree(self.temp_index_dir)
         
         return False
 
@@ -88,6 +151,12 @@ class UnifiedVectorWriter:
         self.isrcs.append(isrc)
         self.regions.append(region)
         self.batch_count += 1
+        
+        # Write temporary index entry
+        tid_bytes = track_id.encode('ascii', 'ignore').ljust(22, b'\0')
+        self.temp_index_file.write(tid_bytes)
+        self.temp_index_file.write(struct.pack("<I", self.total_records))
+        
         self.total_records += 1
         
         # Flush if batch is full
@@ -115,25 +184,12 @@ class UnifiedVectorWriter:
         # Generate validity masks
         validity_masks = self._get_validity_masks_batch(vectors)
         
-        # Clean ISRCs - handle non-ASCII characters
-        clean_isrcs = []
-        for isrc in self.isrcs:
-            # Remove non-ASCII characters
-            clean = ''.join(c for c in isrc if ord(c) < 128)
-            # Truncate to 12 characters and pad with nulls
-            clean = clean[:12].ljust(12, '\0')
-            clean_isrcs.append(clean)
-            
-        # Format track IDs - ensure ASCII-only
-        clean_track_ids = []
-        for tid in self.track_ids:
-            # Remove non-ASCII characters
-            clean = ''.join(c for c in tid if ord(c) < 128)
-            # Truncate to 22 characters and pad with nulls
-            clean = clean[:22].ljust(22, '\0')
-            clean_track_ids.append(clean)
+        # Precompute clean ISRCs and track IDs
+        clean_isrcs = [self._clean_isrc(isrc) for isrc in self.isrcs]
+        clean_track_ids = [self._clean_track_id(tid) for tid in self.track_ids]
         
-        # Write records
+        # Write records in bulk
+        records = []
         for i in range(self.batch_count):
             record = struct.pack(
                 "<B22H5fIB12s22s",
@@ -145,7 +201,10 @@ class UnifiedVectorWriter:
                 clean_isrcs[i].encode("ascii"),
                 clean_track_ids[i].encode("ascii")
             )
-            self.vector_file.write(record)
+            records.append(record)
+        
+        # Write all records at once
+        self.vector_file.write(b"".join(records))
         
         # Clear buffers
         self.track_ids = []
@@ -156,102 +215,145 @@ class UnifiedVectorWriter:
         
         # Flush to disk
         self.vector_file.flush()
+        self.temp_index_file.flush()
     
+    def _clean_isrc(self, isrc: str) -> str:
+        """Clean and format ISRC string"""
+        if not isrc:
+            return ""
+        # Remove non-ASCII characters
+        clean = ''.join(c for c in isrc if ord(c) < 128)
+        # Truncate to 12 characters and pad with nulls
+        return clean[:12].ljust(12, '\0')
+    
+    def _clean_track_id(self, track_id: str) -> str:
+        """Clean and format track ID string"""
+        if not track_id:
+            return ""
+        # Remove non-ASCII characters
+        clean = ''.join(c for c in track_id if ord(c) < 128)
+        # Truncate to 22 characters and pad with nulls
+        return clean[:22].ljust(22, '\0')
+
     def _pack_binary_dims_batch(self, vectors: np.ndarray) -> np.ndarray:
-        """Pack binary dimensions for a batch of vectors."""
-        # Replace NaNs with -1.0
-        vectors = np.nan_to_num(vectors, nan=-1.0)
+        """Pure Python implementation for packing binary dimensions with NaN handling"""
+        n = vectors.shape[0]
+        binary_bytes = np.zeros(n, dtype=np.uint8)
         
-        # Initialize with zeros
-        binary_bytes = np.zeros(vectors.shape[0], dtype=np.uint8)
-        
-        # Mode (dimension 9)
-        mode_vals = vectors[:, 9]
-        valid_mask = (mode_vals != -1.0)
-        mode_bits = np.clip(mode_vals[valid_mask], 0, 1).astype(np.uint8)
-        binary_bytes[valid_mask] |= mode_bits
-        
-        # Time signatures (dimensions 11-14)
-        time_sig_dims = [11, 12, 13, 14]
-        for i, dim_idx in enumerate(time_sig_dims, start=1):
-            vals = vectors[:, dim_idx]
-            valid_mask = (vals != -1.0)
-            sig_bits = np.clip(vals[valid_mask], 0, 1).astype(np.uint8) << i
-            binary_bytes[valid_mask] |= sig_bits
+        for i in range(n):
+            # Mode (dimension 9)
+            mode_val = vectors[i, 9]
+            if not np.isnan(mode_val) and mode_val != -1.0:
+                binary_bytes[i] |= int(mode_val) & 1
+            
+            # Time signatures (dimensions 11-14)
+            for j, dim_idx in enumerate([11, 12, 13, 14], start=1):
+                val = vectors[i, dim_idx]
+                if not np.isnan(val) and val != -1.0:
+                    binary_bytes[i] |= (int(val) & 1) << j
         
         return binary_bytes
-        
-    def _pack_scaled_dims_batch(self, vectors: np.ndarray) -> List[List[int]]:
-        """Pack scaled dimensions for a batch of vectors."""
-        # Replace NaNs with -1.0
-        vectors = np.nan_to_num(vectors, nan=-1.0)
-        
-        # Initialize output
-        scaled_dims = []
+
+    def _pack_scaled_dims_batch(self, vectors: np.ndarray) -> np.ndarray:
+        """Pure Python implementation for packing scaled dimensions"""
+        n = vectors.shape[0]
+        scaled_dims = np.zeros((n, 22), dtype=np.uint16)
         
         # Dimensions 1-7, 9, 17
-        scaled_indices = [0, 1, 2, 3, 4, 5, 6, 8, 16]
-        for i in scaled_indices:
-            dim_vals = vectors[:, i]
-            # Handle missing values
-            valid_mask = dim_vals != -1.0
-            scaled = np.zeros_like(dim_vals, dtype=np.uint16)
-            scaled[valid_mask] = (np.clip(dim_vals[valid_mask], 0, 1) * 10000).astype(np.uint16)
-            scaled_dims.append(scaled)
+        scaled_indices = [0, 1, 2, 3, 4, 5, 6, 8, 16]  # indices 0,1,2,3,4,5,6,7,8
+        for idx, dim in enumerate(scaled_indices):
+            for i in range(n):
+                val = vectors[i, dim]
+                if np.isnan(val) or val == -1.0:
+                    scaled_dims[i, idx] = 0
+                else:
+                    # Manual clamping instead of np.clip
+                    clamped_val = max(0.0, min(val, 1.0))
+                    scaled_dims[i, idx] = int(clamped_val * 10000)
         
-        # Meta-genres (dimensions 20-32)
-        for i in range(19, 32):
-            dim_vals = vectors[:, i]
-            valid_mask = dim_vals != -1.0
-            scaled = np.zeros_like(dim_vals, dtype=np.uint16)
-            scaled[valid_mask] = (np.clip(dim_vals[valid_mask], 0, 1) * 10000).astype(np.uint16)
-            scaled_dims.append(scaled)
+        # Meta-genres (dimensions 19-31)
+        for dim in range(19, 32):
+            idx = dim - 19 + 9  # Continue from index 9
+            for i in range(n):
+                val = vectors[i, dim]
+                if np.isnan(val) or val == -1.0:
+                    scaled_dims[i, idx] = 0
+                else:
+                    # Manual clamping instead of np.clip
+                    clamped_val = max(0.0, min(val, 1.0))
+                    scaled_dims[i, idx] = int(clamped_val * 10000)
         
-        # Transpose to match record format
-        return np.array(scaled_dims).T.tolist()
+        return scaled_dims
     
-    def _pack_fp32_dims_batch(self, vectors: np.ndarray) -> List[List[float]]:
-        """Pack FP32 dimensions for a batch of vectors."""
-        fp32_dims = []
-        fp32_indices = [7, 10, 15, 17, 18]  # Loudness, tempo, duration, popularity, followers
+    @staticmethod
+    @njit(parallel=True)
+    def _pack_fp32_dims_batch(vectors: np.ndarray) -> np.ndarray:
+        """Vectorized packing of FP32 dimensions"""
+        n = vectors.shape[0]
+        fp32_dims = np.zeros((n, 5), dtype=np.float32)
         
-        # Copy valid values, replace NaNs/invalids with 0.0
-        for i in fp32_indices:
-            dim_vals = vectors[:, i].copy()
-            invalid_mask = (dim_vals == -1.0) | np.isnan(dim_vals)
-            dim_vals[invalid_mask] = 0.0
-            fp32_dims.append(dim_vals)
+        # Loudness, tempo, duration, popularity, followers
+        fp32_indices = [7, 10, 15, 17, 18]
+        for idx, dim in enumerate(fp32_indices):
+            for i in prange(n):
+                val = vectors[i, dim]
+                if val == -1.0 or np.isnan(val):
+                    fp32_dims[i, idx] = 0.0
+                else:
+                    fp32_dims[i, idx] = val
         
-        # Transpose to match record format
-        return np.array(fp32_dims).T.tolist()
+        return fp32_dims
     
-    def _get_validity_masks_batch(self, vectors: np.ndarray) -> np.ndarray:
-        """Generate validity bitmasks for a batch of vectors."""
-        validity_masks = np.zeros(vectors.shape[0], dtype=np.uint32)
+    @staticmethod
+    @njit(parallel=True)
+    def _get_validity_masks_batch(vectors: np.ndarray) -> np.ndarray:
+        """Vectorized validity mask generation"""
+        n = vectors.shape[0]
+        masks = np.zeros(n, dtype=np.uint32)
         
-        # Create mask of invalid values
-        invalid_mask = (vectors == -1.0) | np.isnan(vectors)
+        for i in prange(n):
+            for j in range(32):
+                val = vectors[i, j]
+                if val == -1.0 or np.isnan(val):
+                    masks[i] |= (1 << j)
         
-        # Set bits for invalid dimensions
-        for i in range(32):
-            validity_masks[invalid_mask[:, i]] |= (1 << i)
-        
-        return validity_masks
+        return masks
 
     def _write_index(self):
-        """Write sorted index file."""
-        # Sort index entries by track ID
-        sorted_indices = sorted(range(len(self.track_ids)), key=lambda i: self.track_ids[i])
+        """Write sorted index file from temporary storage"""
+        # Close temporary file and reopen for reading
+        self.temp_index_file.close()
+        temp_index_path = self.temp_index_dir / "temp_index.bin"
         
-        # Write each entry (22B track ID + 4B index)
-        for idx in sorted_indices:
-            self.index_file.write(self.track_ids[idx].encode("ascii").ljust(22, b'\0'))
-            self.index_file.write(struct.pack("<I", idx))
+        # Read all entries
+        entries = []
+        with open(temp_index_path, "rb") as f:
+            while True:
+                tid_bytes = f.read(22)
+                if not tid_bytes:
+                    break
+                index_bytes = f.read(4)
+                track_id = tid_bytes.decode('ascii', 'ignore').rstrip('\0')
+                vector_index = struct.unpack("<I", index_bytes)[0]
+                entries.append((track_id, vector_index))
         
-        self.index_file.flush()
-    
+        # Sort by track ID
+        entries.sort(key=lambda x: x[0])
+        
+        # Write sorted index
+        for track_id, vector_index in entries:
+            tid_bytes = track_id.encode('ascii', 'ignore').ljust(22, b'\0')
+            self.index_file.write(tid_bytes)
+            self.index_file.write(struct.pack("<I", vector_index))
+        
+        # Validate index size
+        expected_size = len(entries) * 26  # 22B + 4B
+        actual_size = self.index_file.tell()
+        if actual_size != expected_size:
+            print(f"⚠️ Index file size mismatch: expected {expected_size} bytes, got {actual_size}")
+
     def _write_checksum(self):
-        """Calculate CRC32 checksum and update file header."""
+        """Calculate CRC32 checksum and update file header"""
         # Close the vector file first to ensure all data is flushed
         self.vector_file.close()
         
@@ -269,5 +371,5 @@ class UnifiedVectorWriter:
             f.write(struct.pack("<Q", checksum))
     
     def finalize(self):
-        """Finalize processing."""
+        """Finalize processing"""
         self._flush_buffers()

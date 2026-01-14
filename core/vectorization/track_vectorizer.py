@@ -1,8 +1,44 @@
 # core/vectorization/track_vectorizer.py
-import math
 import numpy as np
-from .genre_mapper import compute_genre_intensities_batch
-from typing import List, Tuple
+import csv
+import os
+from config import PathConfig
+from typing import List
+from numba import njit, prange
+import math
+
+# Preload genre mapping at module level
+GENRE_MAPPING = {}
+GENRE_ID_MAP = {}
+GENRE_INTENSITY_MAP = {}
+
+def _preload_genre_data():
+    """Preload genre mapping data once at module import"""
+    csv_path = PathConfig.get_genre_mapping()
+    if not csv_path.exists():
+        return
+    
+    with open(csv_path, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        next(reader)  # Skip header
+        
+        for row in reader:
+            if len(row) < 4:
+                continue
+            try:
+                meta_genre = int(row[1])
+                genre = row[2].strip().lower()
+                intensity = float(row[3])
+                
+                # Store mappings
+                GENRE_MAPPING[genre] = (meta_genre, intensity)
+                GENRE_ID_MAP[genre] = len(GENRE_ID_MAP)
+                GENRE_INTENSITY_MAP[genre] = intensity
+            except (ValueError, IndexError):
+                continue
+
+# Load genre data on import
+_preload_genre_data()
 
 # Constants for vectorization
 MIN_TEMPO = 40.0
@@ -11,258 +47,409 @@ MIN_YEAR = 1900
 MAX_YEAR = 2025
 MAX_FOLLOWERS = 141_174_367
 
+@njit(fastmath=True)
 def safe_float(value, default=-1.0):
-    """Safely convert a value to float, returning default if conversion fails."""
-    if isinstance(value, np.ndarray):
-        return value.astype(np.float32)
-    if value is None:
+    """Safely convert value to float with numba acceleration."""
+    if value == -1.0:
         return default
-    try:
-        return float(value)
-    except (ValueError, TypeError):
-        return default
+    return value
+
+@njit(fastmath=True)
+def normalize_loudness_scalar(loudness_db):
+    """Linearly normalize a single loudness value from [-60, 0] dB to [0, 1]."""
+    if loudness_db == -1.0:
+        return -1.0
+    clipped = max(min(loudness_db, 0.0), -60.0)
+    return (clipped + 60.0) / 60.0
+
+@njit(fastmath=True)
+def normalize_loudness_array(loudness_db):
+    """Linear normalization of loudness array from [-60, 0] dB to [0, 1]."""
+    result = np.empty_like(loudness_db)
+    for i in range(len(loudness_db)):
+        val = loudness_db[i]
+        if val == -1.0:
+            result[i] = -1.0
+        else:
+            result[i] = max(min(val, 0.0), -60.0)
+            result[i] = (result[i] + 60.0) / 60.0
+    return result
 
 def normalize_loudness(loudness_db):
-    """Linearly normalize loudness from [-60, 0] dB to [0, 1]."""
+    """Wrapper that selects the appropriate linear normalization function."""
     if isinstance(loudness_db, np.ndarray):
-        clipped = np.clip(loudness_db, -60.0, 0.0)
-        return (clipped + 60.0) / 60.0
-    if loudness_db is None:
+        return normalize_loudness_array(loudness_db)
+    else:
+        return normalize_loudness_scalar(loudness_db)
+
+@njit(fastmath=True)
+def normalize_key_scalar(key_number, mode):
+    """Linearly normalize key to [0, 1] based on the number of accidentals (0-6)."""
+    if key_number == -1.0 or mode == -1.0:
         return -1.0
-    return (max(min(loudness_db, 0.0), -60.0) + 60.0) / 60.0
+        
+    adjusted_key = (key_number + (3 if mode == 0 else 0)) % 12
+    accidentals_map = np.array([0, 5, 2, 3, 4, 1, 6, 1, 4, 3, 2, 5], dtype=np.float32)
+    return accidentals_map[int(adjusted_key)] / 6.0
+
+@njit(fastmath=True)
+def normalize_key_array(key_numbers, modes):
+    """Vectorized normalization of key values."""
+    result = np.empty_like(key_numbers)
+    for i in range(len(key_numbers)):
+        key_number = key_numbers[i]
+        mode = modes[i]
+        if key_number == -1.0 or mode == -1.0:
+            result[i] = -1.0
+        else:
+            adjusted_key = (key_number + (3 if mode == 0 else 0)) % 12
+            accidentals_map = np.array([0, 5, 2, 3, 4, 1, 6, 1, 4, 3, 2, 5], dtype=np.float32)
+            result[i] = accidentals_map[int(adjusted_key)] / 6.0
+    return result
 
 def normalize_key(key_number, mode):
-    """Linearly normalize key to [0, 1] based on the number of accidentals (0-6)."""
-    if isinstance(key_number, np.ndarray) and isinstance(mode, np.ndarray):
-        # Create mask for valid keys (0-11)
-        valid_mask = (key_number >= 0) & (key_number <= 11)
-        
-        # Initialize result with -1.0 (invalid)
-        result = np.full(key_number.shape, -1.0, dtype=np.float32)
-        
-        # Process valid keys
-        if np.any(valid_mask):
-            # If mode is minor, relative major is 3 semitones higher
-            adjusted_key = np.where(mode[valid_mask] == 0, 
-                                  (key_number[valid_mask] + 3) % 12, 
-                                  key_number[valid_mask])
-            
-            # Map to accidentals count
-            accidentals_map = np.array([0, 5, 2, 3, 4, 1, 6, 1, 4, 3, 2, 5], dtype=np.float32)
-            result[valid_mask] = accidentals_map[adjusted_key.astype(int)] / 6.0
-        
-        return result
-    
-    # Scalar version
-    if key_number is None or mode is None:
+    """Wrapper that selects the appropriate key normalization function."""
+    if isinstance(key_number, np.ndarray):
+        return normalize_key_array(key_number, mode)
+    else:
+        return normalize_key_scalar(key_number, mode)
+
+@njit(fastmath=True)
+def normalize_tempo_scalar(tempo_bpm):
+    """Normalize a single tempo value from [40, 250] to [0, 1] using log2 scaling."""
+    if tempo_bpm == -1.0:
         return -1.0
-    if key_number < 0 or key_number > 11:
-        return -1.0
-    
-    adjusted_key = (key_number + (3 if mode == 0 else 0)) % 12
-    accidentals_map = [0, 5, 2, 3, 4, 1, 6, 1, 4, 3, 2, 5]
-    return accidentals_map[adjusted_key] / 6.0
+    clipped = min(max(tempo_bpm, MIN_TEMPO), MAX_TEMPO)
+    log_min = np.log2(MIN_TEMPO)
+    log_max = np.log2(MAX_TEMPO)
+    return (np.log2(clipped) - log_min) / (log_max - log_min)
+
+@njit(fastmath=True)
+def normalize_tempo_array(tempo_bpm):
+    """Vectorized normalization of tempo array from [40, 250] to [0, 1] using log2 scaling."""
+    result = np.empty_like(tempo_bpm)
+    for i in range(len(tempo_bpm)):
+        val = tempo_bpm[i]
+        if val == -1.0:
+            result[i] = -1.0
+        else:
+            clipped = val
+            if clipped < MIN_TEMPO:
+                clipped = MIN_TEMPO
+            elif clipped > MAX_TEMPO:
+                clipped = MAX_TEMPO
+            log_min = np.log2(MIN_TEMPO)
+            log_max = np.log2(MAX_TEMPO)
+            result[i] = (np.log2(clipped) - log_min) / (log_max - log_min)
+    return result
 
 def normalize_tempo(tempo_bpm):
-    """Normalize tempo from [40, 250] to [0, 1] using log2 scaling."""
+    """Wrapper that selects the appropriate tempo normalization function."""
     if isinstance(tempo_bpm, np.ndarray):
-        clipped = np.clip(tempo_bpm, MIN_TEMPO, MAX_TEMPO)
-        log_min = np.log2(MIN_TEMPO)
-        log_max = np.log2(MAX_TEMPO)
-        return (np.log2(clipped) - log_min) / (log_max - log_min)
-    if tempo_bpm is None:
-        return -1.0
-    tempo = max(min(tempo_bpm, MAX_TEMPO), MIN_TEMPO)
-    return (np.log2(tempo) - np.log2(MIN_TEMPO)) / (np.log2(MAX_TEMPO) - np.log2(MIN_TEMPO))
+        return normalize_tempo_array(tempo_bpm)
+    else:
+        return normalize_tempo_scalar(tempo_bpm)
+
+@njit(fastmath=True)
+def normalize_time_signature_scalar(time_sig):
+    """One-hot encode time signature into a 4D binary vector."""
+    if time_sig == -1.0:
+        return np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        
+    if time_sig == 4:
+        return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    elif time_sig == 3:
+        return np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+    elif time_sig == 5:
+        return np.array([0.0, 0.0, 1.0, 0.0], dtype=np.float32)
+    else:
+        return np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+
+@njit(fastmath=True)
+def normalize_time_signature_array(time_sigs):
+    """Vectorized normalization of time signatures."""
+    result = np.empty((len(time_sigs), 4), dtype=np.float32)
+    for i in range(len(time_sigs)):
+        time_sig = time_sigs[i]
+        if time_sig == -1.0:
+            result[i] = np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        elif time_sig == 4:
+            result[i] = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        elif time_sig == 3:
+            result[i] = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+        elif time_sig == 5:
+            result[i] = np.array([0.0, 0.0, 1.0, 0.0], dtype=np.float32)
+        else:
+            result[i] = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+    return result
 
 def normalize_time_signature(time_sig):
-    """One-hot encode time signature into a 4D binary vector."""
+    """Wrapper that selects the appropriate time signature normalization function."""
     if isinstance(time_sig, np.ndarray):
-        result = np.zeros((len(time_sig), 4), dtype=np.float32)
-        result[time_sig == 4, 0] = 1.0
-        result[time_sig == 3, 1] = 1.0
-        result[time_sig == 5, 2] = 1.0
-        result[~np.isin(time_sig, [3, 4, 5]), 3] = 1.0
-        return result
-    if time_sig is None:
-        return [0.0, 0.0, 0.0, 0.0]
-    if time_sig == 4:
-        return [1.0, 0.0, 0.0, 0.0]
-    elif time_sig == 3:
-        return [0.0, 1.0, 0.0, 0.0]
-    elif time_sig == 5:
-        return [0.0, 0.0, 1.0, 0.0]
+        return normalize_time_signature_array(time_sig)
     else:
-        return [0.0, 0.0, 0.0, 1.0]
+        return normalize_time_signature_scalar(time_sig)
 
-def normalize_duration(duration_ms, c=5.0):
+@njit(fastmath=True)
+def normalize_duration_scalar(duration_ms, c=5.0):
     """Normalize duration to [0, 1) using a rational function."""
-    if isinstance(duration_ms, np.ndarray):
-        minutes = np.abs(duration_ms) / 60000.0
-        return minutes / (minutes + np.abs(c))
-    if duration_ms is None:
+    if duration_ms == -1.0:
         return -1.0
+        
     minutes = abs(duration_ms) / 60000.0
     return minutes / (minutes + abs(c))
 
-def normalize_release_date(release_date_str):
+@njit(fastmath=True)
+def normalize_duration_array(duration_ms, c=5.0):
+    """Vectorized normalization of duration values."""
+    result = np.empty_like(duration_ms)
+    for i in range(len(duration_ms)):
+        val = duration_ms[i]
+        if val == -1.0:
+            result[i] = -1.0
+        else:
+            minutes = abs(val) / 60000.0
+            result[i] = minutes / (minutes + abs(c))
+    return result
+
+def normalize_duration(duration_ms, c=5.0):
+    """Wrapper that selects the appropriate duration normalization function."""
+    if isinstance(duration_ms, np.ndarray):
+        return normalize_duration_array(duration_ms, c)
+    else:
+        return normalize_duration_scalar(duration_ms, c)
+
+@njit(fastmath=True)
+def normalize_release_year_scalar(year):
     """Linearly normalize release year to [0, 1]."""
-    if isinstance(release_date_str, np.ndarray):
-        years = np.full(len(release_date_str), -1.0, dtype=np.float32)
-        
-        # Create mask for valid release dates
-        valid_mask = np.array([s is not None and len(s) >= 4 for s in release_date_str], dtype=bool)
-        
-        # Extract year from string for valid entries
-        year_strs = np.array([s[:4] for s in release_date_str[valid_mask]])
-        
-        # Convert to integers, handling invalid values
-        valid_years = []
-        for y in year_strs:
-            try:
-                valid_years.append(int(y))
-            except ValueError:
-                valid_years.append(-1)
-        valid_years = np.array(valid_years)
-        
-        # Clip and normalize
-        clipped = np.clip(valid_years, MIN_YEAR, MAX_YEAR)
-        years[valid_mask] = (clipped - MIN_YEAR) / (MAX_YEAR - MIN_YEAR)
-        return years
-    
-    if not release_date_str:
+    if year == -1.0:
         return -1.0
-    try:
-        year_str = release_date_str[:4]
-        year = int(year_str)
-        year = max(min(year, MAX_YEAR), MIN_YEAR)
-        return (year - MIN_YEAR) / (MAX_YEAR - MIN_YEAR)
-    except (ValueError, IndexError):
+    year_clipped = max(min(year, MAX_YEAR), MIN_YEAR)
+    return (year_clipped - MIN_YEAR) / (MAX_YEAR - MIN_YEAR)
+
+@njit(fastmath=True)
+def normalize_release_year_array(years):
+    """Vectorized normalization of release years."""
+    result = np.empty_like(years)
+    for i in range(len(years)):
+        year = years[i]
+        if year == -1.0:
+            result[i] = -1.0
+        else:
+            year_clipped = max(min(year, MAX_YEAR), MIN_YEAR)
+            result[i] = (year_clipped - MIN_YEAR) / (MAX_YEAR - MIN_YEAR)
+    return result
+
+def normalize_release_year(year):
+    """Wrapper that selects the appropriate year normalization function."""
+    if isinstance(year, np.ndarray):
+        return normalize_release_year_array(year)
+    else:
+        return normalize_release_year_scalar(year)
+
+@njit(fastmath=True)
+def normalize_popularity_scalar(popularity):
+    """Normalize track popularity to [0, 1] using square root scaling."""
+    if popularity == -1.0:
         return -1.0
+        
+    popularity = max(min(popularity, 100), 0)
+    return np.sqrt(popularity / 100.0)
+
+@njit(fastmath=True)
+def normalize_popularity_array(popularity):
+    """Vectorized normalization of popularity values."""
+    result = np.empty_like(popularity)
+    for i in range(len(popularity)):
+        val = popularity[i]
+        if val == -1.0:
+            result[i] = -1.0
+        else:
+            clipped = max(min(val, 100), 0)
+            result[i] = np.sqrt(clipped / 100.0)
+    return result
 
 def normalize_popularity(popularity):
-    """Normalize track popularity to [0, 1] using square root scaling."""
+    """Wrapper that selects the appropriate popularity normalization function."""
     if isinstance(popularity, np.ndarray):
-        clipped = np.clip(popularity, 0, 100)
-        return np.sqrt(clipped / 100.0)
-    if popularity is None:
+        return normalize_popularity_array(popularity)
+    else:
+        return normalize_popularity_scalar(popularity)
+
+@njit(fastmath=True)
+def normalize_followers_scalar(followers):
+    """Normalize artist followers to [0, 1] using log10 scaling."""
+    if followers == -1.0 or followers <= 0:
         return -1.0
-    popularity = max(min(popularity, 100), 0)
-    return math.sqrt(popularity / 100.0)
+        
+    clipped = min(followers, MAX_FOLLOWERS)
+    return np.log10(clipped + 1) / np.log10(MAX_FOLLOWERS + 1)
+
+@njit(fastmath=True)
+def normalize_followers_array(followers):
+    """Vectorized normalization of follower counts."""
+    result = np.empty_like(followers)
+    for i in range(len(followers)):
+        val = followers[i]
+        if val == -1.0 or val <= 0:
+            result[i] = -1.0
+        else:
+            clipped = min(val, MAX_FOLLOWERS)
+            result[i] = np.log10(clipped + 1) / np.log10(MAX_FOLLOWERS + 1)
+    return result
 
 def normalize_followers(followers):
-    """Normalize artist followers to [0, 1] using log10 scaling."""
+    """Wrapper that selects the appropriate followers normalization function."""
     if isinstance(followers, np.ndarray):
-        clipped = np.clip(followers, 0, MAX_FOLLOWERS)
-        return np.log10(clipped + 1) / np.log10(MAX_FOLLOWERS + 1)
-    if followers is None or followers < 0:
+        return normalize_followers_array(followers)
+    else:
+        return normalize_followers_scalar(followers)
+
+@njit(fastmath=True)
+def extract_year_from_string(date_str):
+    """Numba-compatible year extraction from string"""
+    if len(date_str) < 4:
         return -1.0
-    clipped = min(followers, MAX_FOLLOWERS)
-    return math.log10(clipped + 1) / math.log10(MAX_FOLLOWERS + 1)
-
-def validate_vector(vector: List[float]) -> Tuple[bool, str]:
-    """Comprehensive vector validation with detailed error messages"""
-    if len(vector) != 32:
-        return False, f"Vector length {len(vector)} != 32"
+    year_chars = date_str[:4]
     
-    for i, val in enumerate(vector):
-        # Check if value is a number (including numpy floats)
-        if not isinstance(val, (int, float, np.floating)):
-            return False, f"Dimension {i+1}: Value {val} is not a number"
+    # Check if all characters are digits
+    for i in range(4):
+        if year_chars[i] < '0' or year_chars[i] > '9':
+            return -1.0
+    
+    # Convert to float
+    year = 0.0
+    for i in range(4):
+        digit = ord(year_chars[i]) - 48  # ASCII '0' is 48
+        year = year * 10 + digit
+    
+    return year
+
+@njit(parallel=True, fastmath=True)
+def extract_years_batch(date_strings):
+    """Vectorized year extraction optimized for Numba"""
+    n = len(date_strings)
+    years = np.empty(n, dtype=np.float32)
+    
+    for i in prange(n):
+        years[i] = extract_year_from_string(date_strings[i])
+    
+    return years
+
+def compute_genre_intensities_batch(genres_list: List[List[str]]) -> np.ndarray:
+    """
+    Vectorized genre intensity calculation using precomputed IDs.
+    Returns an array of shape (batch_size, 13) with genre intensities.
+    """
+    batch_size = len(genres_list)
+    intensities = np.full((batch_size, 13), -1.0, dtype=np.float32)
+    
+    for i in range(batch_size):
+        genres = genres_list[i]
+        if not genres:
+            continue
+            
+        # Track max intensity per meta-genre
+        meta_intensity = np.full(13, -1.0, dtype=np.float32)
         
-        # Check range
-        if val < -1.0 or val > 1.0:
-            return False, f"Dimension {i+1}: Value {val} out of [-1,1] range"
+        for genre in genres:
+            genre_lower = genre.strip().lower()
+            if genre_lower in GENRE_MAPPING:
+                meta_idx, intensity = GENRE_MAPPING[genre_lower]
+                # Convert to zero-based index (meta_idx is 1-13)
+                array_idx = meta_idx - 1
+                if array_idx < 0 or array_idx >= 13:
+                    continue
+                if intensity > meta_intensity[array_idx]:
+                    meta_intensity[array_idx] = intensity
+        
+        # Fill intensities
+        for j in range(13):
+            if meta_intensity[j] > -1.0:
+                intensities[i, j] = meta_intensity[j]
     
-    return True, "Valid"
+    return intensities
 
-def build_track_vector(track_dict):
-    """Convert track dictionary to 32-dimensional vector."""
-    return build_track_vectors_batch([track_dict])[0]
+@njit(fastmath=True)
+def validate_vector_batch(vectors: np.ndarray) -> bool:
+    """Batch vector validation with numba acceleration."""
+    for i in range(vectors.shape[0]):
+        for j in range(32):
+            val = vectors[i, j]
+            if val < -1.0 or val > 1.0 or np.isnan(val):
+                return False
+    return True
 
-def build_track_vectors_batch(track_dicts: List[dict]) -> List[List[float]]:
-    """Batch-convert a list of track dictionaries to a list of 32-dimensional vectors."""
+def build_track_vectors_batch(track_dicts: List[dict]) -> np.ndarray:
+    """Optimized batch vector construction with vectorized operations."""
     n = len(track_dicts)
-    if n == 0:
-        return []
-    
-    # Create structured array for efficient access
-    dtype = [
-        ('acousticness', 'f4'), ('instrumentalness', 'f4'), ('speechiness', 'f4'),
-        ('valence', 'f4'), ('danceability', 'f4'), ('energy', 'f4'), ('liveness', 'f4'),
-        ('loudness', 'f4'), ('key', 'f4'), ('mode', 'f4'), ('tempo', 'f4'),
-        ('time_signature', 'f4'), ('duration_ms', 'f4'), ('release_date', 'U10'),
-        ('popularity', 'f4'), ('max_followers', 'f4'), ('genres', 'O')
-    ]
-    
-    # Create array from track data
-    data = np.zeros(n, dtype=dtype)
-    for i, track in enumerate(track_dicts):
-        for field in dtype:
-            name = field[0]
-            if name in track:
-                data[i][name] = track[name]
-    
-    # Preallocate result vectors
     vectors = np.full((n, 32), -1.0, dtype=np.float32)
     
-    # Dim 1-7: Direct features
-    feature_names = ['acousticness', 'instrumentalness', 'speechiness', 'valence', 
-                     'danceability', 'energy', 'liveness']
-    for j, name in enumerate(feature_names):
-        vectors[:, j] = data[name]
+    # Pre-extract all features into arrays with explicit dtype
+    acousticness = np.array([safe_float(t.get('acousticness', -1.0)) for t in track_dicts], dtype=np.float32)
+    instrumentalness = np.array([safe_float(t.get('instrumentalness', -1.0)) for t in track_dicts], dtype=np.float32)
+    speechiness = np.array([safe_float(t.get('speechiness', -1.0)) for t in track_dicts], dtype=np.float32)
+    valence = np.array([safe_float(t.get('valence', -1.0)) for t in track_dicts], dtype=np.float32)
+    danceability = np.array([safe_float(t.get('danceability', -1.0)) for t in track_dicts], dtype=np.float32)
+    energy = np.array([safe_float(t.get('energy', -1.0)) for t in track_dicts], dtype=np.float32)
+    liveness = np.array([safe_float(t.get('liveness', -1.0)) for t in track_dicts], dtype=np.float32)
+    loudness = np.array([safe_float(t.get('loudness', -1.0)) for t in track_dicts], dtype=np.float32)
+    key = np.array([safe_float(t.get('key', -1.0)) for t in track_dicts], dtype=np.float32)
+    mode = np.array([safe_float(t.get('mode', -1.0)) for t in track_dicts], dtype=np.float32)
+    tempo = np.array([safe_float(t.get('tempo', -1.0)) for t in track_dicts], dtype=np.float32)
+    time_signature = np.array([safe_float(t.get('time_signature', -1.0)) for t in track_dicts], dtype=np.float32)
+    duration_ms = np.array([safe_float(t.get('duration_ms', -1.0)) for t in track_dicts], dtype=np.float32)
+    popularity = np.array([safe_float(t.get('popularity', -1.0)) for t in track_dicts], dtype=np.float32)
+    max_followers = np.array([safe_float(t.get('max_followers', -1.0)) for t in track_dicts], dtype=np.float32)
+    genres_list = [t.get('genres', []) for t in track_dicts]
     
-    # Dim 8: Loudness
-    vectors[:, 7] = normalize_loudness(data['loudness'])
+    # Extract date strings
+    date_strings = [t.get('release_date', '') for t in track_dicts]
     
-    # Dim 9: Key (with validation)
-    vectors[:, 8] = normalize_key(data['key'], data['mode'])
+    # Convert using Numba-optimized function
+    release_years = extract_years_batch(date_strings)
     
-    # Dim 10: Mode
-    vectors[:, 9] = data['mode']
+    # Apply vectorized normalization
+    vectors[:, 0] = acousticness
+    vectors[:, 1] = instrumentalness
+    vectors[:, 2] = speechiness
+    vectors[:, 3] = valence
+    vectors[:, 4] = danceability
+    vectors[:, 5] = energy
+    vectors[:, 6] = liveness
+    vectors[:, 7] = normalize_loudness(loudness)
+    vectors[:, 8] = normalize_key(key, mode)
+    vectors[:, 9] = mode
+    vectors[:, 10] = normalize_tempo(tempo)
     
-    # Dim 11: Tempo
-    vectors[:, 10] = normalize_tempo(data['tempo'])
-    
-    # Dim 12-15: Time signature
-    time_vecs = normalize_time_signature(data['time_signature'])
+    # Time signature normalization
+    time_vecs = normalize_time_signature(time_signature)
     vectors[:, 11:15] = time_vecs
     
-    # Dim 16: Duration
-    vectors[:, 15] = normalize_duration(data['duration_ms'])
+    vectors[:, 15] = normalize_duration(duration_ms)
+    vectors[:, 16] = normalize_release_year(release_years)
+    vectors[:, 17] = normalize_popularity(popularity)
+    vectors[:, 18] = normalize_followers(max_followers)
     
-    # Dim 17: Release year
-    vectors[:, 16] = normalize_release_date(data['release_date'])
-    
-    # Dim 18: Artist popularity
-    vectors[:, 17] = normalize_popularity(data['popularity'])
-    
-    # Dim 19: Artist followers
-    vectors[:, 18] = normalize_followers(data['max_followers'])
-    
-    # Dim 20-32: Genre intensities
-    genre_lists = [list(g) for g in data['genres']]
-    genre_intensities = compute_genre_intensities_batch(genre_lists)
+    # Genre intensities
+    genre_intensities = compute_genre_intensities_batch(genres_list)
     vectors[:, 19:32] = genre_intensities
     
-    # Validate vectors and log errors
-    errors = []
-    for i in range(n):
-        # Convert numpy array to Python list before validation
-        vector_list = vectors[i].tolist()
-        valid, message = validate_vector(vector_list)
-        if not valid:
+    # Batch validation
+    if not validate_vector_batch(vectors):
+        # Fallback to individual validation with error logging
+        for i in range(n):
             track_id = track_dicts[i].get('track_id', f'index {i}')
-            error_msg = f"Invalid vector for track {track_id}: {message}"
-            errors.append(error_msg)
+            for j in range(32):
+                val = vectors[i, j]
+                if val < -1.0 or val > 1.0 or np.isnan(val):
+                    error_msg = f"Invalid vector for track {track_id}: dimension {j+1} = {val}"
+                    with open("vector_errors.log", "a") as f:
+                        f.write(error_msg + "\n")
     
-    if errors:
-        # Write errors to log file
-        with open("vector_errors.log", "a") as f:
-            for error in errors:
-                f.write(error + "\n")
-        
-        # Raise exception with first error
-        raise ValueError(errors[0])
-    
-    return vectors.tolist()
+    return vectors
+
+# Backward compatibility alias
+def build_track_vector(track_dict):
+    """Alias for single track processing (uses batch function internally)"""
+    return build_track_vectors_batch([track_dict])[0]

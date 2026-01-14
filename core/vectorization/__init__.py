@@ -2,7 +2,7 @@
 """
 Vectorization Package
 """
-from .track_vectorizer import build_track_vector
+from .track_vectorizer import build_track_vectors_batch
 from .genre_mapper import load_genre_mapping, compute_genre_intensities
 from .canonical_track_resolver import (
     TrackResolver,
@@ -14,7 +14,7 @@ from .canonical_track_resolver import (
 )
 
 __all__ = [
-    'build_track_vector',
+    'build_track_vectors_batch',
     'load_genre_mapping',
     'compute_genre_intensities',
     'TrackResolver',

@@ -5,7 +5,7 @@ import math
 from collections import deque
 
 class ProgressTracker:
-    """Progress tracker with reliable two-line display."""
+    """Accurate progress tracker with batch timing"""
     
     def __init__(self, total_items, bar_width=50):
         """
@@ -18,18 +18,32 @@ class ProgressTracker:
         self.total = total_items
         self.processed = 0
         self.start_time = time.time()
+        self.batch_start_time = self.start_time
         self.bar_width = bar_width
         self.last_update = self.start_time
         self.last_processed = 0
-        self.speed_history = deque(maxlen=20)  # Last 20 speed measurements
-        self.eta_history = deque(maxlen=10)    # Last 10 ETA calculations
-        self.last_speed = 0
-        self.last_eta = ""
+        self.speed_history = deque(maxlen=20)
+        self.eta_history = deque(maxlen=10)
+        self.batch_times = deque(maxlen=100)
         self.display_started = False
     
+    def start_batch(self):
+        """Mark the start of a new batch"""
+        self.batch_start_time = time.time()
+    
+    def end_batch(self, count):
+        """Mark the end of a batch and update progress"""
+        batch_time = time.time() - self.batch_start_time
+        self.batch_times.append(batch_time)
+        self.update(count)
+    
     def update(self, count=1):
-        """Update progress and display if needed."""
-        self.processed += count
+        """Update progress and display if needed"""
+        # Prevent overcounting by ensuring we don't exceed total
+        remaining = self.total - self.processed
+        actual_count = min(count, remaining)
+        
+        self.processed += actual_count
         
         # Only update display periodically
         current_time = time.time()
@@ -47,28 +61,28 @@ class ProgressTracker:
             filled = int(self.bar_width * percent)
             bar = '█' * filled + '░' * (self.bar_width - filled)
             
-            # Calculate current speed
-            current_speed = (self.processed - self.last_processed) / (time.time() - self.last_update)
-            self.speed_history.append(current_speed)
-            
-            # Calculate rolling average speed
-            if self.speed_history:
-                avg_speed = sum(self.speed_history) / len(self.speed_history)
+            # Calculate current speed based on batch times
+            if self.batch_times:
+                # Use average of last 10 batch times
+                recent_times = list(self.batch_times)[-10:]
+                avg_batch_time = sum(recent_times) / len(recent_times)
+                current_speed = actual_count / avg_batch_time if avg_batch_time > 0 else 0
             else:
-                avg_speed = current_speed
+                total_time = current_time - self.start_time
+                current_speed = self.processed / total_time if total_time > 0 else 0
             
             # Format speed
-            if avg_speed > 1000000:
-                speed_str = f"{avg_speed/1000000:.1f}M vec/s"
-            elif avg_speed > 1000:
-                speed_str = f"{avg_speed/1000:.1f}K vec/s"
+            if current_speed > 1000000:
+                speed_str = f"{current_speed/1000000:.1f}M vec/s"
+            elif current_speed > 1000:
+                speed_str = f"{current_speed/1000:.1f}K vec/s"
             else:
-                speed_str = f"{int(avg_speed)} vec/s"
+                speed_str = f"{int(current_speed)} vec/s"
             
             # Calculate ETA
-            if percent > 0.01 and avg_speed > 0:
+            if percent > 0.01 and current_speed > 0:
                 remaining = self.total - self.processed
-                eta_seconds = remaining / avg_speed
+                eta_seconds = remaining / current_speed
                 self.eta_history.append(eta_seconds)
                 
                 # Use median of last 10 ETAs
