@@ -168,6 +168,7 @@ class DatabaseReader:
             enriched_batch = []
             for i in range(len(track_ids)):
                 track_data = {
+                    'rowid': rowids[i],
                     'track_id': track_ids[i],
                     'external_id_isrc': isrcs[i],
                     'duration_ms': durations[i],
@@ -286,10 +287,11 @@ class PreprocessingEngine:
             return True
         
         # Initialize progress tracker
-        progress = ProgressTracker(self.total_vectors)
+        resume_from = 0
+        progress = ProgressTracker(self.total_vectors, initial_processed=resume_from)
+        progress.batch_size = self.vector_batch_size
         
         # Resume from checkpoint if available
-        resume_from = 0
         if checkpoint_path.exists():
             try:
                 with open(checkpoint_path, "r") as f:
@@ -300,6 +302,7 @@ class PreprocessingEngine:
                 print("\n  ⚠️  Corrupted checkpoint file, starting from beginning")
         
         # Initialize profiling
+        last_profile_count = resume_from
         if self.enable_profiling:
             print(f"  🔍 Performance profiling enabled (every {self.profile_interval:,} vectors)")
             self.profiler = cProfile.Profile()
@@ -311,24 +314,18 @@ class PreprocessingEngine:
                 with DatabaseReader(self.main_db_path, self.audio_db_path) as db_reader:
                     # Process in streaming batches
                     for batch in db_reader.stream_tracks(self.batch_size, resume_from):
-                        # Skip batches before resume point
-                        if resume_from > 0:
-                            batch_start = batch[0]['rowid']
-                            if batch_start < resume_from:
-                                continue
-                        
                         # Process vector batches
                         for i in range(0, len(batch), self.vector_batch_size):
                             vector_batch = batch[i:i+self.vector_batch_size]
                             
-                            # Build vectors
+                            # Build vectors for this batch
                             vectors = build_track_vectors_batch(vector_batch)
                             
-                            # Write vectors
-                            for track_data, vector in zip(vector_batch, vectors):
+                            # Write vectors - use enumerate to get proper index
+                            for j, track_data in enumerate(vector_batch):
                                 writer.write_record(
                                     track_data['track_id'], 
-                                    vector,
+                                    vectors[j],  # Use j instead of i
                                     track_data.get('external_id_isrc', ''),
                                     get_region_from_isrc(track_data.get('external_id_isrc', ''))
                                 )
@@ -338,9 +335,10 @@ class PreprocessingEngine:
                             progress.update(processed_count)
                             resume_from += processed_count
                             
-                            # Save checkpoint
+                            # Save checkpoint using last rowid
+                            last_rowid = vector_batch[-1]['rowid']
                             with open(checkpoint_path, "w") as f:
-                                f.write(str(resume_from))
+                                f.write(str(last_rowid))
                         
                         # Explicit profiling checkpoint
                         if self.enable_profiling:

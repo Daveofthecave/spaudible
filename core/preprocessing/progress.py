@@ -1,55 +1,53 @@
 # core/preprocessing/progress.py
 import time
 import sys
-import math
 from collections import deque
 
 class ProgressTracker:
-    """Accurate progress tracker with batch timing"""
+    """Stable progress tracker with adaptive smoothing"""
     
-    def __init__(self, total_items, bar_width=50):
+    def __init__(self, total_items, bar_width=50, initial_processed=0):
         """
         Initialize progress tracker.
         
         Args:
             total_items: Total number of items to process
             bar_width: Width of progress bar in characters
+            initial_processed: Initial count of processed items
         """
         self.total = total_items
-        self.processed = 0
+        self.processed = initial_processed
         self.start_time = time.time()
-        self.batch_start_time = self.start_time
+        self.last_update_time = self.start_time
+        self.last_processed = initial_processed
         self.bar_width = bar_width
-        self.last_update = self.start_time
-        self.last_processed = 0
-        self.speed_history = deque(maxlen=20)
-        self.eta_history = deque(maxlen=10)
-        self.batch_times = deque(maxlen=100)
         self.display_started = False
-    
-    def start_batch(self):
-        """Mark the start of a new batch"""
-        self.batch_start_time = time.time()
-    
-    def end_batch(self, count):
-        """Mark the end of a batch and update progress"""
-        batch_time = time.time() - self.batch_start_time
-        self.batch_times.append(batch_time)
-        self.update(count)
+        self.initial_processed = initial_processed
+        
+        # Time-windowed speed calculation
+        self.time_window = 30.0  # seconds
+        self.speed_data = deque()
+        self.min_data_time = 10.0  # minimum seconds of data to show speed
+        self.last_valid_speed = None
+        self.smoothed_speed = None
+        self.last_speed_time = time.time()
     
     def update(self, count=1):
-        """Update progress and display if needed"""
-        # Prevent overcounting by ensuring we don't exceed total
-        remaining = self.total - self.processed
-        actual_count = min(count, remaining)
+        """Update progress with accurate timing"""
+        self.processed += count
         
-        self.processed += actual_count
-        
-        # Only update display periodically
         current_time = time.time()
-        elapsed_since_update = current_time - self.last_update
         
-        # Update at least every 0.5 seconds or 50k items
+        # Always record data point for speed calculation
+        self.speed_data.append((current_time, self.processed))
+        
+        # Remove data points outside our time window
+        while self.speed_data and current_time - self.speed_data[0][0] > self.time_window:
+            self.speed_data.popleft()
+        
+        elapsed_since_update = current_time - self.last_update_time
+        
+        # Update display at least every 0.5 seconds or 50k items
         if elapsed_since_update >= 0.5 or (self.processed - self.last_processed) >= 50000:
             if not self.display_started:
                 # Start the display for the first time
@@ -61,36 +59,59 @@ class ProgressTracker:
             filled = int(self.bar_width * percent)
             bar = '█' * filled + '░' * (self.bar_width - filled)
             
-            # Calculate current speed based on batch times
-            if self.batch_times:
-                # Use average of last 10 batch times
-                recent_times = list(self.batch_times)[-10:]
-                avg_batch_time = sum(recent_times) / len(recent_times)
-                current_speed = actual_count / avg_batch_time if avg_batch_time > 0 else 0
-            else:
-                total_time = current_time - self.start_time
-                current_speed = self.processed / total_time if total_time > 0 else 0
+            # Initialize speed and ETA display
+            speed_str = "--"
+            eta_str = "--"
+            current_speed = None
             
-            # Format speed
-            if current_speed > 1000000:
-                speed_str = f"{current_speed/1000000:.1f}M vec/s"
-            elif current_speed > 1000:
-                speed_str = f"{current_speed/1000:.1f}K vec/s"
-            else:
-                speed_str = f"{int(current_speed)} vec/s"
-            
-            # Calculate ETA
-            if percent > 0.01 and current_speed > 0:
-                remaining = self.total - self.processed
-                eta_seconds = remaining / current_speed
-                self.eta_history.append(eta_seconds)
+            # Calculate current speed if we have sufficient data
+            if len(self.speed_data) > 1:
+                oldest_time, oldest_count = self.speed_data[0]
+                newest_time, newest_count = self.speed_data[-1]
+                time_delta = newest_time - oldest_time
                 
-                # Use median of last 10 ETAs
-                sorted_etas = sorted(self.eta_history)
-                median_eta = sorted_etas[len(sorted_etas) // 2]
-                eta_str = self._format_hours_minutes(median_eta)
+                if time_delta >= self.min_data_time:
+                    vectors_delta = newest_count - oldest_count
+                    current_speed = vectors_delta / time_delta
+                    self.last_valid_speed = current_speed
+            
+            # Apply exponential smoothing
+            if current_speed is not None:
+                # Calculate time since last speed update
+                time_since_last = current_time - self.last_speed_time
+                
+                # Adaptive smoothing factor based on time elapsed
+                # More smoothing for rapid updates, less for slower updates
+                smoothing_factor = min(0.9, 0.7 * (1 + time_since_last))
+                
+                if self.smoothed_speed is None:
+                    self.smoothed_speed = current_speed
+                else:
+                    # Apply exponential smoothing
+                    self.smoothed_speed = (smoothing_factor * self.smoothed_speed + 
+                                          (1 - smoothing_factor) * current_speed)
+                
+                self.last_speed_time = current_time
+                display_speed = self.smoothed_speed
+            elif self.last_valid_speed is not None:
+                display_speed = self.last_valid_speed
             else:
-                eta_str = "--"
+                display_speed = None
+            
+            # Format speed if available
+            if display_speed is not None:
+                if display_speed > 1000000:
+                    speed_str = f"{display_speed/1000000:.2f}M vec/s"
+                elif display_speed > 1000:
+                    speed_str = f"{display_speed/1000:.1f}K vec/s"
+                elif display_speed > 0:
+                    speed_str = f"{int(display_speed)} vec/s"
+                
+                # Calculate ETA based on current speed
+                if display_speed > 0 and percent > 0.01:
+                    remaining_vectors = self.total - self.processed
+                    eta_seconds = remaining_vectors / display_speed
+                    eta_str = self._format_hours_minutes(eta_seconds)
             
             # Format processed count
             processed_m = self._format_millions(self.processed)
@@ -103,7 +124,8 @@ class ProgressTracker:
             # Move cursor up 2 lines for next update
             sys.stdout.write("\033[2A")
             
-            self.last_update = current_time
+            # Reset counters
+            self.last_update_time = current_time
             self.last_processed = self.processed
     
     def _format_millions(self, number):
@@ -117,9 +139,9 @@ class ProgressTracker:
         minutes = (seconds % 3600) // 60
         
         if hours > 0:
-            return f"{hours}h {minutes:02d}m"
+            return f"{hours}h {minutes:02d}m    "
         else:
-            return f"{minutes}m"
+            return f"{minutes}m    "
     
     def complete(self):
         """Display completion message."""
@@ -135,7 +157,7 @@ class ProgressTracker:
         # Format average speed
         avg_speed = self.total / total_time
         if avg_speed > 1000000:
-            speed_str = f"{avg_speed/1000000:.1f}M vec/s"
+            speed_str = f"{avg_speed/1000000:.2f}M vec/s"
         elif avg_speed > 1000:
             speed_str = f"{avg_speed/1000:.1f}K vec/s"
         else:
