@@ -1,57 +1,105 @@
 # core/utilities/setup_validator.py
 import json
 from pathlib import Path
-from config import PathConfig
+from config import PathConfig, EXPECTED_VECTORS
+import os
+import sys
+import shutil
+import struct
+import heapq
+from core.preprocessing.unified_vector_reader import UnifiedVectorReader
+from core.preprocessing.unified_vector_writer import UnifiedVectorWriter  # Add this import
 
 def validate_vector_cache():
-    """Comprehensive validation of vector cache completeness."""
+    """Validate vector cache completeness with exact vector count."""
     vectors_path = PathConfig.get_vector_file()
-    metadata_path = PathConfig.get_metadata_file()
+    index_path = PathConfig.get_index_file()
     
-    # Check file existence
+    # Check vector file existence
     if not vectors_path.exists():
         return False, "Vector file not found"
-    if not metadata_path.exists():
-        return False, "Metadata file not found"
     
     # Validate vector file size
     vector_size = vectors_path.stat().st_size
-    if vector_size % 128 != 0:
-        return False, f"Vector file size {vector_size} not divisible by 128 bytes"
+    header_size = 16
+    record_size = 104
     
-    num_vectors = vector_size // 128
+    if vector_size < header_size:
+        return False, f"Vector file too small: {vector_size} bytes"
     
-    # Validate metadata
+    # Calculate number of vectors from file size
+    num_vectors = (vector_size - header_size) // record_size
+    
+    # Verify exact vector count
+    if num_vectors != EXPECTED_VECTORS:
+        return False, (f"Incorrect vector count: expected {EXPECTED_VECTORS:,}, "
+                      f"got {num_vectors:,}")
+    
+    # Check index file
+    index_exists = index_path.exists()
+    index_valid = False
+    
+    if index_exists:
+        # Validate index file size
+        index_size = index_path.stat().st_size
+        expected_index_size = EXPECTED_VECTORS * 26  # 22B track ID + 4B index
+        
+        # Allow 1% variance
+        if index_size > 0 and abs(index_size - expected_index_size) <= expected_index_size * 0.01:
+            index_valid = True
+    
+    # Return status based on index validity
+    if index_valid:
+        return True, f"Valid vector cache with {num_vectors:,} tracks"
+    else:
+        status = "Vector file complete but index missing" if not index_exists else "Index file incomplete"
+        return False, f"{status} ({num_vectors:,} vectors)"
+
+def rebuild_index():
+    """Robust index file rebuilding with progress reporting."""
+    vectors_path = PathConfig.get_vector_file()
+    index_path = PathConfig.get_index_file()
+    
+    print("\n  🔧 Rebuilding index file...")
+    
     try:
-        with open(metadata_path, 'r') as f:
-            metadata = json.load(f)
+        # Verify vectors file contains exactly EXPECTED_VECTORS
+        reader = UnifiedVectorReader(vectors_path)
+        total_vectors = reader.get_total_vectors()
         
-        metadata_count = metadata.get('total_tracks', 0)
-        if metadata_count <= 0:
-            return False, f"Invalid track count in metadata: {metadata_count}"
-            
-        # Allow 5% variance from metadata claim
-        if abs(num_vectors - metadata_count) > metadata_count * 0.05:
-            return False, (f"Vector count mismatch: file has {num_vectors:,} vectors, "
-                          f"metadata claims {metadata_count:,}")
+        if total_vectors != EXPECTED_VECTORS:
+            print(f"  ❗ Vector file has {total_vectors:,} vectors, expected {EXPECTED_VECTORS:,}")
+            return False
         
-        # Minimum track count threshold (95% of 256M)
-        min_tracks = 256_000_000
-        if metadata_count < min_tracks:
-            return False, (f"Insufficient tracks processed: {metadata_count:,} < {min_tracks:,.0f}")
-            
-        return True, f"Valid vector cache with {metadata_count:,} tracks"
-        
+        # Create temporary writer to handle sorting
+        writer = UnifiedVectorWriter(PathConfig.VECTORS)
+        writer._build_index_from_vectors(vectors_path, index_path)
+        print("  ✅ Index file successfully rebuilt")
+        return True
     except Exception as e:
-        return False, f"Error validating metadata: {str(e)}"
+        print(f"  ❗ Failed to rebuild index: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+    finally:
+        # Clean up any temporary files
+        temp_dir = PathConfig.VECTORS / "temp_index"
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
 
 def is_setup_complete():
-    """Comprehensive check if setup is complete and valid."""
+    """Check if setup is complete and valid."""
     # Check required files exist
-    required_files = PathConfig.all_required_files()
+    required_files = [
+        PathConfig.get_main_db(),
+        PathConfig.get_audio_db(),
+        PathConfig.get_vector_file(),
+        PathConfig.get_index_file()
+    ]
+    
     if not all(file.exists() for file in required_files):
         return False
     
-    # Validate vector cache completeness
+    # Validate vector cache
     valid, _ = validate_vector_cache()
     return valid

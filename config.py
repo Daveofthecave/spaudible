@@ -5,6 +5,7 @@ VRAM_SAFETY_FACTOR = 0.85 # What percentage of available VRAM to use
 VRAM_SCALING_FACTOR_MB = 2**8
 FORCE_CPU_MODE = False
 REGION_FILTER_STRENGTH = 1.0 # 1 = stick to the same region; 0 = any region is fine
+EXPECTED_VECTORS = 256_039_007 # How many tracks are in the database
 
 import os
 from pathlib import Path

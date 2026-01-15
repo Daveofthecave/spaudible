@@ -20,7 +20,7 @@ def check_processing_status():
         expected_tracks = 256_000_000
         actual_tracks = metadata.get('total_tracks', 0)
         
-        if actual_tracks < expected_tracks * 0.95:
+        if actual_tracks < expected_tracks:
             return False, f"Incomplete processing: {actual_tracks:,} tracks"
         
         return True, f"Processing complete: {actual_tracks:,} tracks"

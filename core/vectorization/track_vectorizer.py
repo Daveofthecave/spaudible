@@ -435,6 +435,9 @@ def build_track_vectors_batch(track_dicts: List[dict]) -> np.ndarray:
     genre_intensities = compute_genre_intensities_batch(genres_list)
     vectors[:, 19:32] = genre_intensities
     
+    # Replace any NaNs with -1.0 (sentinel value)
+    vectors = np.where(np.isnan(vectors), -1.0, vectors)
+    
     # Batch validation
     if not validate_vector_batch(vectors):
         # Fallback to individual validation with error logging
