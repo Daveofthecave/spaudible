@@ -29,16 +29,20 @@ class DatabaseReader:
         """Open database connections with optimizations."""
         # Open main database
         self.main_db = sqlite3.connect(self.main_db_path)
-        self.main_db.execute("PRAGMA journal_mode = MEMORY")
+        self.main_db.execute("PRAGMA journal_mode = WAL")
         self.main_db.execute("PRAGMA cache_size = -200000")
         self.main_db.execute("PRAGMA temp_store = MEMORY")
         self.main_db.execute("PRAGMA synchronous = OFF")
         self.main_db.execute("PRAGMA locking_mode = EXCLUSIVE")
+        self.main_db.execute("PRAGMA mmap_size=268435456;")  # 256MB memory map
+        self.main_db.execute("PRAGMA temp_store=MEMORY;")
         
         # Open audio database
         self.audio_db = sqlite3.connect(self.audio_db_path)
-        self.audio_db.execute("PRAGMA journal_mode = MEMORY")
+        self.audio_db.execute("PRAGMA journal_mode = WAL")
         self.audio_db.execute("PRAGMA synchronous = OFF")
+        self.audio_db.execute("PRAGMA mmap_size=268435456;") # 256MB memory map
+        self.audio_db.execute("PRAGMA temp_store=MEMORY;")
         
         # Memory map databases
         self._memory_map_databases()
@@ -189,36 +193,40 @@ class DatabaseReader:
         
         cursor.close()
 
-    def _get_audio_features_bulk(self, track_ids):
-        """Fetch audio features using temporary tables."""
+    def _get_audio_features_bulk(self, track_ids: list) -> dict:
+        """Ultra-optimized audio feature fetching with batched inserts."""
         if not track_ids:
             return {}
         
-        audio_cursor = self.audio_db.cursor()
         audio_features = {}
+        cursor = self.audio_db.cursor()
         
         try:
-            # Create temporary table
-            audio_cursor.execute("CREATE TEMP TABLE tmp_track_ids (track_id TEXT PRIMARY KEY)")
+            # Create temporary table with index
+            cursor.execute("CREATE TEMP TABLE tmp_track_ids (track_id TEXT PRIMARY KEY)")
             
-            # Insert track IDs in batches
+            # Insert in large batches using executemany
             chunk_size = 50000
+            insert_query = "INSERT INTO tmp_track_ids VALUES (?)"
+            
             for i in range(0, len(track_ids), chunk_size):
                 chunk = track_ids[i:i+chunk_size]
-                audio_cursor.executemany("INSERT INTO tmp_track_ids VALUES (?)", [(tid,) for tid in chunk])
+                cursor.executemany(insert_query, [(tid,) for tid in chunk])
             
-            # Join with audio features
-            query = """
-            SELECT t.track_id, af.danceability, af.energy, af.loudness, af.speechiness, 
-                   af.acousticness, af.instrumentalness, af.liveness, af.valence, 
-                   af.tempo, af.time_signature, af.key, af.mode
-            FROM tmp_track_ids t
-            JOIN track_audio_features af ON t.track_id = af.track_id
-            """
-            audio_cursor.execute(query)
+            # Use index hint for efficient join
+            cursor.execute("""
+                SELECT t.track_id, af.danceability, af.energy, af.loudness, af.speechiness, 
+                    af.acousticness, af.instrumentalness, af.liveness, af.valence, 
+                    af.tempo, af.time_signature, af.key, af.mode
+                FROM tmp_track_ids t
+                LEFT JOIN track_audio_features af ON t.track_id = af.track_id
+                /* Use index coverage */
+                WHERE af.track_id IS NOT NULL
+            """)
             
-            for row in audio_cursor.fetchall():
-                audio_features[row[0]] = {
+            # Directly build dictionary without intermediate steps
+            audio_features = {
+                row[0]: {
                     'danceability': row[1],
                     'energy': row[2],
                     'loudness': row[3],
@@ -232,11 +240,12 @@ class DatabaseReader:
                     'key': row[11],
                     'mode': row[12]
                 }
-        
+                for row in cursor.fetchall()
+                if row[1] is not None  # Skip null features
+            }
         finally:
-            # Clean up temporary table
-            audio_cursor.execute("DROP TABLE IF EXISTS tmp_track_ids")
-            audio_cursor.close()
+            cursor.execute("DROP TABLE IF EXISTS tmp_track_ids")
+            cursor.close()
         
         return audio_features
 
