@@ -27,7 +27,7 @@ class UnifiedVectorWriter:
     MAGIC = b"SPAU"  # Spaudible Packed Vector
     
     # Batch size for vector packing
-    WRITE_BATCH_SIZE = 500000
+    WRITE_BATCH_SIZE = 25_000 # Was 500_000
     
     def __init__(self, output_dir: Path, resume_from=0):
         self.output_dir = output_dir
@@ -93,6 +93,52 @@ class UnifiedVectorWriter:
                 print(f"⚠️ Warning: Could not clean up temp directory: {e}")
         
         return False
+
+    def _write_index(self):
+        """Write the temporary index to final index file."""
+        if not self.temp_index_dir.exists():
+            return
+            
+        temp_files = list(self.temp_index_dir.glob("temp_index_*.bin"))
+        if not temp_files:
+            return
+        
+        # Merge all temporary index files
+        combined_path = self.temp_index_dir / "combined_temp_index.bin"
+        with open(combined_path, "wb") as combined:
+            for temp_file in temp_files:
+                with open(temp_file, "rb") as f:
+                    shutil.copyfileobj(f, combined)
+                temp_file.unlink()
+        
+        # Sort and deduplicate index
+        self._sort_index(combined_path, self.index_path)
+        combined_path.unlink()
+
+    def _sort_index(self, input_path: Path, output_path: Path):
+        """Sort temporary index file by track_id for binary search."""
+        records = []
+        
+        # Read all index entries
+        with open(input_path, "rb") as f:
+            while True:
+                tid_bytes = f.read(22)
+                if len(tid_bytes) < 22:
+                    break
+                index_bytes = f.read(4)
+                track_id = tid_bytes.decode('ascii', 'ignore').rstrip('\0')
+                vector_index = struct.unpack("<I", index_bytes)[0]
+                records.append((track_id, vector_index))
+        
+        # Sort by track_id
+        records.sort(key=lambda x: x[0])
+        
+        # Write sorted index
+        with open(output_path, "wb") as f:
+            for track_id, vector_index in records:
+                tid_bytes = track_id.encode('ascii', 'ignore').ljust(22, b'\0')
+                f.write(tid_bytes)
+                f.write(struct.pack("<I", vector_index))
 
     def finalize(self):
         """Finalize processing and merge index files."""
