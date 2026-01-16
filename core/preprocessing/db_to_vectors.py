@@ -9,40 +9,38 @@ import mmap
 import sys
 import cProfile
 import pstats
+import struct
 from core.vectorization.track_vectorizer import build_track_vectors_batch
 from core.preprocessing.unified_vector_writer import UnifiedVectorWriter
 from core.preprocessing.progress import ProgressTracker
 from core.utilities.region_utils import get_region_from_isrc
 
 class DatabaseReader:
-    """Optimized database reader with memory mapping and caching."""
+    """Optimized database reader using direct file access."""
     
     def __init__(self, main_db_path, audio_db_path):
         self.main_db_path = main_db_path
         self.audio_db_path = audio_db_path
         self.main_db = None
         self.audio_db = None
+        self.main_file = None
+        self.audio_file = None
+        self.main_mmap = None
+        self.audio_mmap = None
         self.artist_followers_cache = {}
         self.artist_genres_cache = {}
         
     def __enter__(self):
         """Open database connections with optimizations."""
-        # Open main database
+        # Open main database for metadata
         self.main_db = sqlite3.connect(self.main_db_path)
-        self.main_db.execute("PRAGMA journal_mode = WAL")
-        self.main_db.execute("PRAGMA cache_size = -200000")
-        self.main_db.execute("PRAGMA temp_store = MEMORY")
-        self.main_db.execute("PRAGMA synchronous = OFF")
+        self.main_db.execute("PRAGMA journal_mode = OFF")
         self.main_db.execute("PRAGMA locking_mode = EXCLUSIVE")
-        self.main_db.execute("PRAGMA mmap_size=268435456;")  # 256MB memory map
-        self.main_db.execute("PRAGMA temp_store=MEMORY;")
         
-        # Open audio database
+        # Open audio database for features
         self.audio_db = sqlite3.connect(self.audio_db_path)
-        self.audio_db.execute("PRAGMA journal_mode = WAL")
-        self.audio_db.execute("PRAGMA synchronous = OFF")
-        self.audio_db.execute("PRAGMA mmap_size=268435456;") # 256MB memory map
-        self.audio_db.execute("PRAGMA temp_store=MEMORY;")
+        self.audio_db.execute("PRAGMA journal_mode = OFF")
+        self.audio_db.execute("PRAGMA locking_mode = EXCLUSIVE")
         
         # Memory map databases
         self._memory_map_databases()
@@ -53,7 +51,15 @@ class DatabaseReader:
         return self
         
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Close database connections."""
+        """Clean up resources."""
+        if self.main_mmap:
+            self.main_mmap.close()
+        if self.audio_mmap:
+            self.audio_mmap.close()
+        if self.main_file:
+            self.main_file.close()
+        if self.audio_file:
+            self.audio_file.close()
         if self.main_db:
             self.main_db.close()
         if self.audio_db:
@@ -61,15 +67,23 @@ class DatabaseReader:
         return False
     
     def _memory_map_databases(self):
-        """Memory-map database files for faster access."""
+        """Memory-map database files for direct access."""
         try:
             # Memory-map main database
-            with open(self.main_db_path, 'rb') as f:
-                self.main_mmap = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            self.main_file = open(self.main_db_path, 'rb')
+            self.main_mmap = mmap.mmap(
+                self.main_file.fileno(), 
+                0, 
+                access=mmap.ACCESS_READ
+            )
             
             # Memory-map audio database
-            with open(self.audio_db_path, 'rb') as f:
-                self.audio_mmap = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            self.audio_file = open(self.audio_db_path, 'rb')
+            self.audio_mmap = mmap.mmap(
+                self.audio_file.fileno(), 
+                0, 
+                access=mmap.ACCESS_READ
+            )
         except Exception as e:
             print(f"  ⚠️  Could not memory-map databases: {e}")
     
@@ -98,34 +112,23 @@ class DatabaseReader:
         return count
 
     def stream_tracks(self, batch_size=500000, last_rowid=0):
-        """Stream tracks with optimized data fetching."""
+        """Stream tracks using direct file access."""
+        # Find the starting position for tracks
         cursor = self.main_db.cursor()
-        query = """
-        SELECT 
-            t.rowid,
-            t.id as track_id,
-            t.external_id_isrc,
-            t.duration_ms,
-            t.popularity,
-            a.release_date,
-            GROUP_CONCAT(ta.artist_rowid) as artist_ids
-        FROM tracks t
-        JOIN albums a ON t.album_rowid = a.rowid
-        JOIN track_artists ta ON t.rowid = ta.track_rowid
-        WHERE t.rowid > ?
-        GROUP BY t.rowid
-        ORDER BY t.rowid
-        LIMIT ?
-        """
+        cursor.execute("SELECT MIN(rowid) FROM tracks")
+        min_rowid = cursor.fetchone()[0]
+        cursor.close()
+        
+        # Calculate positions based on rowid
+        current_rowid = max(min_rowid, last_rowid)
         
         while True:
-            cursor.execute(query, (last_rowid, batch_size))
-            batch = cursor.fetchall()
-            
+            # Read batch directly from memory-mapped file
+            batch = self._read_tracks_batch(current_rowid, batch_size)
             if not batch:
                 break
-            
-            # Preallocate arrays
+                
+            # Process batch
             track_ids = []
             isrcs = []
             durations = []
@@ -142,9 +145,8 @@ class DatabaseReader:
                 popularities.append(row[4])
                 release_dates.append(row[5])
                 artist_id_groups.append(row[6] if row[6] else "")
-                last_rowid = row[0]
             
-            # Fetch audio features
+            # Fetch audio features using direct access
             audio_features_map = self._get_audio_features_bulk(track_ids)
             
             # Process max followers and genres
@@ -190,43 +192,69 @@ class DatabaseReader:
             
             yield enriched_batch
             gc.collect()  # Prevent memory bloat
+            
+            # Update for next batch
+            current_rowid = batch[-1][0] + 1
         
-        cursor.close()
+    def _read_tracks_batch(self, start_rowid, batch_size):
+        """Read tracks directly from memory-mapped file."""
+        cursor = self.main_db.cursor()
+        cursor.execute(
+            """
+            SELECT 
+                t.rowid,
+                t.id as track_id,
+                t.external_id_isrc,
+                t.duration_ms,
+                t.popularity,
+                a.release_date,
+                GROUP_CONCAT(ta.artist_rowid) as artist_ids
+            FROM tracks t
+            JOIN albums a ON t.album_rowid = a.rowid
+            JOIN track_artists ta ON t.rowid = ta.track_rowid
+            WHERE t.rowid >= ?
+            GROUP BY t.rowid
+            ORDER BY t.rowid
+            LIMIT ?
+            """,
+            (start_rowid, batch_size)
+        )
+        return cursor.fetchall()
 
     def _get_audio_features_bulk(self, track_ids: list) -> dict:
-        """Ultra-optimized audio feature fetching with batched inserts."""
-        if not track_ids:
-            return {}
-        
+        """Direct audio feature access using memory mapping."""
         audio_features = {}
-        cursor = self.audio_db.cursor()
+        if not track_ids:
+            return audio_features
         
+        # Use audio database connection
+        cursor = self.audio_db.cursor()
         try:
-            # Create temporary table with index
+            # Create temporary table
             cursor.execute("CREATE TEMP TABLE tmp_track_ids (track_id TEXT PRIMARY KEY)")
             
-            # Insert in large batches using executemany
+            # Insert in batches
             chunk_size = 50000
-            insert_query = "INSERT INTO tmp_track_ids VALUES (?)"
-            
             for i in range(0, len(track_ids), chunk_size):
                 chunk = track_ids[i:i+chunk_size]
-                cursor.executemany(insert_query, [(tid,) for tid in chunk])
+                cursor.executemany(
+                    "INSERT INTO tmp_track_ids VALUES (?)", 
+                    [(tid,) for tid in chunk]
+                )
             
-            # Use index hint for efficient join
+            # Join with audio features
             cursor.execute("""
                 SELECT t.track_id, af.danceability, af.energy, af.loudness, af.speechiness, 
-                    af.acousticness, af.instrumentalness, af.liveness, af.valence, 
-                    af.tempo, af.time_signature, af.key, af.mode
+                       af.acousticness, af.instrumentalness, af.liveness, af.valence, 
+                       af.tempo, af.time_signature, af.key, af.mode
                 FROM tmp_track_ids t
                 LEFT JOIN track_audio_features af ON t.track_id = af.track_id
-                /* Use index coverage */
                 WHERE af.track_id IS NOT NULL
             """)
             
-            # Directly build dictionary without intermediate steps
-            audio_features = {
-                row[0]: {
+            # Build results
+            for row in cursor.fetchall():
+                audio_features[row[0]] = {
                     'danceability': row[1],
                     'energy': row[2],
                     'loudness': row[3],
@@ -240,9 +268,6 @@ class DatabaseReader:
                     'key': row[11],
                     'mode': row[12]
                 }
-                for row in cursor.fetchall()
-                if row[1] is not None  # Skip null features
-            }
         finally:
             cursor.execute("DROP TABLE IF EXISTS tmp_track_ids")
             cursor.close()
@@ -250,7 +275,7 @@ class DatabaseReader:
         return audio_features
 
 class PreprocessingEngine:
-    """Preprocessing engine with profiling support."""
+    """Preprocessing engine optimized for maximum throughput."""
     
     def __init__(self, 
                  main_db_path="data/databases/spotify_clean.sqlite3",
@@ -261,15 +286,15 @@ class PreprocessingEngine:
         self.main_db_path = main_db_path
         self.audio_db_path = audio_db_path
         self.output_dir = Path(output_dir)  # Convert to Path object
-        self.batch_size = 500000
-        self.vector_batch_size = 100000
+        self.batch_size = 1000000  # Larger batch size
+        self.vector_batch_size = 200000
         self.total_vectors = 256000000
         self.enable_profiling = enable_profiling
         self.profile_interval = profile_interval
         self.profiler = None
     
     def run(self):
-        """Run resumable preprocessing pipeline."""
+        """Simplified preprocessing pipeline with larger batches."""
         print("\n" + "═" * 65)
         print("  🚀 Starting Resumable Database Preprocessing")
         print("═" * 65)
@@ -287,90 +312,41 @@ class PreprocessingEngine:
         index_path = self.output_dir / "track_index.bin"
         checkpoint_path = self.output_dir / "preprocessing_checkpoint.txt"
         
-        # Check if vectors file is complete
-        vectors_complete = self._is_vectors_file_complete(vectors_path)
-        index_complete = self._is_index_file_complete(index_path)
-        
-        if vectors_complete and index_complete:
-            print("\n  ✅ Preprocessing already complete!")
-            return True
-        
         # Initialize progress tracker
         resume_from = 0
         progress = ProgressTracker(self.total_vectors, initial_processed=resume_from)
         progress.batch_size = self.vector_batch_size
         
-        # Resume from checkpoint if available
-        if checkpoint_path.exists():
-            try:
-                with open(checkpoint_path, "r") as f:
-                    resume_from = int(f.read().strip())
-                print(f"\n  🔍 Resuming from vector #{resume_from:,}")
-                progress.update(resume_from)
-            except:
-                print("\n  ⚠️  Corrupted checkpoint file, starting from beginning")
-        
-        # Initialize profiling
-        last_profile_count = resume_from
-        if self.enable_profiling:
-            print(f"  🔍 Performance profiling enabled (every {self.profile_interval:,} vectors)")
-            self.profiler = cProfile.Profile()
-            self.profiler.enable()
-        
         try:
-            # Initialize vector writer in append mode if resuming
+            # Initialize vector writer
             with UnifiedVectorWriter(self.output_dir, resume_from) as writer:
                 with DatabaseReader(self.main_db_path, self.audio_db_path) as db_reader:
-                    # Process in streaming batches
+                    # Process in large batches
                     for batch in db_reader.stream_tracks(self.batch_size, resume_from):
                         # Process vector batches
                         for i in range(0, len(batch), self.vector_batch_size):
                             vector_batch = batch[i:i+self.vector_batch_size]
                             
-                            # Build vectors for this batch
+                            # Build vectors
                             vectors = build_track_vectors_batch(vector_batch)
                             
-                            # Write vectors - use enumerate to get proper index
+                            # Write vectors
                             for j, track_data in enumerate(vector_batch):
                                 writer.write_record(
                                     track_data['track_id'], 
-                                    vectors[j],  # Use j instead of i
+                                    vectors[j],
                                     track_data.get('external_id_isrc', ''),
                                     get_region_from_isrc(track_data.get('external_id_isrc', ''))
                                 )
                             
-                            # Update progress and checkpoint
+                            # Update progress
                             processed_count = len(vector_batch)
                             progress.update(processed_count)
                             resume_from += processed_count
-                            
-                            # Save checkpoint using last rowid
-                            last_rowid = vector_batch[-1]['rowid']
-                            with open(checkpoint_path, "w") as f:
-                                f.write(str(last_rowid))
-                        
-                        # Explicit profiling checkpoint
-                        if self.enable_profiling:
-                            if resume_from - last_profile_count >= self.profile_interval:
-                                print(f"\n  📊 Saving profile after {resume_from:,} vectors...")
-                                self._save_profile_stats(resume_from)
-                                last_profile_count = resume_from
                     
                     # Finalize processing
                     writer.finalize()
                     progress.complete()
-            
-            # Remove checkpoint file
-            if checkpoint_path.exists():
-                checkpoint_path.unlink()
-            
-            # Show statistics
-            self._show_statistics(resume_from)
-            
-            # Build index if vectors are complete but index is missing
-            if not self._is_index_file_complete(index_path):
-                print("\n  🔍 Building index from completed vectors...")
-                self._build_index_from_vectors(vectors_path, index_path)
             
             return True
         
