@@ -9,10 +9,12 @@ import mmap
 import sys
 import cProfile
 import pstats
+from config import PathConfig, EXPECTED_VECTORS
 from core.vectorization.track_vectorizer import build_track_vectors_batch
 from core.preprocessing.unified_vector_writer import UnifiedVectorWriter
 from core.preprocessing.progress import ProgressTracker
-from core.utilities.region_utils import get_region_from_isrc
+from core.utilities.region_utils import REGION_MAPPING, get_region_from_isrc
+from typing import List, Dict, Any, Generator
 
 # The SQLite parameter limit is 999
 MAX_SQL_VARS = 998
@@ -25,29 +27,42 @@ class DatabaseReader:
         self.audio_db_path = audio_db_path
         self.main_db = None
         self.audio_db = None
-        self.artist_followers_cache = {}
-        self.artist_genres_cache = {}
         
+        # NEW: NumPy-based artist metadata caches
+        self.artist_followers = None
+        
+        # NEW: Pre-computed artist genre sets (this is the key fix!)
+        self.artist_genres_sets = None
+        
+        # NEW: Region lookup table (26x26 = 676 entries)
+        self.region_lut = None
+    
     def __enter__(self):
         """Open database connections with optimizations."""
-        # Open main database
-        self.main_db = sqlite3.connect(self.main_db_path)
+        self.main_db = sqlite3.connect(self.main_db_path, timeout=30.0)
         self.main_db.execute("PRAGMA journal_mode = MEMORY")
         self.main_db.execute("PRAGMA cache_size = -200000")
         self.main_db.execute("PRAGMA temp_store = MEMORY")
         self.main_db.execute("PRAGMA synchronous = OFF")
-        self.main_db.execute("PRAGMA locking_mode = EXCLUSIVE")
         
         # Open audio database
-        self.audio_db = sqlite3.connect(self.audio_db_path)
+        self.audio_db = sqlite3.connect(self.audio_db_path, timeout=30.0)
         self.audio_db.execute("PRAGMA journal_mode = MEMORY")
         self.audio_db.execute("PRAGMA synchronous = OFF")
         
         # Memory map databases
         self._memory_map_databases()
         
-        # Preload artist metadata
-        self._preload_artist_metadata()
+        # Preload optimized metadata structures
+        print("  🔍 Debug: Starting artist metadata preload...")
+        start = time.time()
+        self._preload_artist_metadata_numpy()
+        print(f"  ✅ Debug: Artist metadata loaded in {time.time() - start:.2f}s")
+        
+        print("  🔍 Debug: Starting region LUT preload...")
+        start = time.time()
+        self._preload_region_lut()
+        print(f"  ✅ Debug: Region LUT loaded in {time.time() - start:.2f}s")
         
         return self
         
@@ -62,31 +77,127 @@ class DatabaseReader:
     def _memory_map_databases(self):
         """Memory-map database files for faster access."""
         try:
-            # Memory-map main database
             with open(self.main_db_path, 'rb') as f:
                 self.main_mmap = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
             
-            # Memory-map audio database
             with open(self.audio_db_path, 'rb') as f:
                 self.audio_mmap = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
         except Exception as e:
             print(f"  ⚠️  Could not memory-map databases: {e}")
     
-    def _preload_artist_metadata(self):
-        """Preload artist metadata into memory."""
-        # Load artist followers
+    def _preload_artist_metadata_numpy(self):
+        """
+        OPTIMIZATION 2: Load artist metadata into NumPy arrays.
+        KEY FIX: Pre-compute genre SETS for each artist to avoid set building during streaming.
+        """
         cursor = self.main_db.cursor()
-        cursor.execute("SELECT rowid, followers_total FROM artists")
-        self.artist_followers_cache = {rowid: followers for rowid, followers in cursor}
         
-        # Load artist genres
-        cursor.execute("SELECT artist_rowid, genre FROM artist_genres")
-        self.artist_genres_cache = {}
+        # Get max rowid for array sizing
+        cursor.execute("SELECT MAX(rowid) FROM artists")
+        max_rowid = cursor.fetchone()[0] + 1
+        
+        # Initialize arrays
+        self.artist_followers = np.zeros(max_rowid, dtype=np.int64)
+        
+        # NEW: Pre-computed genre sets for each artist
+        self.artist_genres_sets = [set() for _ in range(max_rowid)]
+        
+        # Load followers (vectorized)
+        print(f"  🔍 Debug: Loading {max_rowid:,} artist followers...")
+        followers_start = time.time()
+        cursor.execute("SELECT rowid, followers_total FROM artists")
+        for rowid, followers in cursor:
+            if rowid < max_rowid:
+                self.artist_followers[rowid] = followers
+        print(f"  ✅ Debug: Followers loaded in {time.time() - followers_start:.2f}s")
+        
+        # Load genres into pre-built sets (this is the key optimization!)
+        print(f"  🔍 Debug: Loading artist genres into pre-computed sets...")
+        genres_start = time.time()
+        cursor.execute("SELECT artist_rowid, genre FROM artist_genres ORDER BY artist_rowid")
+        genre_count = 0
         for artist_rowid, genre in cursor:
-            if artist_rowid not in self.artist_genres_cache:
-                self.artist_genres_cache[artist_rowid] = []
-            self.artist_genres_cache[artist_rowid].append(genre)
+            if artist_rowid < max_rowid:
+                self.artist_genres_sets[artist_rowid].add(genre)
+                genre_count += 1
+        
+        print(f"  ✅ Debug: {genre_count:,} genres loaded into sets in {time.time() - genres_start:.2f}s")
         cursor.close()
+        
+        print(f"  📊 Loaded {max_rowid:,} artists with pre-computed genre sets")
+    
+    def _preload_region_lut(self):
+        """OPTIMIZATION 1: Precompute ISRC-to-region lookup table."""
+        self.region_lut = np.full(26*26, 7, dtype=np.uint8)  # Default "Other" (7)
+        
+        for region_id, countries in REGION_MAPPING.items():
+            for country in countries:
+                if len(country) == 2:
+                    idx = (ord(country[0]) - 65) * 26 + (ord(country[1]) - 65)
+                    if 0 <= idx < 676:
+                        self.region_lut[idx] = region_id
+        
+        print(f"  📊 Preloaded region lookup table for {len(REGION_MAPPING)} regions")
+    
+    def _get_region_batch(self, isrcs: List[str]) -> np.ndarray:
+        """Vectorized region lookup for entire batch."""
+        if not isrcs:
+            return np.array([], dtype=np.uint8)
+        
+        n = len(isrcs)
+        first_chars = np.zeros(n, dtype=np.int32)
+        second_chars = np.zeros(n, dtype=np.int32)
+        
+        for i, isrc in enumerate(isrcs):
+            if len(isrc) >= 2:
+                first = isrc[0].upper()
+                second = isrc[1].upper()
+                if 'A' <= first <= 'Z' and 'A' <= second <= 'Z':
+                    first_chars[i] = ord(first) - 65
+                    second_chars[i] = ord(second) - 65
+        
+        indices = first_chars * 26 + second_chars
+        return self.region_lut[indices]
+    
+    def _get_artist_data_batch(self, artist_ids_batch: List[List[int]]) -> tuple:
+        """
+        OPTIMIZATION 2: Batch artist data retrieval using NumPy.
+        KEY FIX: Use pre-computed genre sets instead of building them on the fly.
+        """
+        batch_size = len(artist_ids_batch)
+        max_followers = np.zeros(batch_size, dtype=np.int64)
+        genres_batch = []
+        
+        print(f"  🔍 Debug: Processing {batch_size:,} tracks with artist data...")
+        start_time = time.time()
+        
+        for i, artist_ids in enumerate(artist_ids_batch):
+            if not artist_ids:
+                max_followers[i] = 0
+                genres_batch.append([])
+                continue
+            
+            # Vectorized follower lookup
+            followers = self.artist_followers[artist_ids]
+            max_followers[i] = np.max(followers) if len(followers) > 0 else 0
+            
+            # NEW: Union pre-computed genre sets (much faster than building from scratch!)
+            if len(artist_ids) == 1:
+                # Single artist case - just copy the set
+                genres = list(self.artist_genres_sets[artist_ids[0]])
+            else:
+                # Multi-artist case - union the sets
+                combined_genres = set()
+                for artist_id in artist_ids:
+                    combined_genres.update(self.artist_genres_sets[artist_id])
+                genres = list(combined_genres)
+            
+            genres_batch.append(genres)
+        
+        elapsed = time.time() - start_time
+        print(f"  ✅ Debug: Artist data processed in {elapsed:.2f}s ({batch_size/elapsed:.0f} tracks/sec)")
+        
+        return max_followers, genres_batch
     
     def get_track_count(self):
         """Get total number of tracks."""
@@ -95,12 +206,11 @@ class DatabaseReader:
         count = cursor.fetchone()[0]
         cursor.close()
         return count
-
-    def stream_tracks(self, batch_size=500000, last_rowid=0):
+    
+    def stream_tracks(self, batch_size=500000, last_rowid=0) -> Generator[List[Dict[str, Any]], None, None]:
         """Stream tracks with optimized data fetching."""
         cursor = self.main_db.cursor()
         
-        # Phase 1: Fetch track batch without artist aggregation
         track_query = """
             SELECT 
                 t.rowid,
@@ -116,96 +226,122 @@ class DatabaseReader:
             LIMIT ?
         """
         
+        batch_num = 0
         while True:
-            cursor.execute(track_query, (last_rowid, batch_size))
-            track_rows = cursor.fetchall()
+            print(f"  🔍 Debug: Fetching batch {batch_num} starting from rowid {last_rowid}")
+            start_time = time.time()
             
-            if not track_rows:
+            try:
+                cursor.execute(track_query, (last_rowid, batch_size))
+                self.main_db.execute("PRAGMA busy_timeout = 5000")
+                rows = cursor.fetchall()
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e):
+                    print(f"  ❌ Database locked error: {e}")
+                    print("  🔄 Retrying in 5 seconds...")
+                    time.sleep(5)
+                    continue
+                else:
+                    raise
+            
+            elapsed = time.time() - start_time
+            print(f"  ✅ Debug: Batch {batch_num} fetched {len(rows)} rows in {elapsed:.2f}s")
+            
+            if not rows:
+                print(f"  🔍 Debug: No more rows, exiting stream")
                 break
             
-            # Extract track data and build lookup dict
-            track_batch = {}
-            track_rowids = []
-            track_ids_for_audio = []
+            batch_num += 1
             
-            for row in track_rows:
+            # Process rows efficiently
+            batch = []
+            track_ids_for_audio = []
+            track_rowids = []
+            isrcs = []
+            
+            for row in rows:
                 rowid = row[0]
                 track_rowids.append(rowid)
-                track_batch[rowid] = {
+                
+                isrc = row[2] if row[2] else ""
+                isrcs.append(isrc)
+                
+                track_batch_data = {
                     'rowid': rowid,
                     'track_id': row[1],
-                    'external_id_isrc': row[2],
+                    'external_id_isrc': isrc,
                     'duration_ms': row[3],
                     'popularity': row[4],
-                    'release_date': row[5]
+                    'release_date': str(row[5])
                 }
+                batch.append(track_batch_data)
                 track_ids_for_audio.append(row[1])
                 last_rowid = rowid
             
-            # Phase 2: Batch-fetch artist IDs for all tracks in this batch (chunked)
-            artist_map = {}
-            for chunk_start in range(0, len(track_rowids), MAX_SQL_VARS):
-                chunk_end = min(chunk_start + MAX_SQL_VARS, len(track_rowids))
-                chunk_trackids = track_rowids[chunk_start:chunk_end]
-                
-                placeholders = ','.join(['?'] * len(chunk_trackids))
-                artist_query = f"""
-                    SELECT track_rowid, artist_rowid
-                    FROM track_artists
-                    WHERE track_rowid IN ({placeholders})
-                """
-                cursor.execute(artist_query, chunk_trackids)
-                
-                for track_rowid, artist_rowid in cursor:
-                    if track_rowid not in artist_map:
-                        artist_map[track_rowid] = []
-                    artist_map[track_rowid].append(artist_rowid)
+            # Vectorized region lookup
+            print(f"  🔍 Debug: Looking up regions for {len(isrcs)} ISRCs...")
+            regions = self._get_region_batch(isrcs)
+            print(f"  ✅ Debug: Regions retrieved")
             
-            # Phase 3: Fetch audio features for all track IDs (chunked)
+            # Batch artist fetch
+            print(f"  🔍 Debug: Fetching artist IDs...")
+            artist_map = self._get_artist_ids_batch(cursor, track_rowids)
+            print(f"  ✅ Debug: Artist IDs fetched")
+            
+            print(f"  🔍 Debug: Getting artist data...")
+            max_followers, genres_list = self._get_artist_data_batch(list(artist_map.values()))
+            print(f"  ✅ Debug: Artist data retrieved")
+            
+            # Batch audio features
+            print(f"  🔍 Debug: Fetching audio features...")
             audio_features_map = self._get_audio_features_bulk(track_ids_for_audio)
+            print(f"  ✅ Debug: Audio features retrieved")
             
-            # Phase 4: Merge all data and yield enriched batch
+            # Merge all data
             enriched_batch = []
-            for rowid in track_rowids:
-                track_data = track_batch[rowid]
-                
-                # Add artists and compute max followers
-                artist_ids = artist_map.get(rowid, [])
-                max_followers = 0
-                genres = set()
-                for artist_id in artist_ids:
-                    followers = self.artist_followers_cache.get(artist_id, 0)
-                    if followers > max_followers:
-                        max_followers = followers
-                    
-                    if artist_id in self.artist_genres_cache:
-                        genres.update(self.artist_genres_cache[artist_id])
-                
-                track_data['max_followers'] = max_followers
-                track_data['genres'] = list(genres)
-                
-                # Add audio features if available
+            for i, track_data in enumerate(batch):
+                artists = artist_map.get(track_data['rowid'], [])
+                track_data['max_followers'] = max_followers[i]
+                track_data['genres'] = genres_list[i]
+                track_data['region'] = regions[i]
                 track_data.update(audio_features_map.get(track_data['track_id'], {}))
-                
-                # Pre-compute region from ISRC
-                track_data['region'] = get_region_from_isrc(track_data.get('external_id_isrc', ''))
-                
                 enriched_batch.append(track_data)
             
+            print(f"  ✅ Debug: Yielding batch of {len(enriched_batch)} tracks")
             yield enriched_batch
-            gc.collect()  # Prevent memory bloat
+            gc.collect()
+    
+    def _get_artist_ids_batch(self, cursor, track_rowids: List[int]) -> Dict[int, List[int]]:
+        """Batch-fetch artist IDs for all tracks."""
+        artist_map = {}
         
-        cursor.close()
-
-    def _get_audio_features_bulk(self, track_ids):
-        """Fetch audio features using direct IN query - NO TEMP TABLES - CHUNKED."""
+        for chunk_start in range(0, len(track_rowids), MAX_SQL_VARS):
+            chunk_end = min(chunk_start + MAX_SQL_VARS, len(track_rowids))
+            chunk_trackids = track_rowids[chunk_start:chunk_end]
+            
+            placeholders = ','.join(['?'] * len(chunk_trackids))
+            artist_query = f"""
+                SELECT track_rowid, artist_rowid
+                FROM track_artists
+                WHERE track_rowid IN ({placeholders})
+            """
+            cursor.execute(artist_query, chunk_trackids)
+            
+            for track_rowid, artist_rowid in cursor:
+                if track_rowid not in artist_map:
+                    artist_map[track_rowid] = []
+                artist_map[track_rowid].append(artist_rowid)
+        
+        return artist_map
+    
+    def _get_audio_features_bulk(self, track_ids: List[str]) -> Dict[str, Dict[str, float]]:
+        """Fetch audio features using chunked direct IN query."""
         if not track_ids:
             return {}
         
         audio_features = {}
         audio_cursor = self.audio_db.cursor()
         
-        # Process track IDs in chunks to avoid SQL variable limit
         for chunk_start in range(0, len(track_ids), MAX_SQL_VARS):
             chunk_end = min(chunk_start + MAX_SQL_VARS, len(track_ids))
             chunk_trackids = track_ids[chunk_start:chunk_end]
@@ -220,7 +356,6 @@ class DatabaseReader:
             """
             audio_cursor.execute(query, chunk_trackids)
             
-            # Build result dictionary efficiently
             for row in audio_cursor:
                 audio_features[row[0]] = {
                     'danceability': row[1],
@@ -254,7 +389,7 @@ class PreprocessingEngine:
         self.output_dir = Path(output_dir)
         self.batch_size = 500000
         self.vector_batch_size = 100000
-        self.total_vectors = 256000000
+        self.total_vectors = 256_000_000
         self.enable_profiling = enable_profiling
         self.profile_interval = profile_interval
         self.profiler = None
@@ -286,7 +421,6 @@ class PreprocessingEngine:
             print("\n  ✅ Preprocessing already complete!")
             return True
         
-        # Initialize progress tracker
         resume_from = 0
         progress = ProgressTracker(self.total_vectors, initial_processed=resume_from)
         progress.batch_size = self.vector_batch_size
@@ -309,10 +443,12 @@ class PreprocessingEngine:
             self.profiler.enable()
         
         try:
-            # Initialize vector writer in append mode if resuming
+            # Initialize vector writer
             with UnifiedVectorWriter(self.output_dir, resume_from) as writer:
                 with DatabaseReader(self.main_db_path, self.audio_db_path) as db_reader:
                     # Process in streaming batches
+                    first_batch = True
+                    
                     for batch in db_reader.stream_tracks(self.batch_size, resume_from):
                         # Process vector batches
                         for i in range(0, len(batch), self.vector_batch_size):
@@ -321,7 +457,7 @@ class PreprocessingEngine:
                             # Build vectors for this batch
                             vectors = build_track_vectors_batch(vector_batch)
                             
-                            # Write vectors - region already computed!
+                            # Write vectors
                             for j, track_data in enumerate(vector_batch):
                                 writer.write_record(
                                     track_data['track_id'],
@@ -330,35 +466,40 @@ class PreprocessingEngine:
                                     track_data['region']
                                 )
                             
-                            # Update progress and checkpoint
+                            # Update progress
                             processed_count = len(vector_batch)
                             progress.update(processed_count)
                             resume_from += processed_count
                             
-                            # Save checkpoint using last rowid
+                            # Save checkpoint
                             last_rowid = vector_batch[-1]['rowid']
                             with open(checkpoint_path, "w") as f:
                                 f.write(str(last_rowid))
+                            
+                            # Force progress bar after first batch
+                            if first_batch:
+                                print(f"  ✅ First batch processed! Progress bar should now appear.")
+                                first_batch = False
                         
-                        # Explicit profiling checkpoint
+                        # Profiling checkpoint
                         if self.enable_profiling:
                             if resume_from - last_profile_count >= self.profile_interval:
                                 print(f"\n  📊 Saving profile after {resume_from:,} vectors...")
                                 self._save_profile_stats(resume_from)
                                 last_profile_count = resume_from
                     
-                    # Finalize processing
+                    # Finalize
                     writer.finalize()
                     progress.complete()
             
-            # Remove checkpoint file
+            # Remove checkpoint
             if checkpoint_path.exists():
                 checkpoint_path.unlink()
             
             # Show statistics
             self._show_statistics(resume_from)
             
-            # Build index if vectors are complete but index is missing
+            # Build index if needed
             if not self._is_index_file_complete(index_path):
                 print("\n  🔍 Building index from completed vectors...")
                 self._build_index_from_vectors(vectors_path, index_path)
@@ -396,44 +537,47 @@ class PreprocessingEngine:
         return index_path.stat().st_size == expected_size
 
     def _build_index_from_vectors(self, vectors_path, index_path):
-        """Build index file from completed vectors file with progress reporting."""
-        # Initialize reader
+        """Build index file from completed vectors file."""
+        from core.preprocessing.unified_vector_reader import UnifiedVectorReader
         reader = UnifiedVectorReader(vectors_path)
         total_vectors = reader.get_total_vectors()
         
-        # Create temporary directory for sorting
+        if total_vectors != self.total_vectors:
+            print(f"  ❗ Vector file has {total_vectors:,} vectors, expected {self.total_vectors:,}")
+            return
+        
         temp_dir = self.output_dir / "temp_index"
         temp_dir.mkdir(exist_ok=True)
         
         # Process in chunks
-        chunk_size = 2_000_000
-        temp_files = []
+        chunk_size = 1_000_000
+        chunk_files = []
+        num_chunks = (total_vectors + chunk_size - 1) // chunk_size
         
-        for chunk_idx in range(0, total_vectors, chunk_size):
-            start_idx = chunk_idx
-            end_idx = min(chunk_idx + chunk_size, total_vectors)
+        print(f"  Processing {total_vectors:,} vectors in {num_chunks} chunks")
+        
+        for chunk_idx in range(num_chunks):
+            start_idx = chunk_idx * chunk_size
+            end_idx = min(start_idx + chunk_size, total_vectors)
+            num_vectors = end_idx - start_idx
             
-            print(f"  Processing chunk {chunk_idx//chunk_size + 1}...")
+            print(f"  Chunk {chunk_idx+1}/{num_chunks}: vectors {start_idx:,}-{end_idx-1:,}")
             
-            # Read metadata for chunk
-            metadata = reader.get_vector_metadata_batch(start_idx, end_idx - start_idx)
-            
-            # Sort by track_id
+            metadata = reader.get_vector_metadata_batch(start_idx, num_vectors)
             metadata.sort(key=lambda x: x[0])
             
-            # Write sorted chunk to temp file
-            temp_file = temp_dir / f"chunk_{chunk_idx}.bin"
-            with open(temp_file, "wb") as f:
+            chunk_file = temp_dir / f"chunk_{chunk_idx}.bin"
+            with open(chunk_file, "wb") as f:
                 for track_id, vector_index in metadata:
                     tid_bytes = track_id.encode('ascii', 'ignore').ljust(22, b'\0')
                     f.write(tid_bytes)
-                    f.write(struct.pack("<I", vector_index))
+                    f.write(int.to_bytes(vector_index, 4, 'little'))
             
-            temp_files.append(temp_file)
+            chunk_files.append(chunk_file)
         
         # Merge sorted chunks
         print("  Merging sorted chunks...")
-        self._merge_sorted_chunks(temp_files, index_path)
+        self._merge_chunks(chunk_files, index_path)
         
         # Clean up
         import shutil
@@ -441,51 +585,47 @@ class PreprocessingEngine:
         
         print(f"  ✅ Index file created with {total_vectors:,} entries")
 
-    def _merge_sorted_chunks(self, chunk_files, output_path):
-        """Merge multiple sorted chunk files into final index."""
+    def _merge_chunks(self, chunk_files, output_path):
+        """Merge sorted chunk files into final index."""
         import struct
         import heapq
         
-        # Open all chunk files
         files = [open(f, "rb") for f in chunk_files]
-        records = []
+        records = [None] * len(files)
         
-        # Initialize records for each file
         for i, f in enumerate(files):
             tid_bytes = f.read(22)
             if tid_bytes:
-                idx_bytes = f.read(4)
+                index_bytes = f.read(4)
                 track_id = tid_bytes.decode('ascii', 'ignore').rstrip('\0')
-                vector_index = struct.unpack("<I", idx_bytes)[0]
-                records.append((track_id, vector_index, i))
+                vector_index = struct.unpack("<I", index_bytes)[0]
+                records[i] = (track_id, vector_index, i)
         
-        # Use heap to merge records
-        heapq.heapify(records)
+        heap = []
+        for i, rec in enumerate(records):
+            if rec is not None:
+                heapq.heappush(heap, (rec[0], rec[1], rec[2]))
         
-        # Open output file
-        processed = 0
-        with open(output_path, "wb") as out_f:
-            while records:
-                track_id, vector_index, file_idx = heapq.heappop(records)
+        with open(output_path, "wb") as out_file:
+            processed = 0
+            while heap:
+                track_id, vector_index, file_idx = heapq.heappop(heap)
                 
-                # Write to final index
                 tid_bytes = track_id.encode('ascii', 'ignore').ljust(22, b'\0')
-                out_f.write(tid_bytes)
-                out_f.write(struct.pack("<I", vector_index))
-                
-                # Get next record from same file
-                tid_bytes = files[file_idx].read(22)
-                if tid_bytes:
-                    idx_bytes = files[file_idx].read(4)
-                    next_id = tid_bytes.decode('ascii', 'ignore').rstrip('\0')
-                    next_idx = struct.unpack("<I", idx_bytes)[0]
-                    heapq.heappush(records, (next_id, next_idx, file_idx))
+                out_file.write(tid_bytes)
+                out_file.write(struct.pack("<I", vector_index))
                 
                 processed += 1
-                if processed % 1_000_000 == 0:
+                if processed % 5_000_000 == 0:
                     print(f"  Merged {processed:,} records...")
+                
+                tid_bytes = files[file_idx].read(22)
+                if tid_bytes:
+                    index_bytes = files[file_idx].read(4)
+                    track_id = tid_bytes.decode('ascii', 'ignore').rstrip('\0')
+                    vector_index = struct.unpack("<I", index_bytes)[0]
+                    heapq.heappush(heap, (track_id, vector_index, file_idx))
         
-        # Close files
         for f in files:
             f.close()
 
@@ -498,12 +638,10 @@ class PreprocessingEngine:
         print(f"\n  📊 Profiling data saved to: {profile_path}")
         print("  Use 'snakeviz' to visualize: snakeviz path/to/file.prof")
         
-        # Generate quick text report
         stats = pstats.Stats(str(profile_path))
         print(f"\n  Top 10 Time Consumers ({suffix}):")
         stats.strip_dirs().sort_stats('cumulative').print_stats(10)
         
-        # Save full stats to file
         stats_path = Path(self.output_dir) / f"preprocessing_stats_{suffix}.txt"
         with open(stats_path, 'w') as f:
             stats = pstats.Stats(str(profile_path), stream=f)

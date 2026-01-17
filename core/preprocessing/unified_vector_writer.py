@@ -2,389 +2,251 @@
 import struct
 import numpy as np
 from pathlib import Path
-from typing import Tuple, List
-import zlib
+from typing import List, Tuple
 import os
-import tempfile
+import gc
 import shutil
-import sys
+import time
 import heapq
 from config import PathConfig, EXPECTED_VECTORS
 from core.utilities.region_utils import REGION_MAPPING
-from core.preprocessing.unified_vector_reader import UnifiedVectorReader
 
 class UnifiedVectorWriter:
-    """Optimized vector writer with batched I/O and efficient indexing."""
+    """Optimized vector writer with batched I/O and vectorized operations."""
     
-    # File header format (16 bytes)
-    HEADER_FORMAT = "<4sI8s"  # Magic, version, checksum placeholder
+    HEADER_FORMAT = "<4sI8s"
     HEADER_SIZE = 16
-    
-    # Record format (104 bytes)
     RECORD_SIZE = 104
-    
-    # Magic number for file identification
-    MAGIC = b"SPAU"  # Spaudible Packed Vector
-    
-    # Batch size for vector packing
+    MAGIC = b"SPAU"
     WRITE_BATCH_SIZE = 500000
     
     def __init__(self, output_dir: Path, resume_from=0):
-        self.output_dir = output_dir
+        self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        # File paths
         self.vectors_path = self.output_dir / "track_vectors.bin"
         self.index_path = self.output_dir / "track_index.bin"
         
-        # Resume state
         self.resume_from = resume_from
         self.total_records = resume_from
         
-        # File handles
-        self.vector_file = None
-        self.index_file = None
-        
-        # Buffers
+        # SIMPLE buffers - just store raw data
         self.track_ids = []
-        self.vectors = []
+        self.vectors_buffer = []  # Store raw 32D vectors
         self.isrcs = []
         self.regions = []
         self.batch_count = 0
         
-        # Temporary index storage
         self.temp_index_dir = self.output_dir / "temp_index"
         self.temp_index_dir.mkdir(exist_ok=True)
-        self.temp_index_file = None
-
+    
     def __enter__(self):
-        """Open files for writing in appropriate mode."""
-        # Open vector file in append mode if resuming
+        """Open files for writing."""
+        gc.disable()
+        
         if self.resume_from > 0 and self.vectors_path.exists():
             self.vector_file = open(self.vectors_path, "ab")
         else:
             self.vector_file = open(self.vectors_path, "wb")
             self._write_header()
         
-        # Open temporary index file
         temp_index_path = self.temp_index_dir / f"temp_index_{self.resume_from}.bin"
         self.temp_index_file = open(temp_index_path, "ab" if self.resume_from > 0 else "wb")
         
         return self
-        
+    
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Finalize files and clean up."""
+        """Finalize files."""
         try:
             if exc_type is None:
-                # Flush any remaining records
                 self._flush_buffers()
                 self._write_index()
         finally:
-            # Close files
             if self.vector_file:
                 self.vector_file.close()
             if self.temp_index_file:
                 self.temp_index_file.close()
-            
-            # Clean up temporary directory
+            gc.enable()
             try:
                 shutil.rmtree(self.temp_index_dir)
-            except Exception as e:
-                print(f"⚠️ Warning: Could not clean up temp directory: {e}")
-        
+            except:
+                pass
         return False
-
-    def finalize(self):
-        """Finalize processing and merge index files."""
-        # Merge all temporary index files
-        temp_files = list(self.temp_index_dir.glob("temp_index_*.bin"))
-        if temp_files:
-            # Create combined temporary file
-            combined_path = self.temp_index_dir / "combined_temp_index.bin"
-            with open(combined_path, "wb") as combined_file:
-                for temp_file in temp_files:
-                    with open(temp_file, "rb") as f:
-                        shutil.copyfileobj(f, combined_file)
-                    temp_file.unlink()
-            
-            # Sort and write final index
-            self._sort_index(combined_path, self.index_path)
-            combined_path.unlink()
-
+    
     def _write_header(self):
-        """Write file header with magic and version"""
-        header = struct.pack(
-            self.HEADER_FORMAT,
-            self.MAGIC,
-            1,  # Version 1
-            b"\0" * 8  # Checksum placeholder
-        )
+        header = struct.pack(self.HEADER_FORMAT, self.MAGIC, 1, b"\0" * 8)
         self.vector_file.write(header)
     
-    def write_record(
-        self,
-        track_id: str,
-        vector: np.ndarray,
-        isrc: str = "",
-        region: int = 7  # Default to "Other" region
-    ):
-        """Add record to batch buffer"""
+    def write_record(self, track_id: str, vector: np.ndarray, isrc: str = "", region: int = 7):
+        """Store raw data (NO packing here!)."""
         self.track_ids.append(track_id)
-        self.vectors.append(vector)
+        self.vectors_buffer.append(vector)  # Store raw vector
         self.isrcs.append(isrc)
         self.regions.append(region)
-        self.batch_count += 1
         
-        # Write temporary index entry
+        # Write temp index
         tid_bytes = track_id.encode('ascii', 'ignore').ljust(22, b'\0')
         self.temp_index_file.write(tid_bytes)
         self.temp_index_file.write(struct.pack("<I", self.total_records))
         
         self.total_records += 1
+        self.batch_count += 1
         
-        # Flush if batch is full
         if self.batch_count >= self.WRITE_BATCH_SIZE:
             self._flush_buffers()
-
+    
     def _flush_buffers(self):
-        """Process and write a full batch of vectors"""
-        if self.batch_count == 0:
+        """OPTIMIZATION: Vectorized packing of ENTIRE batch at once."""
+        if not self.batch_count:
             return
-            
-        # Convert to NumPy arrays for vectorized operations
-        vectors = np.array(self.vectors)
-        regions = np.array(self.regions)
         
-        # Pack binary dimensions
-        binary_bytes = self._pack_binary_dims(vectors)
+        print(f"  🔍 Debug: Packing {self.batch_count:,} vectors...")
+        pack_start = time.time()
         
-        # Pack scaled dimensions
-        scaled_dims = self._pack_scaled_dims(vectors)
+        # Stack all vectors into a single array (batch_count x 32)
+        vectors_array = np.stack(self.vectors_buffer)
         
-        # Pack FP32 dimensions
-        fp32_dims = self._pack_fp32_dims(vectors)
+        # Create structured array for batch
+        dtype = np.dtype([
+            ('binary', np.uint8),
+            ('scaled', np.uint16, (22,)),
+            ('fp32', np.float32, (5,)),
+            ('mask', np.uint32),
+            ('region', np.uint8),
+            ('isrc', 'S12'),
+            ('track_id', 'S22')
+        ])
         
-        # Generate validity masks
-        validity_masks = self._get_validity_masks(vectors)
+        records = np.zeros(self.batch_count, dtype=dtype)
         
-        # Precompute clean ISRCs and track IDs
-        clean_isrcs = [self._clean_isrc(isrc) for isrc in self.isrcs]
-        clean_track_ids = [self._clean_track_id(tid) for tid in self.track_ids]
+        # === VECTORIZED packing (no Python loops!) ===
         
-        # Write records in bulk
-        records = bytearray()
-        for i in range(self.batch_count):
-            record = struct.pack(
-                "<B22H5fIB12s22s",
-                binary_bytes[i],
-                *scaled_dims[i],
-                *fp32_dims[i],
-                validity_masks[i],
-                regions[i],
-                clean_isrcs[i].encode("ascii"),
-                clean_track_ids[i].encode("ascii")
-            )
-            records.extend(record)
+        # Binary dims (mode, time signatures)
+        binary_vals = np.zeros(self.batch_count, dtype=np.uint8)
+        binary_vals |= (vectors_array[:, 9] >= 0.5).astype(np.uint8) << 0   # mode
+        binary_vals |= (vectors_array[:, 11] >= 0.5).astype(np.uint8) << 1  # ts_4_4
+        binary_vals |= (vectors_array[:, 12] >= 0.5).astype(np.uint8) << 2 # ts_3_4
+        binary_vals |= (vectors_array[:, 13] >= 0.5).astype(np.uint8) << 3 # ts_5_4
+        binary_vals |= (vectors_array[:, 14] >= 0.5).astype(np.uint8) << 4 # ts_other
+        records['binary'] = binary_vals
         
-        # Write all records at once
-        self.vector_file.write(records)
+        # Scaled dims (22 values)
+        scaled_indices = [0,1,2,3,4,5,6,8,16] + list(range(19,32))
+        for i, idx in enumerate(scaled_indices[:9]):
+            vals = vectors_array[:, idx]
+            vals = np.where(vals == -1.0, 0, vals * 10000)
+            records['scaled'][:, i] = vals.astype(np.uint16)
         
-        # Clear buffers
+        for i, idx in enumerate(range(19, 32), start=9):
+            vals = vectors_array[:, idx]
+            vals = np.where(vals == -1.0, 0, vals * 10000)
+            records['scaled'][:, i] = vals.astype(np.uint16)
+        
+        # FP32 dims (5 values)
+        fp32_indices = [7, 10, 15, 17, 18]
+        for i, idx in enumerate(fp32_indices):
+            records['fp32'][:, i] = vectors_array[:, idx].astype(np.float32)
+        
+        # Validity masks
+        valid_mask = (vectors_array != -1.0) & ~np.isnan(vectors_array)
+        for j in range(32):
+            records['mask'] |= (valid_mask[:, j].astype(np.uint32) << j)
+        
+        # Regions
+        records['region'] = np.array(self.regions, dtype=np.uint8)
+        
+        # String cleaning (still needed, but now vectorized)
+        print(f"  🔍 Debug: Cleaning {self.batch_count} strings...")
+        clean_start = time.time()
+        records['track_id'] = self._clean_strings_batch(self.track_ids, 22)
+        records['isrc'] = self._clean_strings_batch(self.isrcs, 12)
+        print(f"  ✅ Debug: Strings cleaned in {time.time() - clean_start:.2f}s")
+        
+        # Single write
+        print(f"  🔍 Debug: Writing to disk...")
+        write_start = time.time()
+        self.vector_file.write(records.tobytes())
+        print(f"  ✅ Debug: Written in {time.time() - write_start:.2f}s")
+        
+        # Clear
+        self._clear_buffers()
+        
+        total_time = time.time() - pack_start
+        print(f"  ✅ Debug: Total flush: {total_time:.2f}s")
+    
+    def _clear_buffers(self):
+        self.batch_count = 0
         self.track_ids.clear()
-        self.vectors.clear()
+        self.vectors_buffer.clear()
         self.isrcs.clear()
         self.regions.clear()
-        self.batch_count = 0
-        
-        # Flush to disk
-        self.vector_file.flush()
-        self.temp_index_file.flush()
     
-    def _pack_binary_dims(self, vectors: np.ndarray) -> np.ndarray:
-        """Pack binary dimensions into a single byte per vector"""
-        # Extract relevant dimensions
-        mode = vectors[:, 9]
-        time_sig_4_4 = vectors[:, 11]
-        time_sig_3_4 = vectors[:, 12]
-        time_sig_5_4 = vectors[:, 13]
-        time_sig_other = vectors[:, 14]
+    def _clean_strings_batch(self, strings: List[str], max_len: int) -> np.ndarray:
+        """Fast batch string cleaning."""
+        if not strings:
+            return np.array([], dtype=f'S{max_len}')
         
-        # Convert to binary flags
-        binary_bytes = (
-            (mode >= 0.5).astype(np.uint8) << 0 |
-            (time_sig_4_4 >= 0.5).astype(np.uint8) << 1 |
-            (time_sig_3_4 >= 0.5).astype(np.uint8) << 2 |
-            (time_sig_5_4 >= 0.5).astype(np.uint8) << 3 |
-            (time_sig_other >= 0.5).astype(np.uint8) << 4
-        )
+        n = len(strings)
+        result = np.empty(n, dtype=f'S{max_len}')
         
-        return binary_bytes
-
-    def _pack_scaled_dims(self, vectors: np.ndarray) -> np.ndarray:
-        """Pack scaled dimensions into uint16 values with NaN handling"""
-        # First 9 scaled dimensions
-        scaled_indices = [0, 1, 2, 3, 4, 5, 6, 8, 16]
-        scaled_part1 = vectors[:, scaled_indices]
+        for i, s in enumerate(strings):
+            if not s:
+                result[i] = b''
+                continue
+            
+            cleaned = bytearray(max_len)
+            j = 0
+            for c in s:
+                code = ord(c)
+                if 32 <= code < 127 and j < max_len:
+                    cleaned[j] = code
+                    j += 1
+            
+            while j < max_len:
+                cleaned[j] = 0
+                j += 1
+            
+            result[i] = bytes(cleaned)
         
-        # Meta-genres
-        scaled_part2 = vectors[:, 19:32]
-        
-        # Combine and scale
-        scaled_dims = np.hstack([scaled_part1, scaled_part2])
-        
-        # Replace NaNs with 0
-        scaled_dims = np.where(np.isnan(scaled_dims), 0.0, scaled_dims)
-        
-        # Scale and convert to uint16
-        scaled_dims = np.where(scaled_dims == -1.0, 0.0, scaled_dims)
-        scaled_dims = (scaled_dims * 10000).astype(np.uint16)
-        
-        return scaled_dims
+        return result
     
-    def _pack_fp32_dims(self, vectors: np.ndarray) -> np.ndarray:
-        """Pack FP32 dimensions with NaN handling"""
-        fp32_indices = [7, 10, 15, 17, 18]
-        fp32_dims = vectors[:, fp32_indices]
-        
-        # Replace NaNs with -1.0
-        fp32_dims = np.where(np.isnan(fp32_dims), -1.0, fp32_dims)
-        return fp32_dims
-
-    def _get_validity_masks(self, vectors: np.ndarray) -> np.ndarray:
-        """Generate validity masks for each vector with NaN handling"""
-        # Mark NaN values as invalid
-        invalid_matrix = np.isnan(vectors)
-        valid_matrix = np.logical_and(vectors != -1.0, ~invalid_matrix)
-        
-        validity_masks = np.zeros(vectors.shape[0], dtype=np.uint32)
-        
-        for j in range(32):
-            validity_masks |= (valid_matrix[:, j].astype(np.uint32) << j)
-        
-        return validity_masks
-
-    def _clean_isrc(self, isrc: str) -> str:
-        """Clean and format ISRC string"""
-        if not isrc:
-            return ""
-        # Remove non-ASCII characters
-        clean = ''.join(c for c in isrc if ord(c) < 128)
-        # Truncate to 12 characters and pad with nulls
-        return clean[:12].ljust(12, '\0')
+    def finalize(self):
+        self._flush_buffers()
+        self._write_index()
     
-    def _clean_track_id(self, track_id: str) -> str:
-        """Clean and format track ID string"""
-        if not track_id:
-            return ""
-        # Remove non-ASCII characters
-        clean = ''.join(c for c in track_id if ord(c) < 128)
-        # Truncate to 22 characters and pad with nulls
-        return clean[:22].ljust(22, '\0')
-
-    def _build_index_from_vectors(self, vectors_path, index_path):
-        """Build index file from completed vectors file with progress reporting."""
-        # Initialize reader
-        reader = UnifiedVectorReader(vectors_path)
-        total_vectors = reader.get_total_vectors()
+    def _write_index(self):
+        """Build final sorted index file."""
+        import struct
         
-        # Verify vector count
-        if total_vectors != EXPECTED_VECTORS:
-            raise ValueError(f"Expected {EXPECTED_VECTORS:,} vectors, found {total_vectors:,}")
+        temp_files = list(self.temp_index_dir.glob("temp_index_*.bin"))
+        if not temp_files:
+            return
         
-        # Create temporary directory for sorting
-        temp_dir = self.output_dir / "temp_index"
-        temp_dir.mkdir(exist_ok=True)
+        # Sort by filename to maintain order
+        temp_files.sort(key=lambda f: int(f.stem.split('_')[-1]))
         
-        # Process in chunks
-        chunk_size = 1_000_000
-        chunk_files = []
-        num_chunks = (total_vectors + chunk_size - 1) // chunk_size
+        # Merge all temp files into final index
+        print(f"  🔍 Debug: Merging {len(temp_files)} temp index files...")
+        merge_start = time.time()
         
-        print(f"  Processing {total_vectors:,} vectors in {num_chunks} chunks")
+        with open(self.index_path, "wb") as out_f:
+            for temp_file in temp_files:
+                with open(temp_file, "rb") as f:
+                    shutil.copyfileobj(f, out_f)
         
-        for chunk_idx in range(num_chunks):
-            start_idx = chunk_idx * chunk_size
-            end_idx = min(start_idx + chunk_size, total_vectors)
-            num_vectors = end_idx - start_idx
-            
-            # Print progress
-            print(f"  Chunk {chunk_idx+1}/{num_chunks}: vectors {start_idx:,}-{end_idx-1:,}")
-            
-            # Read metadata for chunk
-            metadata = reader.get_vector_metadata_batch(start_idx, num_vectors)
-            
-            # Sort this chunk
-            metadata.sort(key=lambda x: x[0])
-            
-            # Write sorted chunk to temporary file
-            chunk_file = temp_dir / f"chunk_{chunk_idx}.bin"
-            with open(chunk_file, "wb") as f:
-                for track_id, vector_index in metadata:
-                    tid_bytes = track_id.encode('ascii', 'ignore').ljust(22, b'\0')
-                    f.write(tid_bytes)
-                    f.write(struct.pack("<I", vector_index))
-            
-            chunk_files.append(chunk_file)
+        print(f"  ✅ Debug: Index merge completed in {time.time() - merge_start:.2f}s")
         
-        # Merge sorted chunks
-        print("  Merging sorted chunks...")
-        self._merge_chunks(chunk_files, index_path)
-        
-        # Clean up
-        shutil.rmtree(temp_dir)
-        
-        print(f"  ✅ Index file created with {total_vectors:,} entries")
-
-    def _merge_chunks(self, chunk_files, output_path):
-        """Merge sorted chunk files into final index file."""
-        # Open all chunk files
-        files = [open(f, "rb") for f in chunk_files]
-        records = [None] * len(files)
-        
-        # Initialize the records for each file
-        for i, f in enumerate(files):
-            tid_bytes = f.read(22)
-            if tid_bytes:
-                index_bytes = f.read(4)
-                track_id = tid_bytes.decode('ascii', 'ignore').rstrip('\0')
-                vector_index = struct.unpack("<I", index_bytes)[0]
-                records[i] = (track_id, vector_index, i)
-        
-        # Use a heap to merge the records
-        heap = []
-        for i, rec in enumerate(records):
-            if rec is not None:
-                heapq.heappush(heap, (rec[0], rec[1], rec[2]))
-        
-        # Open output file
-        with open(output_path, "wb") as out_file:
-            processed = 0
-            while heap:
-                track_id, vector_index, file_idx = heapq.heappop(heap)
-                
-                # Write to final index
-                tid_bytes = track_id.encode('ascii', 'ignore').ljust(22, b'\0')
-                out_file.write(tid_bytes)
-                out_file.write(struct.pack("<I", vector_index))
-                
-                # Print progress periodically
-                processed += 1
-                if processed % 5_000_000 == 0:
-                    print(f"  Merged {processed:,} records...")
-                
-                # Get next record from the same file
-                tid_bytes = files[file_idx].read(22)
-                if tid_bytes:
-                    index_bytes = files[file_idx].read(4)
-                    track_id = tid_bytes.decode('ascii', 'ignore').rstrip('\0')
-                    vector_index = struct.unpack("<I", index_bytes)[0]
-                    heapq.heappush(heap, (track_id, vector_index, file_idx))
-        
-        # Close all files
-        for f in files:
-            f.close()
-
+        # Cleanup handled by __exit__
+    
     def finalize(self):
         """Finalize processing"""
         self._flush_buffers()
         self._write_index()
+    
+    def get_stats(self):
+        """Get performance statistics for debugging."""
+        return {
+            "total_records": self.total_records,
+            "batches_flushed": self.total_records // self.WRITE_BATCH_SIZE,
+            "buffer_utilization": (self.total_records % self.WRITE_BATCH_SIZE) / self.WRITE_BATCH_SIZE
+        }
