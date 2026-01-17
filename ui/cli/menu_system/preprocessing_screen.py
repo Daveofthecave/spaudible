@@ -14,9 +14,9 @@ def screen_preprocessing():
     profile_interval = 4_000_000
     
     print("\n  ⚙️  Performance Profiling Options:")
-    print("  1. No profiling (fastest)")
-    print("  2. Full profiling (save at end)")
-    print("  3. Periodic profiling (save every N million vectors)")
+    print("     1. No profiling (fastest)")
+    print("     2. Full profiling (save at end)")
+    print("     3. Periodic profiling (save every N million vectors)")
     
     choice = input("\n  Choose profiling option (1-3): ").strip()
     

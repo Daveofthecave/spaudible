@@ -18,19 +18,6 @@ class UnifiedVectorWriter:
     MAGIC = b"SPAU"
     WRITE_BATCH_SIZE = 500000
     
-    # ===== DIAGNOSTIC CONFIGURATION =====
-    # Set to True to log bad values (WARNING: slows preprocessing by ~10%)
-    ENABLE_BAD_VALUE_LOGGING = False  # Set to False for production speed
-    
-    # Track types of bad values
-    BAD_VALUE_SUMMARY = {
-        'nan': 0,
-        'inf': 0,
-        'out_of_range': 0,
-        'null_response': 0  # Tracks with no audio features
-    }
-    # =====================================
-    
     def __init__(self, output_dir: Path, resume_from=0):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -50,10 +37,6 @@ class UnifiedVectorWriter:
         
         self.temp_index_dir = self.output_dir / "temp_index"
         self.temp_index_dir.mkdir(exist_ok=True)
-        
-        # Diagnostic tracking
-        self.bad_value_count = 0
-        self.null_response_tracks = []  # Track IDs with null audio features
     
     def __enter__(self):
         """Open files for writing."""
@@ -86,20 +69,6 @@ class UnifiedVectorWriter:
                 shutil.rmtree(self.temp_index_dir)
             except:
                 pass
-        
-        # Print diagnostic summary if enabled
-        if self.ENABLE_BAD_VALUE_LOGGING and self.bad_value_count > 0:
-            print(f"\n" + "═"*65)
-            print(f"  📊 Diagnostic Summary:")
-            print(f"     Total bad vectors: {self.bad_value_count:,}")
-            print(f"     NaN values: {self.BAD_VALUE_SUMMARY['nan']:,}")
-            print(f"     Inf values: {self.BAD_VALUE_SUMMARY['inf']:,}")
-            print(f"     Out of range: {self.BAD_VALUE_SUMMARY['out_of_range']:,}")
-            print(f"     Null audio features: {self.BAD_VALUE_SUMMARY['null_response']:,}")
-            print(f"  Details logged to: data/diagnostics/bad_values.log")
-            print(f"  Track IDs logged to: data/diagnostics/null_response_tracks.txt")
-            print(f"═"*65)
-        
         return False
     
     def _write_header(self):
@@ -124,79 +93,13 @@ class UnifiedVectorWriter:
         if self.batch_count >= self.WRITE_BATCH_SIZE:
             self._flush_buffers()
     
-    # ===== ENHANCED DIAGNOSTIC METHOD =====
-    def _log_bad_values(self, vectors_array: np.ndarray, track_ids_batch: List[str]):
-        """
-        Comprehensive logging of bad values for debugging.
-        Tracks NaN, Inf, and out-of-range values separately.
-        """
-        if not self.ENABLE_BAD_VALUE_LOGGING:
-            return
-        
-        # Create diagnostics directory
-        diag_dir = Path("data/diagnostics")
-        diag_dir.mkdir(parents=True, exist_ok=True)
-        
-        values_log = diag_dir / "bad_values.log"
-        null_log = diag_dir / "null_response_tracks.txt"
-        
-        batch_bad_count = 0
-        
-        # Open both files in append mode
-        with open(values_log, "a") as val_f, open(null_log, "a") as null_f:
-            for i in range(vectors_array.shape[0]):
-                vec = vectors_array[i]
-                track_id = track_ids_batch[i]
-                
-                # Check each dimension
-                for dim in range(32):
-                    val = vec[dim]
-                    
-                    # Check for NaN
-                    if np.isnan(val):
-                        val_f.write(f"Track {track_id}: dim {dim+1:02d} = nan (NaN/Inf)\n")
-                        self.BAD_VALUE_SUMMARY['nan'] += 1
-                        batch_bad_count += 1
-                        
-                        # Special handling for acousticness (dim 0)
-                        if dim == 0:
-                            null_f.write(f"{track_id}\n")
-                            self.BAD_VALUE_SUMMARY['null_response'] += 1
-                        break
-                    
-                    # Check for Inf
-                    elif np.isinf(val):
-                        val_f.write(f"Track {track_id}: dim {dim+1:02d} = inf (NaN/Inf)\n")
-                        self.BAD_VALUE_SUMMARY['inf'] += 1
-                        batch_bad_count += 1
-                        break
-                    
-                    # Check for out-of-range (should never happen with clamping)
-                    elif val < -1.0 or val > 1.0:
-                        val_f.write(f"Track {track_id}: dim {dim+1:02d} = {val:.3f} (out of range)\n")
-                        self.BAD_VALUE_SUMMARY['out_of_range'] += 1
-                        batch_bad_count += 1
-                        break
-        
-        self.bad_value_count += batch_bad_count
-    
     def _flush_buffers(self):
         """Pack and write entire batch with robust uint16 conversion."""
         if not self.batch_count:
             return
         
-        print(f"  🔍 Debug: Packing {self.batch_count:,} vectors...")
-        pack_start = time.time()
-        
         # Stack vectors
         vectors_array = np.stack(self.vectors_buffer)
-        
-        # ===== DIAGNOSTIC CALL =====
-        if self.ENABLE_BAD_VALUE_LOGGING:
-            print(f"  🔍 Debug: Running bad value diagnostic on batch...")
-            self._log_bad_values(vectors_array, self.track_ids)
-            print(f"  ✅ Debug: Diagnostic complete")
-        # ===========================
         
         # Create structured record array
         dtype = np.dtype([
@@ -242,7 +145,7 @@ class UnifiedVectorWriter:
         for i, idx in enumerate(range(19, 32), start=9):
             vals = vectors_array[:, idx]
             
-            # FIX: Same clamping for genre dimensions
+            # Same clamping for genre dimensions
             vals = np.clip(vals, -1.0, 1.0)
             scaled_vals = np.where(vals == -1.0, 0.0, vals * 10000.0)
             scaled_vals = np.clip(scaled_vals, 0.0, 65535.0)
@@ -254,7 +157,7 @@ class UnifiedVectorWriter:
         for i, idx in enumerate(fp32_indices):
             records['fp32'][:, i] = vectors_array[:, idx].astype(np.float32)
         
-        # Validity masks - FIX: Check for NaN/Inf
+        # Validity masks - Check for NaN/Inf
         valid_mask = (vectors_array != -1.0) & np.isfinite(vectors_array)
         for j in range(32):
             records['mask'] |= (valid_mask[:, j].astype(np.uint32) << j)
@@ -262,24 +165,15 @@ class UnifiedVectorWriter:
         # Regions
         records['region'] = np.array(self.regions, dtype=np.uint8)
         
-        # String cleaning - FIX: More robust ASCII cleaning
-        print(f"  🔍 Debug: Cleaning {self.batch_count} strings...")
-        clean_start = time.time()
+        # String cleaning
         records['track_id'] = self._clean_strings_batch(self.track_ids, 22)
         records['isrc'] = self._clean_strings_batch(self.isrcs, 12)
-        print(f"  ✅ Debug: Strings cleaned in {time.time() - clean_start:.2f}s")
         
         # Single write
-        print(f"  🔍 Debug: Writing to disk...")
-        write_start = time.time()
         self.vector_file.write(records.tobytes())
-        print(f"  ✅ Debug: Written in {time.time() - write_start:.2f}s")
         
         # Clear
         self._clear_buffers()
-        
-        total_time = time.time() - pack_start
-        print(f"  ✅ Debug: Total flush: {total_time:.2f}s")
     
     def _clear_buffers(self):
         self.batch_count = 0
@@ -291,13 +185,11 @@ class UnifiedVectorWriter:
     def _clean_strings_batch(self, strings: List[str], max_len: int) -> np.ndarray:
         """
         Fast ASCII string cleaning that returns a 1D array of fixed-length strings.
-        FIX: Returns shape (n,) not (n, max_len) to match structured array dtype.
         """
         if not strings:
             return np.array([], dtype=f'S{max_len}')
         
         n = len(strings)
-        # Create 2D buffer first
         buffer = np.zeros((n, max_len), dtype=np.uint8)
         
         for i, s in enumerate(strings):
@@ -315,8 +207,7 @@ class UnifiedVectorWriter:
                     if 32 <= code < 127:
                         buffer[i, j] = code
         
-        # FIX: Convert to 1D array of fixed-length strings
-        # View the 2D buffer as a 1D array of S22/S12 strings
+        # Return as 1D array of fixed-length strings
         return np.frombuffer(buffer.tobytes(), dtype=f'S{max_len}')
     
     def _write_index(self):
@@ -329,15 +220,10 @@ class UnifiedVectorWriter:
         if not temp_files:
             return
         
-        print(f"  🔍 Debug: Merging {len(temp_files)} temp index files...")
-        merge_start = time.time()
-        
         with open(self.index_path, "wb") as out_f:
             for temp_file in temp_files:
                 with open(temp_file, "rb") as f:
                     shutil.copyfileobj(f, out_f)
-        
-        print(f"  ✅ Debug: Index merge completed in {time.time() - merge_start:.2f}s")
     
     def finalize(self):
         """Finalize processing."""

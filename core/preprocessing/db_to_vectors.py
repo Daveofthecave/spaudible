@@ -54,15 +54,9 @@ class DatabaseReader:
         self._memory_map_databases()
         
         # Preload optimized metadata structures
-        print("  🔍 Debug: Starting artist metadata preload...")
-        start = time.time()
         self._preload_artist_metadata_numpy()
-        print(f"  ✅ Debug: Artist metadata loaded in {time.time() - start:.2f}s")
         
-        print("  🔍 Debug: Starting region LUT preload...")
-        start = time.time()
         self._preload_region_lut()
-        print(f"  ✅ Debug: Region LUT loaded in {time.time() - start:.2f}s")
         
         return self
         
@@ -103,16 +97,13 @@ class DatabaseReader:
         self.artist_genres_sets = [set() for _ in range(max_rowid)]
         
         # Load followers (vectorized)
-        print(f"  🔍 Debug: Loading {max_rowid:,} artist followers...")
         followers_start = time.time()
         cursor.execute("SELECT rowid, followers_total FROM artists")
         for rowid, followers in cursor:
             if rowid < max_rowid:
                 self.artist_followers[rowid] = followers
-        print(f"  ✅ Debug: Followers loaded in {time.time() - followers_start:.2f}s")
         
         # Load genres into pre-built sets (this is the key optimization!)
-        print(f"  🔍 Debug: Loading artist genres into pre-computed sets...")
         genres_start = time.time()
         cursor.execute("SELECT artist_rowid, genre FROM artist_genres ORDER BY artist_rowid")
         genre_count = 0
@@ -121,10 +112,10 @@ class DatabaseReader:
                 self.artist_genres_sets[artist_rowid].add(genre)
                 genre_count += 1
         
-        print(f"  ✅ Debug: {genre_count:,} genres loaded into sets in {time.time() - genres_start:.2f}s")
+        # print(f"     {genre_count:,} genres loaded into sets in {time.time() - genres_start:.2f}s")
         cursor.close()
         
-        print(f"  📊 Loaded {max_rowid:,} artists with pre-computed genre sets")
+        # print(f"     Loaded {max_rowid:,} artists with pre-computed genre sets")
     
     def _preload_region_lut(self):
         """OPTIMIZATION 1: Precompute ISRC-to-region lookup table."""
@@ -137,7 +128,7 @@ class DatabaseReader:
                     if 0 <= idx < 676:
                         self.region_lut[idx] = region_id
         
-        print(f"  📊 Preloaded region lookup table for {len(REGION_MAPPING)} regions")
+        # print(f"     Preloaded region lookup table for {len(REGION_MAPPING)} regions")
     
     def _get_region_batch(self, isrcs: List[str]) -> np.ndarray:
         """Vectorized region lookup for entire batch."""
@@ -168,9 +159,6 @@ class DatabaseReader:
         max_followers = np.zeros(batch_size, dtype=np.int64)
         genres_batch = []
         
-        print(f"  🔍 Debug: Processing {batch_size:,} tracks with artist data...")
-        start_time = time.time()
-        
         for i, artist_ids in enumerate(artist_ids_batch):
             if not artist_ids:
                 max_followers[i] = 0
@@ -193,9 +181,6 @@ class DatabaseReader:
                 genres = list(combined_genres)
             
             genres_batch.append(genres)
-        
-        elapsed = time.time() - start_time
-        print(f"  ✅ Debug: Artist data processed in {elapsed:.2f}s ({batch_size/elapsed:.0f} tracks/sec)")
         
         return max_followers, genres_batch
     
@@ -228,8 +213,6 @@ class DatabaseReader:
         
         batch_num = 0
         while True:
-            print(f"  🔍 Debug: Fetching batch {batch_num} starting from rowid {last_rowid}")
-            start_time = time.time()
             
             try:
                 cursor.execute(track_query, (last_rowid, batch_size))
@@ -244,11 +227,7 @@ class DatabaseReader:
                 else:
                     raise
             
-            elapsed = time.time() - start_time
-            print(f"  ✅ Debug: Batch {batch_num} fetched {len(rows)} rows in {elapsed:.2f}s")
-            
             if not rows:
-                print(f"  🔍 Debug: No more rows, exiting stream")
                 break
             
             batch_num += 1
@@ -279,23 +258,15 @@ class DatabaseReader:
                 last_rowid = rowid
             
             # Vectorized region lookup
-            print(f"  🔍 Debug: Looking up regions for {len(isrcs)} ISRCs...")
             regions = self._get_region_batch(isrcs)
-            print(f"  ✅ Debug: Regions retrieved")
             
             # Batch artist fetch
-            print(f"  🔍 Debug: Fetching artist IDs...")
             artist_map = self._get_artist_ids_batch(cursor, track_rowids)
-            print(f"  ✅ Debug: Artist IDs fetched")
-            
-            print(f"  🔍 Debug: Getting artist data...")
+
             max_followers, genres_list = self._get_artist_data_batch(list(artist_map.values()))
-            print(f"  ✅ Debug: Artist data retrieved")
             
             # Batch audio features
-            print(f"  🔍 Debug: Fetching audio features...")
             audio_features_map = self._get_audio_features_bulk(track_ids_for_audio)
-            print(f"  ✅ Debug: Audio features retrieved")
             
             # Merge all data
             enriched_batch = []
@@ -307,7 +278,6 @@ class DatabaseReader:
                 track_data.update(audio_features_map.get(track_data['track_id'], {}))
                 enriched_batch.append(track_data)
             
-            print(f"  ✅ Debug: Yielding batch of {len(enriched_batch)} tracks")
             yield enriched_batch
             gc.collect()
     
@@ -395,9 +365,9 @@ class PreprocessingEngine:
         self.profiler = None
     
     def run(self):
-        """Run resumable preprocessing pipeline."""
+        """Run preprocessing pipeline."""
         print("\n" + "═" * 65)
-        print("  🚀 Starting Resumable Database Preprocessing")
+        print("  🚀 Starting Database Preprocessing")
         print("═" * 65)
         
         # Validate databases
@@ -478,7 +448,7 @@ class PreprocessingEngine:
                             
                             # Force progress bar after first batch
                             if first_batch:
-                                print(f"  ✅ First batch processed! Progress bar should now appear.")
+                                # print(f"     First batch processed! Progress bar should now appear.")
                                 first_batch = False
                         
                         # Profiling checkpoint
