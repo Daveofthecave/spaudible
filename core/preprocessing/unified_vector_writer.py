@@ -146,6 +146,45 @@ class UnifiedVectorWriter:
         if self.batch_count >= self.WRITE_BATCH_SIZE:
             self._flush_buffers()
 
+    def write_bulk_records(self, track_ids, vectors, isrcs=None, regions=None):
+        """Bulk vector record writer."""
+        n = len(track_ids)
+        if n == 0:
+            return
+        
+        # Vectorized cleaning
+        clean_isrcs = [self._clean_isrc(isrc) for isrc in (isrcs or [""]*n)]
+        clean_track_ids = [self._clean_track_id(tid) for tid in track_ids]
+        regions_arr = np.array(regions or [7]*n, dtype=np.uint8)
+        
+        # Reuse existing vector packing
+        binary_bytes = self._pack_binary_dims(vectors)
+        scaled_dims = self._pack_scaled_dims(vectors)
+        fp32_dims = self._pack_fp32_dims(vectors)
+        validity_masks = self._get_validity_masks(vectors)
+        
+        # Single bulk write
+        records = bytearray(n * self.RECORD_SIZE)
+        for i in range(n):
+            offset = i * self.RECORD_SIZE
+            struct.pack_into("<B22H5fIB12s22s", records, offset,
+                binary_bytes[i],
+                *scaled_dims[i], *fp32_dims[i],
+                validity_masks[i], regions_arr[i],
+                clean_isrcs[i].encode('ascii'),
+                clean_track_ids[i].encode('ascii'))
+        
+        self.vector_file.write(records)
+        
+        # Bulk temp index
+        tid_bytes = [tid.encode('ascii', 'ignore').ljust(22, b'\0') for tid in track_ids]
+        self.temp_index_file.write(b''.join(tid_bytes))
+        self.temp_index_file.write(struct.pack(f"<{n}I", *range(self.total_records, self.total_records + n)))
+        
+        self.total_records += n
+        self.vector_file.flush()
+        self.temp_index_file.flush()
+
     def _flush_buffers(self):
         """Process and write a full batch of vectors"""
         if self.batch_count == 0:
