@@ -5,16 +5,22 @@ import hashlib
 from pathlib import Path
 from config import PathConfig, EXPECTED_VECTORS
 
-def validate_vector_cache():
-    """Validate vector cache completeness with checksum verification."""
+def validate_vector_cache(checksum_validation=True):
+    """
+    Validate vector cache with optional checksum.
+    
+    Args:
+        checksum_validation: If True, perform full cryptographic checksum.
+                           If False, only check file size (fast).
+    """
     vectors_path = PathConfig.get_vector_file()
     index_path = PathConfig.get_index_file()
     
-    # Check vector file existence
+    # Fast checks first
     if not vectors_path.exists():
         return False, "Vector file not found"
     
-    # Validate vector file size
+    # Check vector file size
     vector_size = vectors_path.stat().st_size
     header_size = 16
     record_size = 104
@@ -22,15 +28,36 @@ def validate_vector_cache():
     if vector_size < header_size:
         return False, f"Vector file too small: {vector_size} bytes"
     
-    # Calculate number of vectors
     num_vectors = (vector_size - header_size) // record_size
     
-    # Verify exact vector count
     if num_vectors != EXPECTED_VECTORS:
         return False, (f"Incorrect vector count: expected {EXPECTED_VECTORS:,}, "
                       f"got {num_vectors:,}")
     
-    # Verify checksum if possible
+    # Skip expensive checksum if requested
+    if not checksum_validation:
+        # Only check if checksum field in header is non-zero (exists)
+        try:
+            with open(vectors_path, 'rb') as f:
+                f.seek(8)  # Check if checksum bytes are present
+                checksum_bytes = f.read(8)
+                if checksum_bytes == b'\0' * 8:
+                    return False, "Checksum not written (preprocessing incomplete)"
+        except:
+            pass
+        
+        # Fast path: Just verify index exists too
+        if not index_path.exists():
+            return False, "Index file not found"
+        
+        index_size = index_path.stat().st_size
+        expected_index_size = EXPECTED_VECTORS * 26
+        if abs(index_size - expected_index_size) > expected_index_size * 0.01:
+            return False, "Index file size incorrect"
+        
+        return True, f"Valid vector cache (fast check) with {num_vectors:,} tracks"
+    
+    # Full validation with checksum
     try:
         with open(vectors_path, 'rb') as f:
             f.seek(4)  # Skip magic
@@ -41,7 +68,7 @@ def validate_vector_cache():
             f.seek(header_size)
             hasher = hashlib.blake2b(digest_size=8)
             while True:
-                chunk = f.read(10 * 1024 * 1024)  # 10MB chunks
+                chunk = f.read(10 * 1024 * 1024)
                 if not chunk:
                     break
                 hasher.update(chunk)
@@ -55,15 +82,13 @@ def validate_vector_cache():
     
     # Check index file
     if not index_path.exists():
-        # Vectors are valid but index needs to be built
-        return False, "Index file not found - needs to be built from vectors"
+        return False, "Index file not found"
     
-    # Validate index file size
     index_size = index_path.stat().st_size
-    expected_index_size = EXPECTED_VECTORS * 26  # 22B track ID + 4B index
+    expected_index_size = EXPECTED_VECTORS * 26
     
     if abs(index_size - expected_index_size) > expected_index_size * 0.01:
-        return False, f"Index file size incorrect: expected {expected_index_size:,} bytes, got {index_size:,}"
+        return False, f"Index file size incorrect"
     
     # Basic validation that index is sorted
     try:
@@ -84,7 +109,7 @@ def validate_vector_cache():
     return True, f"Valid vector cache with {num_vectors:,} tracks"
 
 def is_setup_complete():
-    """Check if setup is complete and valid."""
+    """Check if setup is complete using FAST validation."""
     # Check required files exist
     required_files = [
         PathConfig.get_main_db(),
@@ -96,8 +121,8 @@ def is_setup_complete():
     if not all(file.exists() for file in required_files):
         return False
     
-    # Validate vector cache
-    valid, _ = validate_vector_cache()
+    # Use FAST validation (skip checksum)
+    valid, _ = validate_vector_cache(checksum_validation=False)
     return valid
 
 def rebuild_index():

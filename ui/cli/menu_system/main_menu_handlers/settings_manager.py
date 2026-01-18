@@ -280,7 +280,7 @@ def _handle_system_status() -> str:
     print(f"   • Audio Features Database: {audio_db.name}")
     print(f"       Size: {audio_db_size}")
     
-    # Vector files
+    # Vector files (new unified format)
     vector_file = PathConfig.get_vector_file()
     vector_size = format_file_size(vector_file.stat().st_size) if vector_file.exists() else "Not found"
     print(f"   • Vector Cache: {vector_file.name}")
@@ -291,16 +291,9 @@ def _handle_system_status() -> str:
     print(f"   • Vector Index: {index_file.name}")
     print(f"       Size: {index_size}")
     
-    # Bit mask file
-    mask_file = PathConfig.get_mask_file()
-    mask_size = format_file_size(mask_file.stat().st_size) if mask_file.exists() else "Not found"
-    print(f"   • Vector Masks: {mask_file.name}")
-    print(f"       Size: {mask_size}")
-    
-    metadata_file = PathConfig.get_metadata_file()
-    metadata_size = format_file_size(metadata_file.stat().st_size) if metadata_file.exists() else "Not found"
-    print(f"   • Vector Metadata: {metadata_file.name}")
-    print(f"       Size: {metadata_size}")
+    # Note: track_masks.bin, track_regions.bin, and metadata.json 
+    # are obsolete in the new format.
+    # They are now embedded within the unified vector file.
     
     # Genre mapping
     genre_file = PathConfig.get_genre_mapping()
@@ -308,10 +301,10 @@ def _handle_system_status() -> str:
     print(f"   • Genre Mapping: {genre_file.name}")
     print(f"       Size: {genre_size}")
 
-    # Total disk usage
+    # Total disk usage (only active files)
     total_size = 0
     files_to_check = [
-        main_db, audio_db, vector_file, index_file, mask_file, metadata_file, genre_file
+        main_db, audio_db, vector_file, index_file, genre_file
     ]
     for file in files_to_check:
         if file.exists():
