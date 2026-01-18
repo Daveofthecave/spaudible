@@ -8,11 +8,12 @@ import gc
 import shutil
 import time
 from config import PathConfig, EXPECTED_VECTORS
+import hashlib
 
 class UnifiedVectorWriter:
-    """Optimized vector writer with batched I/O and robust uint16 packing."""
+    """Optimized vector writer with new 104-byte record format."""
     
-    HEADER_FORMAT = "<4sI8s"
+    HEADER_FORMAT = "<4sI8s"  # Magic (4B) + Version (4B) + Checksum placeholder (8B)
     HEADER_SIZE = 16
     RECORD_SIZE = 104
     MAGIC = b"SPAU"
@@ -24,7 +25,6 @@ class UnifiedVectorWriter:
         
         self.vectors_path = self.output_dir / "track_vectors.bin"
         self.index_path = self.output_dir / "track_index.bin"
-        
         self.resume_from = resume_from
         self.total_records = resume_from
         
@@ -35,8 +35,12 @@ class UnifiedVectorWriter:
         self.regions = []
         self.batch_count = 0
         
+        # Temp index directory - will NOT be deleted automatically
         self.temp_index_dir = self.output_dir / "temp_index"
         self.temp_index_dir.mkdir(exist_ok=True)
+        
+        # For checksum calculation
+        self.checksum = hashlib.blake2b(digest_size=8)
     
     def __enter__(self):
         """Open files for writing."""
@@ -48,41 +52,40 @@ class UnifiedVectorWriter:
             self.vector_file = open(self.vectors_path, "wb")
             self._write_header()
         
+        # Create initial temp index file
         temp_index_path = self.temp_index_dir / f"temp_index_{self.resume_from}.bin"
         self.temp_index_file = open(temp_index_path, "ab" if self.resume_from > 0 else "wb")
         
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Finalize files."""
+        """Finalize files - temp index dir is NOT deleted."""
         try:
             if exc_type is None:
                 self._flush_buffers()
-                self._write_index()
+                # DO NOT write final index here - will be sorted separately
+                # DO NOT delete temp dir - needed for sorting step
         finally:
             if self.vector_file:
                 self.vector_file.close()
             if self.temp_index_file:
                 self.temp_index_file.close()
             gc.enable()
-            try:
-                shutil.rmtree(self.temp_index_dir)
-            except:
-                pass
         return False
     
     def _write_header(self):
+        """Write header with placeholder checksum."""
         header = struct.pack(self.HEADER_FORMAT, self.MAGIC, 1, b"\0" * 8)
         self.vector_file.write(header)
     
     def write_record(self, track_id: str, vector: np.ndarray, isrc: str = "", region: int = 7):
-        """Store raw data."""
+        """Write a record - format: 65B vector + 4B mask + 1B region + 12B ISRC + 22B track_id."""
         self.track_ids.append(track_id)
         self.vectors_buffer.append(vector)
         self.isrcs.append(isrc)
         self.regions.append(region)
         
-        # Write temp index
+        # Write unsorted temp index entry (26 bytes: 22B track_id + 4B vector_index)
         tid_bytes = track_id.encode('ascii', 'ignore').ljust(22, b'\0')
         self.temp_index_file.write(tid_bytes)
         self.temp_index_file.write(struct.pack("<I", self.total_records))
@@ -94,14 +97,14 @@ class UnifiedVectorWriter:
             self._flush_buffers()
     
     def _flush_buffers(self):
-        """Pack and write entire batch with robust uint16 conversion."""
+        """Pack and write batch to disk."""
         if not self.batch_count:
             return
         
         # Stack vectors
         vectors_array = np.stack(self.vectors_buffer)
         
-        # Create structured record array
+        # Create structured record
         dtype = np.dtype([
             ('binary', np.uint8),
             ('scaled', np.uint16, (22,)),
@@ -114,9 +117,7 @@ class UnifiedVectorWriter:
         
         records = np.zeros(self.batch_count, dtype=dtype)
         
-        # === ROBUST PACKING ===
-        
-        # Binary dims (mode, time signatures)
+        # Pack binary dimensions (mode + time signatures)
         binary_vals = np.zeros(self.batch_count, dtype=np.uint8)
         binary_vals |= (vectors_array[:, 9] >= 0.5).astype(np.uint8) << 0   # mode
         binary_vals |= (vectors_array[:, 11] >= 0.5).astype(np.uint8) << 1  # ts_4_4
@@ -125,54 +126,38 @@ class UnifiedVectorWriter:
         binary_vals |= (vectors_array[:, 14] >= 0.5).astype(np.uint8) << 4  # ts_other
         records['binary'] = binary_vals
         
-        # Scaled dimensions - Clamp values to prevent overflow
+        # Pack scaled dimensions (uint16 with 0.0001 precision)
         scaled_indices = [0,1,2,3,4,5,6,8,16] + list(range(19,32))
+        for i, idx in enumerate(scaled_indices):
+            vals = np.clip(vectors_array[:, idx], -1.0, 1.0)
+            scaled = np.where(vals == -1.0, 0, (vals * 10000).astype(np.uint16))
+            records['scaled'][:, i] = np.clip(scaled, 0, 65535)
         
-        for i, idx in enumerate(scaled_indices[:9]):
-            vals = vectors_array[:, idx]
-            
-            # Clamp to valid range to prevent overflow
-            vals = np.clip(vals, -1.0, 1.0)
-            
-            # Convert sentinel -1 to 0, then scale
-            scaled_vals = np.where(vals == -1.0, 0.0, vals * 10000.0)
-            
-            # Ensure values fit in uint16 range
-            scaled_vals = np.clip(scaled_vals, 0.0, 65535.0)
-            
-            records['scaled'][:, i] = scaled_vals.astype(np.uint16)
-        
-        for i, idx in enumerate(range(19, 32), start=9):
-            vals = vectors_array[:, idx]
-            
-            # Same clamping for genre dimensions
-            vals = np.clip(vals, -1.0, 1.0)
-            scaled_vals = np.where(vals == -1.0, 0.0, vals * 10000.0)
-            scaled_vals = np.clip(scaled_vals, 0.0, 65535.0)
-            
-            records['scaled'][:, i] = scaled_vals.astype(np.uint16)
-        
-        # FP32 dimensions (5 values)
+        # Pack FP32 dimensions
         fp32_indices = [7, 10, 15, 17, 18]
         for i, idx in enumerate(fp32_indices):
             records['fp32'][:, i] = vectors_array[:, idx].astype(np.float32)
         
-        # Validity masks - Check for NaN/Inf
+        # Validity mask
         valid_mask = (vectors_array != -1.0) & np.isfinite(vectors_array)
         for j in range(32):
             records['mask'] |= (valid_mask[:, j].astype(np.uint32) << j)
         
-        # Regions
+        # Region
         records['region'] = np.array(self.regions, dtype=np.uint8)
         
-        # String cleaning
+        # Strings
         records['track_id'] = self._clean_strings_batch(self.track_ids, 22)
         records['isrc'] = self._clean_strings_batch(self.isrcs, 12)
         
-        # Single write
-        self.vector_file.write(records.tobytes())
+        # Write
+        data_bytes = records.tobytes()
+        self.vector_file.write(data_bytes)
         
-        # Clear
+        # Update checksum
+        self.checksum.update(data_bytes)
+        
+        # Clear buffers
         self._clear_buffers()
     
     def _clear_buffers(self):
@@ -183,9 +168,7 @@ class UnifiedVectorWriter:
         self.regions.clear()
     
     def _clean_strings_batch(self, strings: List[str], max_len: int) -> np.ndarray:
-        """
-        Fast ASCII string cleaning that returns a 1D array of fixed-length strings.
-        """
+        """Fast ASCII string cleaning."""
         if not strings:
             return np.array([], dtype=f'S{max_len}')
         
@@ -193,47 +176,46 @@ class UnifiedVectorWriter:
         buffer = np.zeros((n, max_len), dtype=np.uint8)
         
         for i, s in enumerate(strings):
-            if not s:
-                continue
-            
-            # Direct memory copy of ASCII bytes
-            try:
-                data = s.encode('ascii', 'ignore')[:max_len]
-                buffer[i, :len(data)] = np.frombuffer(data, dtype=np.uint8)
-            except Exception:
-                # Fallback byte-by-byte
-                for j, c in enumerate(s[:max_len]):
-                    code = ord(c)
-                    if 32 <= code < 127:
-                        buffer[i, j] = code
+            if s:
+                try:
+                    data = s.encode('ascii', 'ignore')[:max_len]
+                    buffer[i, :len(data)] = np.frombuffer(data, dtype=np.uint8)
+                except:
+                    for j, c in enumerate(s[:max_len]):
+                        code = ord(c)
+                        if 32 <= code < 127:
+                            buffer[i, j] = code
         
-        # Return as 1D array of fixed-length strings
         return np.frombuffer(buffer.tobytes(), dtype=f'S{max_len}')
     
-    def _write_index(self):
-        """Merge all temp index files into final sorted index."""
-        import struct
-        
-        temp_files = sorted(self.temp_index_dir.glob("temp_index_*.bin"),
-                           key=lambda f: int(f.stem.split('_')[-1]))
-        
-        if not temp_files:
-            return
-        
-        with open(self.index_path, "wb") as out_f:
-            for temp_file in temp_files:
-                with open(temp_file, "rb") as f:
-                    shutil.copyfileobj(f, out_f)
-    
     def finalize(self):
-        """Finalize processing."""
+        """Finalize vector file."""
         self._flush_buffers()
-        self._write_index()
     
-    def get_stats(self):
-        """Get performance statistics for debugging."""
-        return {
-            "total_records": self.total_records,
-            "batches_flushed": self.total_records // self.WRITE_BATCH_SIZE,
-            "buffer_utilization": (self.total_records % self.WRITE_BATCH_SIZE) / self.WRITE_BATCH_SIZE
-        }
+    def get_temp_index_dir(self):
+        """Return temp index directory for sorting step."""
+        return self.temp_index_dir
+    
+    def update_header_checksum(self):
+        """Compute checksum of ENTIRE data section and write to header."""
+        # print("  🔍 Computing final checksum...")
+        import hashlib
+        
+        hasher = hashlib.blake2b(digest_size=8)
+        
+        with open(self.vectors_path, 'rb') as f:
+            # Skip header
+            f.seek(self.HEADER_SIZE)
+            
+            # Read in chunks to handle large files
+            chunk_size = 10 * 1024 * 1024  # 10MB chunks
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                hasher.update(chunk)
+        
+        # Write checksum to header (bytes 8-15)
+        with open(self.vectors_path, 'r+b') as f:
+            f.seek(8)  # Position after magic (4B) and version (4B)
+            f.write(hasher.digest()[:8])

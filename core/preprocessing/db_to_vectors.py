@@ -8,6 +8,8 @@ import os
 import mmap
 import sys
 import cProfile
+import struct
+import shutil
 import pstats
 from config import PathConfig, EXPECTED_VECTORS
 from core.vectorization.track_vectorizer import build_track_vectors_batch
@@ -365,7 +367,7 @@ class PreprocessingEngine:
         self.profiler = None
     
     def run(self):
-        """Run preprocessing pipeline."""
+        """Run complete preprocessing pipeline (vectors + sorted index)."""
         print("\n" + "═" * 65)
         print("  🚀 Starting Database Preprocessing")
         print("═" * 65)
@@ -384,10 +386,7 @@ class PreprocessingEngine:
         checkpoint_path = self.output_dir / "preprocessing_checkpoint.txt"
         
         # Check if vectors file is complete
-        vectors_complete = self._is_vectors_file_complete(vectors_path)
-        index_complete = self._is_index_file_complete(index_path)
-        
-        if vectors_complete and index_complete:
+        if self._is_vectors_file_complete(vectors_path) and index_path.exists():
             print("\n  ✅ Preprocessing already complete!")
             return True
         
@@ -413,21 +412,17 @@ class PreprocessingEngine:
             self.profiler.enable()
         
         try:
-            # Initialize vector writer
+            # Pass 1: Write vectors and unsorted temp index
             with UnifiedVectorWriter(self.output_dir, resume_from) as writer:
                 with DatabaseReader(self.main_db_path, self.audio_db_path) as db_reader:
-                    # Process in streaming batches
-                    first_batch = True
-                    
                     for batch in db_reader.stream_tracks(self.batch_size, resume_from):
-                        # Process vector batches
+                        # Process in vector batches
                         for i in range(0, len(batch), self.vector_batch_size):
                             vector_batch = batch[i:i+self.vector_batch_size]
                             
-                            # Build vectors for this batch
+                            # Build and write vectors
                             vectors = build_track_vectors_batch(vector_batch)
                             
-                            # Write vectors
                             for j, track_data in enumerate(vector_batch):
                                 writer.write_record(
                                     track_data['track_id'],
@@ -445,11 +440,6 @@ class PreprocessingEngine:
                             last_rowid = vector_batch[-1]['rowid']
                             with open(checkpoint_path, "w") as f:
                                 f.write(str(last_rowid))
-                            
-                            # Force progress bar after first batch
-                            if first_batch:
-                                # print(f"     First batch processed! Progress bar should now appear.")
-                                first_batch = False
                         
                         # Profiling checkpoint
                         if self.enable_profiling:
@@ -457,10 +447,16 @@ class PreprocessingEngine:
                                 print(f"\n  📊 Saving profile after {resume_from:,} vectors...")
                                 self._save_profile_stats(resume_from)
                                 last_profile_count = resume_from
-                    
-                    # Finalize
-                    writer.finalize()
-                    progress.complete()
+            
+            # Pass 2: Sort temp index into final sorted index
+            print("\n  🔧 Building final sorted index...")
+            self._sort_temp_index(writer.get_temp_index_dir(), index_path)
+            
+            # Update checksum in vectors file
+            writer.update_header_checksum()
+            
+            # Cleanup temp directory
+            shutil.rmtree(writer.get_temp_index_dir())
             
             # Remove checkpoint
             if checkpoint_path.exists():
@@ -468,11 +464,6 @@ class PreprocessingEngine:
             
             # Show statistics
             self._show_statistics(resume_from)
-            
-            # Build index if needed
-            if not self._is_index_file_complete(index_path):
-                print("\n  🔍 Building index from completed vectors...")
-                self._build_index_from_vectors(vectors_path, index_path)
             
             return True
         
@@ -487,114 +478,123 @@ class PreprocessingEngine:
             if self.enable_profiling and self.profiler:
                 self.profiler.disable()
                 self._save_profile_stats(resume_from, final=True)
-
+    
     def _is_vectors_file_complete(self, vectors_path):
-        """Check if vectors file is complete."""
+        """Check if vectors file exists and has correct size."""
         if not vectors_path.exists():
             return False
         
-        # Calculate expected size
-        expected_size = UnifiedVectorWriter.HEADER_SIZE + self.total_vectors * UnifiedVectorWriter.RECORD_SIZE
-        return vectors_path.stat().st_size == expected_size
-
-    def _is_index_file_complete(self, index_path):
-        """Check if index file is complete."""
-        if not index_path.exists():
-            return False
+        expected_size = self.HEADER_SIZE + self.total_vectors * self.RECORD_SIZE
+        actual_size = vectors_path.stat().st_size
         
-        # Calculate expected size
-        expected_size = self.total_vectors * 26  # 22B track ID + 4B index
-        return index_path.stat().st_size == expected_size
-
-    def _build_index_from_vectors(self, vectors_path, index_path):
-        """Build index file from completed vectors file."""
-        from core.preprocessing.unified_vector_reader import UnifiedVectorReader
-        reader = UnifiedVectorReader(vectors_path)
-        total_vectors = reader.get_total_vectors()
+        # Allow 1% margin
+        return abs(actual_size - expected_size) <= expected_size * 0.01
+    
+    def _sort_temp_index(self, temp_index_dir: Path, output_path: Path):
+        """
+        External merge sort for index files.
+        Phase 1: Sort 2M-entry chunks in memory.
+        Phase 2: Merge sorted chunks with heap sort.
+        """
+        print("\n  🔧 Sorting index with external merge sort...")
         
-        if total_vectors != self.total_vectors:
-            print(f"  ❗ Vector file has {total_vectors:,} vectors, expected {self.total_vectors:,}")
-            return
+        temp_files = sorted(temp_index_dir.glob("temp_index_*.bin"),
+                           key=lambda f: int(f.stem.split('_')[-1]))
         
-        temp_dir = self.output_dir / "temp_index"
-        temp_dir.mkdir(exist_ok=True)
+        if not temp_files:
+            raise FileNotFoundError(f"No temp index files found in {temp_index_dir}")
         
-        # Process in chunks
-        chunk_size = 1_000_000
+        print(f"  Found {len(temp_files)} temp files to sort")
+        
+        # Phase 1: Sort chunks
+        chunk_size = 2_000_000  # 2M entries × 26B = ~52MB per chunk
+        temp_sorted_dir = temp_index_dir / "sorted_chunks"
+        temp_sorted_dir.mkdir(exist_ok=True)
+        
         chunk_files = []
-        num_chunks = (total_vectors + chunk_size - 1) // chunk_size
+        current_chunk = []
+        chunk_idx = 0
         
-        print(f"  Processing {total_vectors:,} vectors in {num_chunks} chunks")
+        for temp_file in temp_files:
+            with open(temp_file, "rb") as f:
+                while True:
+                    data = f.read(26)
+                    if not data:
+                        break
+                    
+                    track_id = data[:22].decode('ascii', 'ignore').rstrip('\0')
+                    vector_index = struct.unpack("<I", data[22:26])[0]
+                    current_chunk.append((track_id, vector_index))
+                    
+                    if len(current_chunk) >= chunk_size:
+                        current_chunk.sort(key=lambda x: x[0])
+                        
+                        chunk_file = temp_sorted_dir / f"sorted_{chunk_idx:04d}.bin"
+                        with open(chunk_file, "wb") as cf:
+                            for tid, idx in current_chunk:
+                                tid_bytes = tid.encode('ascii', 'ignore').ljust(22, b'\0')
+                                cf.write(tid_bytes)
+                                cf.write(struct.pack("<I", idx))
+                        
+                        chunk_files.append(chunk_file)
+                        chunk_idx += 1
+                        current_chunk = []
         
-        for chunk_idx in range(num_chunks):
-            start_idx = chunk_idx * chunk_size
-            end_idx = min(start_idx + chunk_size, total_vectors)
-            num_vectors = end_idx - start_idx
-            
-            print(f"  Chunk {chunk_idx+1}/{num_chunks}: vectors {start_idx:,}-{end_idx-1:,}")
-            
-            metadata = reader.get_vector_metadata_batch(start_idx, num_vectors)
-            metadata.sort(key=lambda x: x[0])
-            
-            chunk_file = temp_dir / f"chunk_{chunk_idx}.bin"
-            with open(chunk_file, "wb") as f:
-                for track_id, vector_index in metadata:
-                    tid_bytes = track_id.encode('ascii', 'ignore').ljust(22, b'\0')
-                    f.write(tid_bytes)
-                    f.write(int.to_bytes(vector_index, 4, 'little'))
-            
+        # Final chunk
+        if current_chunk:
+            current_chunk.sort(key=lambda x: x[0])
+            chunk_file = temp_sorted_dir / f"sorted_{chunk_idx:04d}.bin"
+            with open(chunk_file, "wb") as cf:
+                for tid, idx in current_chunk:
+                    tid_bytes = tid.encode('ascii', 'ignore').ljust(22, b'\0')
+                    cf.write(tid_bytes)
+                    cf.write(struct.pack("<I", idx))
             chunk_files.append(chunk_file)
         
-        # Merge sorted chunks
+        print(f"  Created {len(chunk_files)} sorted chunks")
+        
+        # Phase 2: Merge with heap sort
         print("  Merging sorted chunks...")
-        self._merge_chunks(chunk_files, index_path)
+        self._merge_chunks(chunk_files, output_path)
         
-        # Clean up
-        import shutil
-        shutil.rmtree(temp_dir)
-        
-        print(f"  ✅ Index file created with {total_vectors:,} entries")
-
+        shutil.rmtree(temp_sorted_dir)
+        print(f"  ✅ Sorted index written to {output_path}")
+    
     def _merge_chunks(self, chunk_files, output_path):
-        """Merge sorted chunk files into final index."""
-        import struct
+        """Merge sorted chunks using heap sort."""
         import heapq
+        import struct
         
         files = [open(f, "rb") for f in chunk_files]
-        records = [None] * len(files)
+        records = []
         
         for i, f in enumerate(files):
-            tid_bytes = f.read(22)
-            if tid_bytes:
-                index_bytes = f.read(4)
-                track_id = tid_bytes.decode('ascii', 'ignore').rstrip('\0')
-                vector_index = struct.unpack("<I", index_bytes)[0]
-                records[i] = (track_id, vector_index, i)
+            data = f.read(26)
+            if data:
+                track_id = data[:22].decode('ascii', 'ignore').rstrip('\0')
+                vector_index = struct.unpack("<I", data[22:26])[0]
+                records.append((track_id, vector_index, i))
         
-        heap = []
-        for i, rec in enumerate(records):
-            if rec is not None:
-                heapq.heappush(heap, (rec[0], rec[1], rec[2]))
+        heapq.heapify(records)
         
         with open(output_path, "wb") as out_file:
             processed = 0
-            while heap:
-                track_id, vector_index, file_idx = heapq.heappop(heap)
+            while records:
+                track_id, vector_index, file_idx = heapq.heappop(records)
                 
                 tid_bytes = track_id.encode('ascii', 'ignore').ljust(22, b'\0')
                 out_file.write(tid_bytes)
                 out_file.write(struct.pack("<I", vector_index))
                 
-                processed += 1
-                if processed % 5_000_000 == 0:
-                    print(f"  Merged {processed:,} records...")
+                next_data = files[file_idx].read(26)
+                if next_data:
+                    next_track_id = next_data[:22].decode('ascii', 'ignore').rstrip('\0')
+                    next_vector_index = struct.unpack("<I", next_data[22:26])[0]
+                    heapq.heappush(records, (next_track_id, next_vector_index, file_idx))
                 
-                tid_bytes = files[file_idx].read(22)
-                if tid_bytes:
-                    index_bytes = files[file_idx].read(4)
-                    track_id = tid_bytes.decode('ascii', 'ignore').rstrip('\0')
-                    vector_index = struct.unpack("<I", index_bytes)[0]
-                    heapq.heappush(heap, (track_id, vector_index, file_idx))
+                processed += 1
+                if processed % 10_000_000 == 0:
+                    print(f"  Merged {processed:,} records...")
         
         for f in files:
             f.close()

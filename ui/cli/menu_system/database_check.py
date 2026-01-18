@@ -4,7 +4,8 @@ import json
 import shutil
 from ui.cli.console_utils import print_header, print_menu, get_choice
 from config import PathConfig
-from core.utilities.setup_validator import validate_vector_cache, is_setup_complete, rebuild_index, EXPECTED_VECTORS
+from core.utilities.setup_validator import validate_vector_cache, is_setup_complete, rebuild_index
+from config import EXPECTED_VECTORS
 
 def check_databases():
     """Check if required database files exist."""
