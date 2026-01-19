@@ -1,327 +1,476 @@
 # core/similarity_engine/vector_io_gpu.py
+"""
+GPU-accelerated vector I/O for unified track_vectors.bin format.
+Memory-mapped GPU tensors with CUDA kernel unpacking.
+"""
 import torch
 import numpy as np
 from pathlib import Path
 from typing import Optional, Tuple
-from core.utilities.gpu_utils import recommend_max_batch_size
-from config import VRAM_SAFETY_FACTOR, PathConfig
 import os
+import mmap
+from config import PathConfig, VRAM_SAFETY_FACTOR
+
+# Constants for unified format
+VECTOR_RECORD_SIZE = 104    # Total bytes per vector record
+VECTOR_HEADER_SIZE = 16     # Header size at start of file
+MASK_OFFSET_IN_RECORD = 65  # 4-byte mask starts at byte 65 of each record
+REGION_OFFSET_IN_RECORD = 69  # 1-byte region code at byte 69
+ISRC_OFFSET_IN_RECORD = 70  # 12-byte ISRC at bytes 70-81
+TRACK_ID_OFFSET_IN_RECORD = 82  # 22-byte track ID at bytes 82-103
 
 class VectorReaderGPU:
-    """GPU-optimized vector reader with VRAM-aware batch sizing and mask support."""
+    """GPU-optimized unified vector reader with embedded metadata."""
     
     VECTOR_DIMENSIONS = 32
-    BYTES_PER_VECTOR = 128  # 32 * 4 bytes
-    BYTES_PER_MASK = 4      # 4 bytes per mask (uint32)
+    BYTES_PER_VECTOR = VECTOR_RECORD_SIZE  # 104 bytes per unified record
+    BYTES_PER_MASK = 4      # Mask is embedded, just for reference
     DTYPE = torch.float32
     
-    def __init__(self, vectors_path: Optional[str] = None, 
-                 masks_path: Optional[str] = None,
-                 device="cuda", vram_scaling_factor_mb=None):
-        # Use PathConfig defaults if not provided
+    def __init__(self, 
+                 vectors_path: Optional[str] = None,
+                 device: str = "cuda",
+                 vram_scaling_factor_mb: Optional[int] = None):
+        """
+        Initialize GPU vector reader for unified file format.
+        
+        Args:
+            vectors_path: Path to unified track_vectors.bin
+            device: GPU device to use
+            vram_scaling_factor_mb: Override VRAM allocation limit
+        """
+        # Use PathConfig default if not provided
         self.vectors_path = Path(vectors_path) if vectors_path else PathConfig.get_vector_file()
-        self.masks_path = Path(masks_path) if masks_path else PathConfig.get_mask_file()
         self.device = device
         
-        # Verify paths exist
         if not self.vectors_path.exists():
             raise FileNotFoundError(f"Vector file not found: {self.vectors_path}")
-        if not self.masks_path.exists():
-            raise FileNotFoundError(f"Mask file not found: {self.masks_path}")
         
-        # Get actual file sizes
-        vector_file_size = self.vectors_path.stat().st_size
-        mask_file_size = self.masks_path.stat().st_size
+        # Get file sizes
+        self.file_size = self.vectors_path.stat().st_size
+        self.total_vectors = (self.file_size - VECTOR_HEADER_SIZE) // VECTOR_RECORD_SIZE
         
-        # Calculate vector count from vectors file
-        self.total_vectors = vector_file_size // self.BYTES_PER_VECTOR
+        # Validate file structure
+        if self.file_size < VECTOR_HEADER_SIZE:
+            raise ValueError(f"Vector file too small: {self.file_size} bytes")
         
-        # Verify mask file size matches vector count
-        expected_mask_size = self.total_vectors * self.BYTES_PER_MASK
-        if mask_file_size != expected_mask_size:
+        if self.total_vectors != (self.file_size - VECTOR_HEADER_SIZE) / VECTOR_RECORD_SIZE:
             raise ValueError(
-                f"Mask file size mismatch: Expected {expected_mask_size} bytes, "
-                f"got {mask_file_size} bytes. Vector count: {self.total_vectors}"
+                f"File size mismatch: expected {VECTOR_RECORD_SIZE} bytes per record, "
+                f"but file size {self.file_size} doesn't divide evenly"
             )
         
-        # Auto-configure batch size based on VRAM
+        # Initialize memory map
+        try:
+            self._file = open(self.vectors_path, 'rb')
+            self._mmap = mmap.mmap(
+                self._file.fileno(),
+                self.file_size,
+                access=mmap.ACCESS_READ
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to memory-map vector file: {e}")
+        
+        # Calculate VRAM allocation
         self.max_batch_size = self._calculate_max_batch_size(vram_scaling_factor_mb)
         
-        # Memory map vectors on CPU
-        self.mmap_cpu = torch.from_file(
-            str(self.vectors_path),
-            size=self.total_vectors * self.VECTOR_DIMENSIONS,
-            dtype=self.DTYPE
-        ).reshape(self.total_vectors, self.VECTOR_DIMENSIONS)
+        # Initialize CUDA unpacker if available
+        self.cuda_unpacker = self._load_cuda_unpacker()
         
-        # Memory map masks as uint32 (4 bytes per mask)
-        # Use memory-mapped file instead of loading entire file
-        self.masks_fd = os.open(str(self.masks_path), os.O_RDONLY)
-        self.masks_size = mask_file_size
-        
-        # print(f"   GPU Vector Reader Initialized:")
-        # print(f"     Total track vectors: {self.total_vectors:,}")
-        # print(f"     Vector file: {self.vectors_path.name} ({vector_file_size/(1024**3):.2f} GB)")
-        # print(f"     Mask file: {self.masks_path.name} ({mask_file_size/(1024**3):.2f} GB)")
-        # print(f"     Max batch size: {self.max_batch_size:,} vectors")
+        print(f"✅ GPU Vector Reader initialized:")
+        print(f"   File: {self.vectors_path.name}")
+        print(f"   Size: {self.file_size / (1024**3):.1f} GB")
+        print(f"   Vectors: {self.total_vectors:,}")
+        print(f"   Max batch: {self.max_batch_size:,}")
+        print(f"   Device: {self.device}")
     
-    def _calculate_max_batch_size(self, vram_scaling_factor_mb):
-        """Calculate optimal batch size based on available VRAM."""
-        if vram_scaling_factor_mb is None:
-            # Auto-detect VRAM
-            max_batch = recommend_max_batch_size(
-                vector_dim=self.VECTOR_DIMENSIONS,
-                dtype_size=4,  # float32 = 4 bytes
-                safety_factor=VRAM_SAFETY_FACTOR
-            )
-            return max_batch
+    def _calculate_max_batch_size(self, vram_scaling_factor_mb: Optional[int]) -> int:
+        """Calculate maximum vectors that fit in VRAM."""
+        bytes_per_vector = VECTOR_RECORD_SIZE  # Full record size
         
-        # Use manual configuration
-        bytes_per_vector = 32 * 4
-        return int((vram_scaling_factor_mb * 1024**2) / bytes_per_vector)
+        if vram_scaling_factor_mb:
+            usable_vram = vram_scaling_factor_mb * 1024 * 1024
+        else:
+            # Auto-detect available VRAM
+            if not torch.cuda.is_available():
+                raise RuntimeError("CUDA not available for GPU reader")
+            
+            free_vram = torch.cuda.mem_get_info()[0]
+            usable_vram = int(free_vram * VRAM_SAFETY_FACTOR)
+        
+        # Account for unpacking overhead (1.5x safety margin)
+        max_batch = int((usable_vram // bytes_per_vector) // 1.5)
+        
+        # Clamp to reasonable range
+        return min(max_batch, 50_000_000)  # Max 50M vectors per batch
+    
+    def _load_cuda_unpacker(self):
+        """Load CUDA kernel for unpacking records."""
+        try:
+            from torch.utils.cpp_extension import load
+            
+            # Look for CUDA source file
+            cuda_source = Path(__file__).parent / "cuda_vector_unpacker.cu"
+            if not cuda_source.exists():
+                print("  ⚠️  CUDA kernel not found, will use Python fallback")
+                return None
+            
+            # Compile and load
+            unpacker = load(
+                name="cuda_unpacker",
+                sources=[str(cuda_source)],
+                extra_cuda_cflags=["-O3", "--use_fast_math"],
+                verbose=False
+            )
+            return unpacker
+        
+        except Exception as e:
+            print(f"  ⚠️  CUDA kernel compilation failed: {e}")
+            print("  Will use Python fallback for unpacking")
+            return None
     
     def read_chunk(self, start_idx: int, num_vectors: int) -> torch.Tensor:
-        """Read full chunk by breaking into sub-batches"""
-        vectors = []
-        processed = 0
+        """
+        Read and unpack a chunk of vectors to GPU.
         
-        while processed < num_vectors:
-            # Calculate remaining vectors
-            remaining = num_vectors - processed
-            read_size = min(remaining, self.max_batch_size)
+        Args:
+            start_idx: Starting vector index (0-based)
+            num_vectors: Number of vectors to read
             
-            # Read sub-batch
-            sub_start = start_idx + processed
-            sub_vectors = self.mmap_cpu[sub_start:sub_start+read_size].to(self.device)
-            vectors.append(sub_vectors)
-            
-            processed += read_size
-        
-        # Combine all sub-batches
-        return torch.cat(vectors)
-    
-    def read_masks(self, start_idx: int, num_vectors: int) -> torch.Tensor:
-        """Read masks for a chunk of vectors"""
-        # Calculate byte positions
-        start_byte = start_idx * self.BYTES_PER_MASK
-        num_bytes = num_vectors * self.BYTES_PER_MASK
-        
+        Returns:
+            Tensor of shape (num_vectors, 32) on GPU
+        """
         # Validate bounds
-        if start_byte + num_bytes > self.masks_size:
+        if start_idx < 0 or start_idx + num_vectors > self.total_vectors:
             raise ValueError(
-                f"Mask read out of bounds: {start_byte} + {num_bytes} > {self.masks_size}"
+                f"Invalid range: [{start_idx}, {start_idx + num_vectors}) "
+                f"outside [0, {self.total_vectors})"
             )
         
-        # Read directly from file descriptor
-        os.lseek(self.masks_fd, start_byte, os.SEEK_SET)
-        mask_data = os.read(self.masks_fd, num_bytes)
+        # Process in sub-batches if needed
+        if num_vectors <= self.max_batch_size:
+            return self._read_chunk_internal(start_idx, num_vectors)
         
-        # Convert to tensor
-        masks_np = np.frombuffer(mask_data, dtype=np.uint32)
-        masks_tensor = torch.tensor(masks_np, dtype=torch.int64, device=self.device)
+        # Split into sub-batches
+        results = []
+        remaining = num_vectors
+        current_start = start_idx
         
-        return masks_tensor
+        while remaining > 0:
+            batch_size = min(remaining, self.max_batch_size)
+            batch = self._read_chunk_internal(current_start, batch_size)
+            results.append(batch)
+            
+            current_start += batch_size
+            remaining -= batch_size
+        
+        return torch.cat(results, dim=0)
     
-    def __del__(self):
-        """Clean up resources"""
-        if hasattr(self, 'masks_fd'):
-            os.close(self.masks_fd)
+    def _read_chunk_internal(self, start_idx: int, num_vectors: int) -> torch.Tensor:
+        """Internal method to read a single batch."""
+        # Calculate byte offset (skip header + jump to record)
+        offset = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE
+        num_bytes = num_vectors * VECTOR_RECORD_SIZE
+        
+        # Read raw bytes from memory map
+        raw_data = torch.frombuffer(
+            self._mmap,
+            dtype=torch.uint8,
+            count=num_bytes,
+            offset=offset
+        ).cuda()
+        
+        # Unpack via CUDA kernel or fallback
+        if self.cuda_unpacker:
+            return self._unpack_via_cuda(raw_data, num_vectors)
+        else:
+            return self._unpack_via_python(raw_data, num_vectors)
     
-    def read_vector_and_mask(self, index: int) -> Tuple[torch.Tensor, int]:
-        """Read a single vector and mask by index"""
-        vector = self.mmap_cpu[index].to(self.device)
+    def _unpack_via_cuda(self, raw_data: torch.Tensor, num_vectors: int) -> torch.Tensor:
+        """Use CUDA kernel for high-speed unpacking."""
+        # Allocate output tensor
+        output = torch.empty((num_vectors, self.VECTOR_DIMENSIONS), 
+                           dtype=self.DTYPE,
+                           device=self.device)
         
-        # Read single mask
-        mask_byte = index * self.BYTES_PER_MASK
-        os.lseek(self.masks_fd, mask_byte, os.SEEK_SET)
-        mask_data = os.read(self.masks_fd, self.BYTES_PER_MASK)
-        mask = struct.unpack('I', mask_data)[0]
+        # Launch kernel
+        threads_per_block = 256
+        blocks = (num_vectors + threads_per_block - 1) // threads_per_block
         
-        return vector, mask
+        self.cuda_unpacker.unpack_vectors_kernel(
+            raw_data.data_ptr(),
+            output.data_ptr(),
+            num_vectors
+        )
+        
+        # Synchronize
+        torch.cuda.synchronize()
+        
+        return output
+    
+    def _unpack_via_python(self, raw_data: torch.Tensor, num_vectors: int) -> torch.Tensor:
+        """Fallback Python unpacking with GPU-compatible operations."""
+        # Reshape to (num_vectors, VECTOR_RECORD_SIZE)
+        records = raw_data.view(num_vectors, VECTOR_RECORD_SIZE)
+        
+        # Allocate output
+        vectors = torch.zeros((num_vectors, self.VECTOR_DIMENSIONS), 
+                            dtype=self.DTYPE,
+                            device=self.device)
+        
+        # Binary dimensions (byte 0) - bit shifts work fine on uint8
+        binary_byte = records[:, 0]
+        vectors[:, 9] = ((binary_byte >> 0) & 1).float()   # mode
+        vectors[:, 11] = ((binary_byte >> 1) & 1).float()  # ts_4_4
+        vectors[:, 12] = ((binary_byte >> 2) & 1).float()  # ts_3_4
+        vectors[:, 13] = ((binary_byte >> 3) & 1).float()  # ts_5/4
+        vectors[:, 14] = ((binary_byte >> 4) & 1).float()  # ts_other
+        
+        # SCALED DIMENSIONS (bytes 1-44, 22 uint16 values)
+        # Use int32 to avoid CUDA uint16 shift limitations
+        scaled_bytes = records[:, 1:45].to(torch.int32)
+        
+        # Extract uint16 using multiplication (byte1 * 256 + byte0)
+        # This avoids bit shifts on small integer types
+        lsb = scaled_bytes[:, 0::2]   # Even bytes (LSB)
+        msb = scaled_bytes[:, 1::2]   # Odd bytes (MSB)
+        
+        # Combine bytes: msb * 256 + lsb
+        scaled = (msb * 256 + lsb).float() / 10000.0
+        
+        # First 9 scaled dimensions
+        vectors[:, 0] = scaled[:, 0]   # acousticness
+        vectors[:, 1] = scaled[:, 1]   # instrumentalness
+        vectors[:, 2] = scaled[:, 2]   # speechiness
+        vectors[:, 3] = scaled[:, 3]   # valence
+        vectors[:, 4] = scaled[:, 4]   # danceability
+        vectors[:, 5] = scaled[:, 5]   # energy
+        vectors[:, 6] = scaled[:, 6]   # liveness
+        vectors[:, 8] = scaled[:, 7]   # key
+        vectors[:, 16] = scaled[:, 8]  # release_date
+        
+        # Meta-genres (13 dimensions)
+        vectors[:, 19:32] = scaled[:, 9:22]  # Dimensions 20-32
+        
+        # FP32 DIMENSIONS (bytes 45-64, 5 float32 values)
+        fp32_bytes = records[:, 45:65].to(torch.int32)
+        
+        # Extract 32-bit floats using multiplication
+        byte0 = fp32_bytes[:, 0::4]  # LSB
+        byte1 = fp32_bytes[:, 1::4]
+        byte2 = fp32_bytes[:, 2::4]
+        byte3 = fp32_bytes[:, 3::4]  # MSB
+        
+        # Combine: byte3 * 2^24 + byte2 * 2^16 + byte1 * 2^8 + byte0
+        fp32_uint32 = (byte3 * 16777216) + (byte2 * 65536) + (byte1 * 256) + byte0
+        
+        # Convert to float32 - view() works here because tensor is properly aligned
+        fp32 = fp32_uint32.view(torch.float32)
+        
+        vectors[:, 7] = fp32[:, 0]   # loudness
+        vectors[:, 10] = fp32[:, 1]  # tempo
+        vectors[:, 15] = fp32[:, 2]  # duration
+        vectors[:, 17] = fp32[:, 3]  # popularity
+        vectors[:, 18] = fp32[:, 4]  # followers
+        
+        return vectors
+
+    def read_masks(self, start_idx: int, num_vectors: int) -> torch.Tensor:
+        """
+        Read validity masks from embedded position in vector records.
+        Each mask is a 4-byte uint32 stored in little-endian format.
+        """
+        # Masks are stored at offset 65-68 within each 104-byte record
+        mask_size = 4  # bytes per mask (uint32)
+        
+        # Calculate absolute file offset for the first mask
+        offset = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE + MASK_OFFSET_IN_RECORD
+        
+        # Read raw bytes as uint8 (safe for unaligned memory access)
+        mask_bytes = torch.frombuffer(
+            self._mmap,
+            dtype=torch.uint8,
+            count=num_vectors * mask_size,
+            offset=offset
+        ).cuda()
+        
+        # Reshape to (num_vectors, 4) where each row is the 4 bytes of one mask
+        mask_uint8 = mask_bytes.view(num_vectors, 4)
+        
+        # DEBUG: Show raw bytes for first few masks
+        if start_idx == 0:
+            print(f"  🔍 First 5 masks (raw bytes):")
+            print(f"     {mask_uint8[:5]}")
+        
+        # FIX: CUDA doesn't support bitwise left shift on uint32 tensors.
+        # Workaround: Convert to int32, perform shifts, then convert back.
+        # Little-endian reconstruction: (byte3 << 24) | (byte2 << 16) | (byte1 << 8) | byte0
+        
+        # Extract the 4 bytes and convert to int32 for shift operations
+        byte0 = mask_uint8[:, 0].to(torch.int32)  # Least Significant Byte
+        byte1 = mask_uint8[:, 1].to(torch.int32)
+        byte2 = mask_uint8[:, 2].to(torch.int32)
+        byte3 = mask_uint8[:, 3].to(torch.int32)  # Most Significant Byte
+        
+        # Reconstruct the uint32 value using bit shifts on int32
+        # This is safe on CUDA and produces the correct result
+        masks_int32 = (byte3 << 24) | (byte2 << 16) | (byte1 << 8) | byte0
+        
+        # Convert final result back to uint32 (masks are bit patterns)
+        masks = masks_int32.to(torch.uint32)
+        
+        # DEBUG: Show decoded masks
+        if start_idx == 0:
+            print(f"  🔍 First 5 masks (decoded uint32):")
+            print(f"     {masks[:5]}")
+            print(f"  🔍 Expected mask pattern: valid dims should have bits set")
+        
+        return masks
+
+    def read_regions(self, start_idx: int, num_vectors: int) -> torch.Tensor:
+        """
+        Read region codes from embedded position in vector records.
+        
+        Note: In the unified format, regions are embedded at byte 69 of each record.
+        If using external region file, use RegionReaderGPU instead.
+        
+        Args:
+            start_idx: Starting vector index
+            num_vectors: Number of regions to read
+            
+        Returns:
+            Tensor of uint8 region codes (0-7), shape (num_vectors,)
+        """
+        # Regions are at byte 69 of each record
+        region_offsets = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE + REGION_OFFSET_IN_RECORD
+        region_bytes = torch.frombuffer(
+            self._mmap,
+            dtype=torch.uint8,
+            count=num_vectors,
+            offset=region_offsets
+        ).cuda()
+        
+        return region_bytes
+    
+    def read_vector_metadata(self, index: int) -> dict:
+        """
+        Read metadata for a single vector from unified record.
+        
+        Args:
+            index: Vector index to read
+            
+        Returns:
+            dict with mask, region, isrc, track_id
+        """
+        if index < 0 or index >= self.total_vectors:
+            raise ValueError(f"Index {index} out of bounds")
+        
+        offset = VECTOR_HEADER_SIZE + index * VECTOR_RECORD_SIZE
+        
+        # Read mask (4 bytes)
+        mask_bytes = self._mmap[offset + MASK_OFFSET_IN_RECORD:
+                                offset + MASK_OFFSET_IN_RECORD + 4]
+        mask = struct.unpack("<I", mask_bytes)[0]
+        
+        # Read region (1 byte)
+        region = self._mmap[offset + REGION_OFFSET_IN_RECORD]
+        
+        # Read ISRC (12 bytes)
+        isrc_bytes = self._mmap[offset + ISRC_OFFSET_IN_RECORD:
+                                offset + ISRC_OFFSET_IN_RECORD + 12]
+        isrc = isrc_bytes.decode('ascii', 'ignore').rstrip('\0')
+        
+        # Read track ID (22 bytes)
+        track_id_bytes = self._mmap[offset + TRACK_ID_OFFSET_IN_RECORD:
+                                    offset + TRACK_ID_OFFSET_IN_RECORD + 22]
+        track_id = track_id_bytes.decode('ascii', 'ignore').rstrip('\0')
+        
+        return {
+            'mask': mask,
+            'region': region,
+            'isrc': isrc,
+            'track_id': track_id
+        }
     
     def get_total_vectors(self) -> int:
+        """Get total number of vectors in the file."""
         return self.total_vectors
     
     def get_max_batch_size(self) -> int:
+        """Get maximum batch size for this VRAM configuration."""
         return self.max_batch_size
     
-    def unpack_mask(self, mask: int) -> torch.Tensor:
-        """
-        Unpack a bitmask into a boolean tensor.
-        
-        Args:
-            mask: 32-bit unsigned integer mask
-            
-        Returns:
-            Boolean tensor of shape (32,) where True indicates valid dimension
-        """
-        return torch.tensor([(mask >> i) & 1 for i in range(32)], 
-                           dtype=torch.bool, device=self.device)
-    
-    def get_valid_dimensions(self, mask: int, query_vector: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """
-        Get valid dimension indices considering both vector mask and query validity.
-        
-        Args:
-            mask: 32-bit mask for the vector
-            query_vector: Optional query vector to consider its validity
-            
-        Returns:
-            Tensor of valid dimension indices
-        """
-        vector_valid = self.unpack_mask(mask)
-        
-        if query_vector is None:
-            return torch.where(vector_valid)[0]
-        
-        query_valid = (query_vector != -1)
-        return torch.where(vector_valid & query_valid)[0]
+    def __del__(self):
+        """Clean up resources."""
+        if hasattr(self, '_mmap') and self._mmap:
+            self._mmap.close()
+        if hasattr(self, '_file') and self._file:
+            self._file.close()
+
 
 class RegionReaderGPU:
-    """GPU-optimized region data reader with packed bit storage"""
+    """
+    Legacy region reader for external track_regions.bin file.
     
-    BITS_PER_REGION = 3
-    BYTES_PER_REGION = BITS_PER_REGION / 8  # 0.375 bytes
-    REGION_COUNT = 8  # 0-7 regions
+    Note: In unified format, regions are embedded in track_vectors.bin.
+    This class is kept for backwards compatibility but is not used
+    in the new architecture.
+    """
     
-    def __init__(self, region_path: Optional[Path] = None):
-        """
-        Initialize region reader.
-        
-        Args:
-            region_path: Path to track_regions.bin file
-        """
-        self.region_path = region_path or PathConfig.VECTORS / "track_regions.bin"
+    def __init__(self, region_path: Optional[str] = None):
+        self.region_path = Path(region_path) if region_path else PathConfig.VECTORS / "track_regions.bin"
         self.packed_data = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.total_regions = 0
         self.is_loaded = False
-        
+    
     def load(self) -> bool:
-        """Load packed region data into GPU memory."""
+        """Load external region file if it exists."""
         if not self.region_path.exists():
-            print(f"Region file not found: {self.region_path}")
             return False
         
         try:
-            # Get file size to calculate total regions
             file_size = self.region_path.stat().st_size
-            self.total_regions = int(file_size / self.BYTES_PER_REGION)
+            self.total_regions = int(file_size / 0.375)  # 3 bits per region
             
-            # Read entire file into memory
             with open(self.region_path, 'rb') as f:
-                data = np.frombuffer(f.read(), dtype=np.uint8)
-            
-            # Transfer to GPU tensor
-            self.packed_data = torch.tensor(data, dtype=torch.uint8, device=self.device)
+                self.packed_data = torch.tensor(
+                    np.frombuffer(f.read(), dtype=np.uint8),
+                    dtype=torch.uint8,
+                    device=self.device
+                )
             self.is_loaded = True
             return True
         except Exception as e:
-            print(f"Error loading region data: {e}")
+            print(f"  ⚠️  Could not load region file: {e}")
             return False
     
     def get_region_batch(self, indices: torch.Tensor) -> torch.Tensor:
-        """
-        Get regions for a batch of indices.
-        
-        Args:
-            indices: Tensor of vector indices (0-based)
-            
-        Returns:
-            Tensor of region codes (0-7) with same shape as indices
-        """
+        """Extract regions for batch of indices."""
         if not self.is_loaded:
-            raise RuntimeError("Region data not loaded. Call load() first.")
+            raise RuntimeError("Region file not loaded")
         
-        # Convert indices to long if needed
-        indices = indices.to(dtype=torch.long, device=self.device)
+        # Bit extraction logic for external file
+        byte_offsets = (indices * 3) // 8
+        bit_offsets = (indices * 3) % 8
         
-        # Calculate byte positions
-        byte_offsets = (indices * self.BITS_PER_REGION) // 8
-        bit_offsets = (indices * self.BITS_PER_REGION) % 8
-        
-        # Convert to long
-        byte_offsets = byte_offsets.long()
-        bit_offsets = bit_offsets.long()
-        
-        # Get packed bytes containing the regions
         packed_bytes = self.packed_data[byte_offsets]
+        mask_low = bit_offsets <= 5
         
-        # Create mask for different extraction cases
-        mask_low = bit_offsets <= 5  # Bits within single byte
-        mask_high = ~mask_low        # Bits span two bytes
+        regions = torch.zeros_like(indices, dtype=torch.uint8)
         
-        # Initialize output tensor
-        regions = torch.zeros_like(indices, dtype=torch.long, device=self.device)  # CHANGED TO LONG
-        
-        # Case 1: All bits within a single byte
         if torch.any(mask_low):
-            # Calculate shift amount (5 - bit_offset)
             shifts = 5 - bit_offsets[mask_low]
-            
-            # Extract 3-bit region value
-            regions[mask_low] = (packed_bytes[mask_low].long() >> shifts) & 0x07
+            regions[mask_low] = (packed_bytes[mask_low] >> shifts) & 0x07
         
-        # Case 2: Bits span two bytes
-        if torch.any(mask_high):
-            # Get next byte for cross-byte regions
-            next_bytes = self.packed_data[byte_offsets[mask_high] + 1]
-            
-            # Calculate bits from first byte
-            first_part = packed_bytes[mask_high].long() << (bit_offsets[mask_high] - 5)
-            
-            # Calculate bits from second byte
-            second_part = next_bytes.long() >> (13 - bit_offsets[mask_high])
-            
-            # Combine and mask to 3 bits
-            regions[mask_high] = (first_part | second_part) & 0x07
+        if torch.any(~mask_low):
+            # Handle cross-byte case
+            next_bytes = self.packed_data[byte_offsets[~mask_low] + 1]
+            regions[~mask_low] = ((packed_bytes[~mask_low] << (bit_offsets[~mask_low] - 5)) | 
+                                (next_bytes >> (13 - bit_offsets[~mask_low]))) & 0x07
         
-        return regions.to(torch.uint8)  # Convert to uint8 at the end
-
-    def get_region(self, index: int) -> int:
-        """
-        Get region for a single index.
-        
-        Args:
-            index: Vector index (0-based)
-            
-        Returns:
-            Region code (0-7)
-        """
-        if not self.is_loaded:
-            self.load()
-        
-        # Create tensor for single index
-        index_tensor = torch.tensor([index], dtype=torch.long, device=self.device)
-        return self.get_region_batch(index_tensor).item()
-    
-    def get_total_regions(self) -> int:
-        """Get total number of regions (should match vector count)."""
-        return self.total_regions
+        return regions
     
     def is_available(self) -> bool:
-        """Check if region data is available."""
+        """Check if external region data is available."""
         return self.is_loaded
-    
-    def get_region_distribution(self, sample_size: int = 1000000) -> dict:
-        """Get distribution of regions in the dataset."""
-        if not self.is_loaded:
-            self.load()
-        
-        # Create random sample indices
-        indices = torch.randint(0, self.total_regions, (sample_size,), device=self.device)
-        
-        # Get regions for sample
-        regions = self.get_region_batch(indices)
-        
-        # Count distribution
-        counts = torch.bincount(regions, minlength=self.REGION_COUNT)
-        return {
-            region: count.item() / sample_size
-            for region, count in enumerate(counts)
-        }
-    
-    def __del__(self):
-        """Clean up resources."""
-        if self.packed_data is not None:
-            del self.packed_data
