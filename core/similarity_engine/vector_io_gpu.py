@@ -278,80 +278,80 @@ class VectorReaderGPU:
     def read_masks(self, start_idx: int, num_vectors: int) -> torch.Tensor:
         """
         Read validity masks from embedded position in vector records.
-        Each mask is a 4-byte uint32 stored in little-endian format.
+        Masks are at offset 65 within each 104-byte record.
+        
+        Args:
+            start_idx: Starting vector index (0-based)
+            num_vectors: Number of vectors to read
+            
+        Returns:
+            Tensor of uint32 masks, shape (num_vectors,)
         """
-        # Masks are stored at offset 65-68 within each 104-byte record
-        mask_size = 4  # bytes per mask (uint32)
+        # Calculate file offset for the first mask
+        first_mask_offset = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE + MASK_OFFSET_IN_RECORD
         
-        # Calculate absolute file offset for the first mask
-        offset = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE + MASK_OFFSET_IN_RECORD
+        # Read enough bytes to span from first mask to last mask (inclusive)
+        # Last mask ends at: first_mask_offset + (num_vectors-1)*VECTOR_RECORD_SIZE + 3
+        total_bytes_needed = (num_vectors - 1) * VECTOR_RECORD_SIZE + 4
         
-        # Read raw bytes as uint8 (safe for unaligned memory access)
+        # Read the raw bytes
         mask_bytes = torch.frombuffer(
             self._mmap,
             dtype=torch.uint8,
-            count=num_vectors * mask_size,
-            offset=offset
+            count=total_bytes_needed,
+            offset=first_mask_offset
         ).cuda()
         
-        # Reshape to (num_vectors, 4) where each row is the 4 bytes of one mask
-        mask_uint8 = mask_bytes.view(num_vectors, 4)
+        # Use as_strided to create a view that jumps VECTOR_RECORD_SIZE bytes per row
+        # This effectively extracts bytes [0:4], [104:108], [208:212], etc.
+        mask_uint8 = torch.as_strided(
+            mask_bytes,
+            size=(num_vectors, 4),
+            stride=(VECTOR_RECORD_SIZE, 1)
+        )
         
-        # DEBUG: Show raw bytes for first few masks
+        # Debug: Verify first few masks
         if start_idx == 0:
-            print(f"  🔍 First 5 masks (raw bytes):")
-            print(f"     {mask_uint8[:5]}")
+            print(f"  🔍 First mask bytes: {mask_uint8[0].cpu().numpy()}")
+            print(f"  🔍 Second mask bytes: {mask_uint8[1].cpu().numpy()}")
+            print(f"  🔍 Masks are {mask_uint8.shape[0]} rows apart in memory\n\n\n\n")
         
-        # FIX: CUDA doesn't support bitwise left shift on uint32 tensors.
-        # Workaround: Convert to int32, perform shifts, then convert back.
-        # Little-endian reconstruction: (byte3 << 24) | (byte2 << 16) | (byte1 << 8) | byte0
-        
-        # Extract the 4 bytes and convert to int32 for shift operations
-        byte0 = mask_uint8[:, 0].to(torch.int32)  # Least Significant Byte
+        # Unpack little-endian bytes to uint32
+        # mask_uint8[:, 0] = byte 0 (LSB), mask_uint8[:, 3] = byte 3 (MSB)
+        byte0 = mask_uint8[:, 0].to(torch.int32)
         byte1 = mask_uint8[:, 1].to(torch.int32)
         byte2 = mask_uint8[:, 2].to(torch.int32)
-        byte3 = mask_uint8[:, 3].to(torch.int32)  # Most Significant Byte
+        byte3 = mask_uint8[:, 3].to(torch.int32)
         
-        # Reconstruct the uint32 value using bit shifts on int32
-        # This is safe on CUDA and produces the correct result
+        # Reconstruct: MSB << 24 | ... | LSB
         masks_int32 = (byte3 << 24) | (byte2 << 16) | (byte1 << 8) | byte0
         
-        # Convert final result back to uint32 (masks are bit patterns)
-        masks = masks_int32.to(torch.uint32)
-        
-        # DEBUG: Show decoded masks
-        if start_idx == 0:
-            print(f"  🔍 First 5 masks (decoded uint32):")
-            print(f"     {masks[:5]}")
-            print(f"  🔍 Expected mask pattern: valid dims should have bits set")
-        
-        return masks
+        return masks_int32.to(torch.uint32)
 
     def read_regions(self, start_idx: int, num_vectors: int) -> torch.Tensor:
         """
         Read region codes from embedded position in vector records.
-        
-        Note: In the unified format, regions are embedded at byte 69 of each record.
-        If using external region file, use RegionReaderGPU instead.
-        
-        Args:
-            start_idx: Starting vector index
-            num_vectors: Number of regions to read
-            
-        Returns:
-            Tensor of uint8 region codes (0-7), shape (num_vectors,)
+        Region code is at byte 69 of each 104-byte record.
         """
-        # Regions are at byte 69 of each record
-        region_offsets = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE + REGION_OFFSET_IN_RECORD
+        first_region_offset = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE + REGION_OFFSET_IN_RECORD
+        total_bytes_needed = (num_vectors - 1) * VECTOR_RECORD_SIZE + 1
+        
         region_bytes = torch.frombuffer(
             self._mmap,
             dtype=torch.uint8,
-            count=num_vectors,
-            offset=region_offsets
+            count=total_bytes_needed,
+            offset=first_region_offset
         ).cuda()
         
-        return region_bytes
-    
+        # Strided view: one byte per record, jumping VECTOR_RECORD_SIZE bytes each time
+        regions = torch.as_strided(
+            region_bytes,
+            size=(num_vectors,),
+            stride=(VECTOR_RECORD_SIZE,)
+        )
+        
+        return regions
+
     def read_vector_metadata(self, index: int) -> dict:
         """
         Read metadata for a single vector from unified record.
