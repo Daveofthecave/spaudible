@@ -102,7 +102,9 @@ def save_playlist(results: List[Tuple], playlist_name: str) -> str:
     return filename
 
 def check_preprocessed_files() -> Tuple[bool, Optional[str]]:
-    """Check if preprocessed vector files exist."""
+    """
+    Check if preprocessed vector files exist and have correct sizes for new 104-byte format.
+    """
     vectors_path = PathConfig.get_vector_file()
     index_path = PathConfig.get_index_file()
     
@@ -111,10 +113,39 @@ def check_preprocessed_files() -> Tuple[bool, Optional[str]]:
     if not index_path.exists():
         return False, "Index file not found. Run preprocessing first."
     
+    # NEW: 104 bytes per vector record (was 128)
     vectors_size = vectors_path.stat().st_size
-    expected_min_size = 256_000_000 * 128
+    expected_min_size = 256_000_000 * 104  # 104 bytes per vector
+    
+    # Allow 10% margin for processing variations
     if vectors_size < expected_min_size * 0.9:
-        return False, f"Vector file size too small. Expected at least {expected_min_size:,} bytes, got {vectors_size:,}"
+        return False, (
+            f"Vector file size too small. Expected at least {expected_min_size:,} bytes, "
+            f"got {vectors_size:,}. File may be incomplete or corrupted."
+        )
+    
+    # NEW: 26 bytes per index entry (was 42: 22B ID + 8B offset + 12B ISRC)
+    index_size = index_path.stat().st_size
+    expected_index_size = 256_000_000 * 26  # 26 bytes per index entry
+    
+    if index_size < expected_index_size * 0.9:
+        return False, (
+            f"Index file size too small. Expected at least {expected_index_size:,} bytes, "
+            f"got {index_size:,}. File may be incomplete or corrupted."
+        )
+    
+    # Validate header info if metadata.json exists
+    metadata_path = PathConfig.VECTORS / "metadata.json"
+    if metadata_path.exists():
+        try:
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+            
+            actual_tracks = metadata.get('total_tracks', 0)
+            if actual_tracks < 256_000_000 * 0.99:
+                return False, f"Index incomplete: {actual_tracks:,} tracks processed"
+        except Exception:
+            pass  # Metadata optional for validation
     
     return True, None
 
