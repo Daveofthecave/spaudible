@@ -2,6 +2,7 @@
 import os
 import sys
 import time
+import math
 from pathlib import Path
 from typing import Optional, Tuple, Any
 from ui.cli.console_utils import print_header, format_elapsed_time, clear_screen
@@ -93,6 +94,11 @@ def _search_by_track_id(
         # Build vector for the track
         start_time = time.time()
         vector, track_data = build_canonical_vector(track_id)
+
+        # Debug: Validate query vector
+        print(f"  🔍 Query vector range: [{min(v for v in vector if v != -1):.3f}, {max(v for v in vector if v != -1):.3f}]")
+        print(f"  🔍 Query NaNs: {sum(1 for v in vector if math.isnan(v))}")
+        print(f"  🔍 Query valid dims: {sum(1 for v in vector if v != -1)}/32")
         
         if vector is None or all(v == -1.0 for v in vector):
             print("  ❌ Could not build vector for this track.")

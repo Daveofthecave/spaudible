@@ -184,7 +184,7 @@ class VectorReaderGPU:
         if self.cuda_unpacker:
             return self._unpack_via_cuda(raw_data, num_vectors)
         else:
-            return self._unpack_via_python(raw_data, num_vectors)
+            return self._unpack_via_python(raw_data, num_vectors, start_idx)
     
     def _unpack_via_cuda(self, raw_data: torch.Tensor, num_vectors: int) -> torch.Tensor:
         """Use CUDA kernel for high-speed unpacking."""
@@ -208,70 +208,62 @@ class VectorReaderGPU:
         
         return output
     
-    def _unpack_via_python(self, raw_data: torch.Tensor, num_vectors: int) -> torch.Tensor:
-        """Fallback Python unpacking with GPU-compatible operations."""
-        # Reshape to (num_vectors, VECTOR_RECORD_SIZE)
-        records = raw_data.view(num_vectors, VECTOR_RECORD_SIZE)
+    def _unpack_via_python(self, raw_data: torch.Tensor, num_vectors: int, start_idx: int) -> torch.Tensor:
+        """Fallback Python unpacking using numpy for misaligned memory."""
+        # Move to CPU to allow flexible memory operations
+        records_cpu = raw_data.cpu()
         
-        # Allocate output
+        # Use numpy to handle the misaligned views
+        import numpy as np
+        records_np = records_cpu.numpy().view(np.uint8)
+        records_np = records_np.reshape(num_vectors, VECTOR_RECORD_SIZE)
+        
+        # Allocate torch output on GPU
         vectors = torch.zeros((num_vectors, self.VECTOR_DIMENSIONS), 
                             dtype=self.DTYPE,
                             device=self.device)
         
-        # Binary dimensions (byte 0) - bit shifts work fine on uint8
-        binary_byte = records[:, 0]
-        vectors[:, 9] = ((binary_byte >> 0) & 1).float()   # mode
-        vectors[:, 11] = ((binary_byte >> 1) & 1).float()  # ts_4_4
-        vectors[:, 12] = ((binary_byte >> 2) & 1).float()  # ts_3_4
-        vectors[:, 13] = ((binary_byte >> 3) & 1).float()  # ts_5/4
-        vectors[:, 14] = ((binary_byte >> 4) & 1).float()  # ts_other
+        # Binary dimensions - these work on GPU
+        binary_byte = raw_data[::VECTOR_RECORD_SIZE].to(self.device)
+        vectors[:, 9] = ((binary_byte >> 0) & 1).float()
+        vectors[:, 11] = ((binary_byte >> 1) & 1).float()
+        vectors[:, 12] = ((binary_byte >> 2) & 1).float()
+        vectors[:, 13] = ((binary_byte >> 3) & 1).float()
+        vectors[:, 14] = ((binary_byte >> 4) & 1).float()
         
-        # SCALED DIMENSIONS (bytes 1-44, 22 uint16 values)
-        # Use int32 to avoid CUDA uint16 shift limitations
-        scaled_bytes = records[:, 1:45].to(torch.int32)
+        # Scaled dimensions - use numpy then convert to torch
+        scaled_np = records_np[:, 1:45].view(np.uint16).reshape(num_vectors, 22)
+        scaled_float = scaled_np.astype(np.float32) / 10000.0
+        scaled_float = np.where(scaled_float == 0.0, -1.0, scaled_float)
+        scaled_gpu = torch.from_numpy(scaled_float).to(self.device)
         
-        # Extract uint16 using multiplication (byte1 * 256 + byte0)
-        # This avoids bit shifts on small integer types
-        lsb = scaled_bytes[:, 0::2]   # Even bytes (LSB)
-        msb = scaled_bytes[:, 1::2]   # Odd bytes (MSB)
+        vectors[:, 0] = scaled_gpu[:, 0]   # acousticness
+        vectors[:, 1] = scaled_gpu[:, 1]   # instrumentalness
+        vectors[:, 2] = scaled_gpu[:, 2]   # speechiness
+        vectors[:, 3] = scaled_gpu[:, 3]   # valence
+        vectors[:, 4] = scaled_gpu[:, 4]   # danceability
+        vectors[:, 5] = scaled_gpu[:, 5]   # energy
+        vectors[:, 6] = scaled_gpu[:, 6]   # liveness
+        vectors[:, 8] = scaled_gpu[:, 7]   # key
+        vectors[:, 16] = scaled_gpu[:, 8]  # release_date
+        vectors[:, 19:32] = scaled_gpu[:, 9:22]  # meta-genres
         
-        # Combine bytes: msb * 256 + lsb
-        scaled = (msb * 256 + lsb).float() / 10000.0
+        # FP32 dimensions - use numpy then convert to torch
+        fp32_np = records_np[:, 45:65].view(np.float32).reshape(num_vectors, 5)
+        fp32_gpu = torch.from_numpy(fp32_np).to(self.device)
         
-        # First 9 scaled dimensions
-        vectors[:, 0] = scaled[:, 0]   # acousticness
-        vectors[:, 1] = scaled[:, 1]   # instrumentalness
-        vectors[:, 2] = scaled[:, 2]   # speechiness
-        vectors[:, 3] = scaled[:, 3]   # valence
-        vectors[:, 4] = scaled[:, 4]   # danceability
-        vectors[:, 5] = scaled[:, 5]   # energy
-        vectors[:, 6] = scaled[:, 6]   # liveness
-        vectors[:, 8] = scaled[:, 7]   # key
-        vectors[:, 16] = scaled[:, 8]  # release_date
+        vectors[:, 7] = fp32_gpu[:, 0]   # loudness
+        vectors[:, 10] = fp32_gpu[:, 1]  # tempo
+        vectors[:, 15] = fp32_gpu[:, 2]  # duration
+        vectors[:, 17] = fp32_gpu[:, 3]  # popularity
+        vectors[:, 18] = fp32_gpu[:, 4]  # followers
         
-        # Meta-genres (13 dimensions)
-        vectors[:, 19:32] = scaled[:, 9:22]  # Dimensions 20-32
-        
-        # FP32 DIMENSIONS (bytes 45-64, 5 float32 values)
-        fp32_bytes = records[:, 45:65].to(torch.int32)
-        
-        # Extract 32-bit floats using multiplication
-        byte0 = fp32_bytes[:, 0::4]  # LSB
-        byte1 = fp32_bytes[:, 1::4]
-        byte2 = fp32_bytes[:, 2::4]
-        byte3 = fp32_bytes[:, 3::4]  # MSB
-        
-        # Combine: byte3 * 2^24 + byte2 * 2^16 + byte1 * 2^8 + byte0
-        fp32_uint32 = (byte3 * 16777216) + (byte2 * 65536) + (byte1 * 256) + byte0
-        
-        # Convert to float32 - view() works here because tensor is properly aligned
-        fp32 = fp32_uint32.view(torch.float32)
-        
-        vectors[:, 7] = fp32[:, 0]   # loudness
-        vectors[:, 10] = fp32[:, 1]  # tempo
-        vectors[:, 15] = fp32[:, 2]  # duration
-        vectors[:, 17] = fp32[:, 3]  # popularity
-        vectors[:, 18] = fp32[:, 4]  # followers
+        # Debug first vector
+        if start_idx == 0:
+            print(f"  🔍 First vector: {vectors[0, :10]}")
+            valid_count = (vectors[0] != -1.0).sum()
+            print(f"  🔍 Valid dimensions: {valid_count}/32")
+            print(f"  🔍 Vector values range: [{vectors.min():.3f}, {vectors.max():.3f}]")
         
         return vectors
 
@@ -279,76 +271,50 @@ class VectorReaderGPU:
         """
         Read validity masks from embedded position in vector records.
         Masks are at offset 65 within each 104-byte record.
-        
-        Args:
-            start_idx: Starting vector index (0-based)
-            num_vectors: Number of vectors to read
-            
-        Returns:
-            Tensor of uint32 masks, shape (num_vectors,)
         """
-        # Calculate file offset for the first mask
-        first_mask_offset = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE + MASK_OFFSET_IN_RECORD
+        # Read the entire chunk first
+        file_offset = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE
+        total_bytes = num_vectors * VECTOR_RECORD_SIZE
         
-        # Read enough bytes to span from first mask to last mask (inclusive)
-        # Last mask ends at: first_mask_offset + (num_vectors-1)*VECTOR_RECORD_SIZE + 3
-        total_bytes_needed = (num_vectors - 1) * VECTOR_RECORD_SIZE + 4
-        
-        # Read the raw bytes
-        mask_bytes = torch.frombuffer(
+        chunk_bytes = torch.frombuffer(
             self._mmap,
             dtype=torch.uint8,
-            count=total_bytes_needed,
-            offset=first_mask_offset
+            count=total_bytes,
+            offset=file_offset
         ).cuda()
         
-        # Use as_strided to create a view that jumps VECTOR_RECORD_SIZE bytes per row
-        # This effectively extracts bytes [0:4], [104:108], [208:212], etc.
-        mask_uint8 = torch.as_strided(
-            mask_bytes,
-            size=(num_vectors, 4),
-            stride=(VECTOR_RECORD_SIZE, 1)
-        )
+        # View as records, then extract mask bytes (65-68)
+        records = chunk_bytes.view(num_vectors, VECTOR_RECORD_SIZE)
+        mask_uint8 = records[:, MASK_OFFSET_IN_RECORD:MASK_OFFSET_IN_RECORD+4]
         
-        # Debug: Verify first few masks
+        # Debug: Check first few masks
         if start_idx == 0:
             print(f"  🔍 First mask bytes: {mask_uint8[0].cpu().numpy()}")
             print(f"  🔍 Second mask bytes: {mask_uint8[1].cpu().numpy()}")
-            print(f"  🔍 Masks are {mask_uint8.shape[0]} rows apart in memory\n\n\n\n")
         
-        # Unpack little-endian bytes to uint32
-        # mask_uint8[:, 0] = byte 0 (LSB), mask_uint8[:, 3] = byte 3 (MSB)
+        # Unpack little-endian bytes
         byte0 = mask_uint8[:, 0].to(torch.int32)
         byte1 = mask_uint8[:, 1].to(torch.int32)
         byte2 = mask_uint8[:, 2].to(torch.int32)
         byte3 = mask_uint8[:, 3].to(torch.int32)
         
-        # Reconstruct: MSB << 24 | ... | LSB
         masks_int32 = (byte3 << 24) | (byte2 << 16) | (byte1 << 8) | byte0
-        
         return masks_int32.to(torch.uint32)
 
     def read_regions(self, start_idx: int, num_vectors: int) -> torch.Tensor:
-        """
-        Read region codes from embedded position in vector records.
-        Region code is at byte 69 of each 104-byte record.
-        """
-        first_region_offset = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE + REGION_OFFSET_IN_RECORD
-        total_bytes_needed = (num_vectors - 1) * VECTOR_RECORD_SIZE + 1
+        """Read region codes from byte 69 of each record."""
+        file_offset = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE
+        total_bytes = num_vectors * VECTOR_RECORD_SIZE
         
-        region_bytes = torch.frombuffer(
+        chunk_bytes = torch.frombuffer(
             self._mmap,
             dtype=torch.uint8,
-            count=total_bytes_needed,
-            offset=first_region_offset
+            count=total_bytes,
+            offset=file_offset
         ).cuda()
         
-        # Strided view: one byte per record, jumping VECTOR_RECORD_SIZE bytes each time
-        regions = torch.as_strided(
-            region_bytes,
-            size=(num_vectors,),
-            stride=(VECTOR_RECORD_SIZE,)
-        )
+        records = chunk_bytes.view(num_vectors, VECTOR_RECORD_SIZE)
+        regions = records[:, REGION_OFFSET_IN_RECORD]  # Byte 69
         
         return regions
 
