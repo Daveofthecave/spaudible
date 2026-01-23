@@ -80,7 +80,7 @@ def _search_by_track_id(
     """
     Core search function for track IDs.
     """
-    print(f"   Finding songs similar to track: {track_id}")
+    # print(f"   Finding songs similar to track: {track_id}")
     print(f"   Using algorithm: {config_manager.get_algorithm_name()}")     
     
     # Check preprocessed files
@@ -95,10 +95,12 @@ def _search_by_track_id(
         start_time = time.time()
         vector, track_data = build_canonical_vector(track_id)
 
+        '''
         # Debug: Validate query vector
         print(f"  🔍 Query vector range: [{min(v for v in vector if v != -1):.3f}, {max(v for v in vector if v != -1):.3f}]")
         print(f"  🔍 Query NaNs: {sum(1 for v in vector if math.isnan(v))}")
         print(f"  🔍 Query valid dims: {sum(1 for v in vector if v != -1)}/32")
+        '''
         
         if vector is None or all(v == -1.0 for v in vector):
             print("  ❌ Could not build vector for this track.")
@@ -152,7 +154,7 @@ def _search_by_track_id(
         if not results:
             print("\n  ❌ No similar tracks found.")
         else:
-            print(f"\n  ✅ Found {len(results)} similar tracks in {format_elapsed_time(search_time)}:")
+            print(f"\n  ✅ Found {len(results)} similar tracks in {format_elapsed_time(search_time).strip()}:")
             print("  " + "─" * (65 - 2))
             
             for i, result in enumerate(results, 1):

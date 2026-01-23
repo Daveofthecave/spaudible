@@ -481,7 +481,7 @@ def _handle_performance_test() -> str:
     )
     search_time = time.time() - start_time
     
-    print(f"\n  ✅ Found {len(results)} similar tracks in {format_elapsed_time(search_time)}")
+    print(f"\n  ✅ Found {len(results)} similar tracks in {format_elapsed_time(search_time).strip()}")
     track_orchestrator.close()
     
     input("\n  Press Enter to continue...")

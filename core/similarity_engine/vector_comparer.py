@@ -62,41 +62,53 @@ class ChunkedSearch:
                 self.gpu_ops = None
     
     def sequential_scan(self,
-                       query_vector: np.ndarray,
-                       vector_source: Callable[[int, int], torch.Tensor],
-                       mask_source: Callable[[int, int], torch.Tensor],
-                       total_vectors: int,
-                       top_k: int = 10,
-                       max_vectors: Optional[int] = None,
-                       show_progress: bool = True,
-                       query_region: int = -1,
-                       region_strength: float = 1.0) -> Tuple[List[int], List[float]]:
+                        query_vector: np.ndarray,
+                        vector_source: Callable[[int, int], torch.Tensor],
+                        mask_source: Callable[[int, int], torch.Tensor],
+                        region_source: Callable[[int, int], torch.Tensor],
+                        total_vectors: int,
+                        top_k: int = 10,
+                        max_vectors: Optional[int] = None,
+                        show_progress: bool = True,
+                        query_region: int = -1,
+                        region_strength: float = 1.0) -> Tuple[List[int], List[float]]:
         """
         Perform sequential scan - the ONLY search method for maximum performance.
+        
+        Args:
+            query_vector: 32D query vector
+            vector_source: Function to read vector chunks
+            mask_source: Function to read mask chunks
+            region_source: Function to read region chunks
+            total_vectors: Total number of vectors to scan
+            top_k: Number of top results to return
+            max_vectors: Optional limit on vectors to scan
+            show_progress: Show progress bar
+            query_region: Region code for filtering (-1 = disabled)
+            region_strength: Strength of region filtering (0.0-1.0)
         """
         if self.use_gpu and self.gpu_ops:
             return self._gpu_sequential_scan(
-                query_vector, vector_source, mask_source, total_vectors,
-                top_k, max_vectors, show_progress, query_region=query_region,
-                region_strength=region_strength
+                query_vector, vector_source, mask_source, region_source,
+                total_vectors, top_k, max_vectors, show_progress, query_region, region_strength
             )
         else:
             return self._cpu_sequential_scan(
-                query_vector, vector_source, mask_source, total_vectors,
-                top_k, max_vectors, show_progress, query_region=query_region,
-                region_strength=region_strength
+                query_vector, vector_source, mask_source, region_source,
+                total_vectors, top_k, max_vectors, show_progress, query_region, region_strength
             )
     
     def _gpu_sequential_scan(self,
-                            query_vector: np.ndarray,
-                            vector_source: Callable,
-                            mask_source: Callable,
-                            total_vectors: int,
-                            top_k: int,
-                            max_vectors: Optional[int],
-                            show_progress: bool,
-                            query_region: int,
-                            region_strength: float) -> Tuple[List[int], List[float]]:
+                             query_vector: np.ndarray,
+                             vector_source: Callable,
+                             mask_source: Callable,
+                             region_source: Callable,
+                             total_vectors: int,
+                             top_k: int,
+                             max_vectors: Optional[int],
+                             show_progress: bool,
+                             query_region: int,
+                             region_strength: float) -> Tuple[List[int], List[float]]:
         """GPU implementation using CUDA kernels."""
         # Move query to GPU
         query_t = torch.tensor(
@@ -105,15 +117,15 @@ class ChunkedSearch:
             device=self.device
         )
         
-        # FIX: Use tuples for tensor dimensions
+        # Use tuples for tensor dimensions (fixes shape error)
         top_similarities = torch.full(
-            (top_k,),                     # ✅ Tuple for 1D tensor
+            (top_k,),                     # Tuple for 1D tensor
             -1.0, 
             dtype=torch.float32, 
             device=self.device
         )
         top_indices = torch.full(
-            (top_k,),                     # ✅ Tuple for 1D tensor
+            (top_k,),                     # Tuple for 1D tensor
             -1, 
             dtype=torch.long, 
             device=self.device
@@ -138,14 +150,14 @@ class ChunkedSearch:
             chunk_end = min(chunk_start + self.chunk_size, vectors_to_scan)
             actual_chunk_size = chunk_end - chunk_start
             
-            # Read vector and mask data
+            # Read vector, mask, and region data
             vectors_gpu = vector_source(chunk_start, actual_chunk_size)
             masks_gpu = mask_source(chunk_start, actual_chunk_size)
+            regions_gpu = region_source(chunk_start, actual_chunk_size)
             
             # Compute similarities
             if query_region >= 0 and region_strength > 0.0:
                 # Apply region-aware similarity
-                regions_gpu = mask_source(chunk_start, actual_chunk_size)
                 similarities = self.gpu_ops.fused_similarity(
                     query_t, vectors_gpu, masks_gpu, regions_gpu,
                     query_region, region_strength, self.algorithm
@@ -165,7 +177,7 @@ class ChunkedSearch:
                         query_t, vectors_gpu, masks_gpu
                     )
             
-            # FIX: Ensure similarities is a tensor
+            # Ensure similarities is a tensor (fixes type error)
             if not isinstance(similarities, torch.Tensor):
                 similarities = torch.tensor(similarities, device=self.device, dtype=torch.float32)
             
@@ -184,17 +196,18 @@ class ChunkedSearch:
         
         # Return results on CPU
         return top_indices.cpu().numpy(), top_similarities.cpu().numpy()
-    
+
     def _cpu_sequential_scan(self,
-                           query_vector: np.ndarray,
-                           vector_source: Callable,
-                           mask_source: Callable,
-                           total_vectors: int,
-                           top_k: int,
-                           max_vectors: Optional[int],
-                           show_progress: bool,
-                           query_region: int,
-                           region_strength: float) -> Tuple[List[int], List[float]]:
+                             query_vector: np.ndarray,
+                             vector_source: Callable,
+                             mask_source: Callable,
+                             region_source: Callable,
+                             total_vectors: int,
+                             top_k: int,
+                             max_vectors: Optional[int],
+                             show_progress: bool,
+                             query_region: int,
+                             region_strength: float) -> Tuple[List[int], List[float]]:
         """CPU implementation using NumPy."""
         top_similarities = np.full(top_k, -1.0, dtype=np.float32)
         top_indices = np.full(top_k, -1, dtype=np.int64)
@@ -218,18 +231,29 @@ class ChunkedSearch:
             # Read data
             vectors = vector_source(chunk_start, actual_chunk_size)
             masks = mask_source(chunk_start, actual_chunk_size)
+            regions = region_source(chunk_start, actual_chunk_size)
             
+            # Convert tensors to numpy if needed
             if isinstance(vectors, torch.Tensor):
                 vectors = vectors.cpu().numpy()
             if isinstance(masks, torch.Tensor):
                 masks = masks.cpu().numpy()
+            if isinstance(regions, torch.Tensor):
+                regions = regions.cpu().numpy()
             
             # Compute similarities
-            similarities = self.vector_ops.compute_similarity(query_vector, vectors, masks)
+            if query_region >= 0 and region_strength > 0.0:
+                similarities = self.vector_ops.fused_similarity(
+                    query_vector, vectors, masks, regions,
+                    query_region, region_strength, self.algorithm
+                )
+            else:
+                similarities = self.vector_ops.compute_similarity(query_vector, vectors, masks)
             
             # Update top-k
             self._update_topk_cpu(similarities, chunk_start, top_similarities, top_indices)
             
+            # Update progress
             processed_vectors += actual_chunk_size
             if show_progress:
                 last_update = self._update_progress_bar(
@@ -240,7 +264,7 @@ class ChunkedSearch:
             self._complete_progress_bar(vectors_to_scan, processed_vectors, start_time)
         
         return top_indices.tolist(), top_similarities.tolist()
-    
+
     def _update_topk(self, similarities: torch.Tensor, chunk_start: int,
                     top_sim: torch.Tensor, top_idx: torch.Tensor):
         """GPU: Update global top-k."""

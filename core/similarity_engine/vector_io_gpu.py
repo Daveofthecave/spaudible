@@ -51,8 +51,8 @@ class VectorReaderGPU:
         # Calculate VRAM allocation
         self.max_batch_size = self._calculate_max_batch_size(vram_scaling_factor_mb)
         
-        print(f"✅ GPU Vector Reader initialized:")
-        print(f"   Records: {self.total_vectors:,}")
+        print(f"   GPU vector reader initialized")
+        print(f"   Total tracks: {self.total_vectors:,}")
         print(f"   Max batch: {self.max_batch_size:,}")
     
     def _calculate_max_batch_size(self, vram_override: Optional[int] = None) -> int:
@@ -145,12 +145,14 @@ class VectorReaderGPU:
             bit = (mask & (1 << dim)) == 0
             vectors[bit, dim] = -1.0
         
+        '''
         # === DEBUG ===
         if start_idx == 0:
             print(f"  🔍 First vector: {vectors[0, :10]}")
             valid_count = (vectors[0] != -1.0).sum()
             print(f"  🔍 Valid dimensions: {valid_count}/32")
             print(f"  🔍 Vector values range: [{vectors.min():.3f}, {vectors.max():.3f}]")
+        '''
         
         return vectors
 
@@ -235,7 +237,6 @@ class VectorReaderGPU:
     def __del__(self):
         """Let Python's garbage collector handle mmap cleanup."""
         self.close()
-
 
 class RegionReaderGPU:
     """

@@ -242,6 +242,7 @@ class SearchOrchestrator:
             query_np,
             self._vector_source,
             self._mask_source,
+            self._region_source,
             self.total_vectors,
             top_k=top_k * 3,  # Get extra candidates for deduplication
             show_progress=show_progress,
@@ -259,34 +260,32 @@ class SearchOrchestrator:
                 similarities, 
                 top_k
             )
-
+        
         # Convert vector indices to track IDs
         track_ids = self.index_manager.get_track_ids_from_vector_indices(indices)
-
-        # Apply secondary sort by popularity to break ties
-        if with_metadata:
-            metadata_list = self.metadata_manager.get_track_metadata_batch(track_ids)
-            results = list(zip(track_ids, similarities, metadata_list))
-            results = self._apply_secondary_sort(results, with_metadata=True)
-        else:
-            results = list(zip(track_ids, similarities))
         
         # Fetch metadata if requested
         if with_metadata:
             metadata_list = self.metadata_manager.get_track_metadata_batch(track_ids)
             results = list(zip(track_ids, similarities, metadata_list))
+            # Apply secondary sort to break ties
+            results = self._apply_secondary_sort(results, with_metadata=True)
         else:
             results = list(zip(track_ids, similarities))
         
         return results[:top_k]
     
     def _vector_source(self, start_idx: int, num_vectors: int) -> torch.Tensor:
-        """Read vector chunk from unified file."""
+        """Read vector chunk from track_vectors.bin."""
         return self.vector_reader.read_chunk(start_idx, num_vectors)
     
     def _mask_source(self, start_idx: int, num_vectors: int) -> torch.Tensor:
-        """Read mask chunk from unified file."""
+        """Read mask chunk from track_vectors.bin."""
         return self.vector_reader.read_masks(start_idx, num_vectors)
+
+    def _region_source(self, start_idx: int, num_vectors: int) -> torch.Tensor:
+        """Read region chunk from track_vectors.bin."""
+        return self.vector_reader.read_regions(start_idx, num_vectors)
     
     def _get_query_region(self, track_id: str) -> int:
         """Get region code for query track ID."""

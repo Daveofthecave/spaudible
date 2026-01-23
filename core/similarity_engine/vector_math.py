@@ -233,3 +233,28 @@ class VectorOps:
                 similarities[i] = 1.0 / (1.0 + distance)
         
         return similarities
+
+    def fused_similarity(self, query: np.ndarray, vectors: np.ndarray, 
+                        masks: np.ndarray, regions: np.ndarray,
+                        query_region: int, region_strength: float, 
+                        algorithm: str = 'cosine-euclidean') -> np.ndarray:
+        """Region-aware similarity for CPU."""
+        # Get base similarity
+        if algorithm == 'cosine':
+            feature_sim = self.masked_weighted_cosine_similarity(query, vectors, masks)
+        elif algorithm == 'euclidean':
+            feature_sim = self.masked_euclidean_similarity(query, vectors, masks)
+        else:  # cosine-euclidean
+            feature_sim = self.masked_weighted_cosine_euclidean_similarity(query, vectors, masks)
+        
+        # Apply region penalty
+        if query_region >= 0 and region_strength > 0.0:
+            region_match = (regions == query_region).astype(np.float32)
+            region_penalty = np.where(
+                region_match == 1.0,
+                1.0,
+                1.0 - region_strength
+            )
+            return feature_sim * region_penalty
+        
+        return feature_sim
