@@ -29,31 +29,27 @@ class VectorReaderGPU:
     """GPU-optimized unified vector reader with proper structured array parsing."""
     
     def __init__(self, 
-                 vectors_path: Optional[str] = None,
-                 device: str = "cuda",
-                 vram_scaling_factor_mb: Optional[int] = None):
+                vectors_path: Optional[str] = None,
+                device: str = "cuda",
+                vram_scaling_factor_mb: Optional[int] = None):
         self.vectors_path = Path(vectors_path) if vectors_path else PathConfig.get_vector_file()
         self.device = device
         
-        # Memory map the file as a structured array
-        with open(self.vectors_path, 'rb') as f:
-            # Skip header
-            f.seek(VECTOR_HEADER_SIZE)
-            self._file = f
-            self._mmap = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
-            # Create structured array view
-            self._records = np.frombuffer(self._mmap, dtype=RECORD_DTYPE, 
-                                          offset=VECTOR_HEADER_SIZE)
+        # Open file handle and memory map
+        self._file = open(self.vectors_path, 'rb')
+        self._mmap = mmap.mmap(self._file.fileno(), 0, access=mmap.ACCESS_READ)
+        self._records = np.frombuffer(self._mmap, dtype=RECORD_DTYPE, 
+                                    offset=VECTOR_HEADER_SIZE)
         
         self.total_vectors = len(self._records)
         self.RECORD_SIZE = VECTOR_RECORD_SIZE
         self.data_start = VECTOR_HEADER_SIZE
         
+        # Use Path.stat() directly (not the file handle)
+        self._file_size = self.vectors_path.stat().st_size
+        
         # Calculate VRAM allocation
         self.max_batch_size = self._calculate_max_batch_size(vram_scaling_factor_mb)
-        
-        # Initialize CUDA unpacker if available (kept for compatibility)
-        self.cuda_unpacker = self._load_cuda_unpacker()
         
         print(f"✅ GPU Vector Reader initialized:")
         print(f"   Records: {self.total_vectors:,}")
@@ -61,23 +57,17 @@ class VectorReaderGPU:
     
     def _calculate_max_batch_size(self, vram_override: Optional[int] = None) -> int:
         """Calculate maximum vectors that fit in VRAM."""
-        bytes_per_vector = self.RECORD_SIZE  # Full record size
+        bytes_per_vector = self.RECORD_SIZE
         
         if vram_override:
             usable_vram = vram_override * 1024 * 1024
         else:
-            # Auto-detect available VRAM
             if not torch.cuda.is_available():
                 raise RuntimeError("CUDA not available for GPU reader")
-            
             free_vram = torch.cuda.mem_get_info()[0]
             usable_vram = int(free_vram * VRAM_SAFETY_FACTOR)
         
-        # Account for unpacking overhead (1.5x safety margin)
-        max_batch = int((usable_vram // bytes_per_vector) // 1.5)
-        
-        # Clamp to reasonable range
-        return min(max_batch, 50_000_000)
+        return min(int((usable_vram // bytes_per_vector) // 1.5), 50_000_000)
 
     def _load_cuda_unpacker(self):
         """Load CUDA kernel for unpacking records."""
@@ -115,19 +105,18 @@ class VectorReaderGPU:
         # Initialize output
         vectors = torch.full((num_vectors, 32), -1.0, dtype=torch.float32, device=self.device)
         
-        # === Unpack binary dimensions ===
-        binary_vals = torch.from_numpy(records['binary']).to(self.device, dtype=torch.int64)
-        vectors[:, 9]  = (binary_vals >> 0) & 1   # mode
-        vectors[:, 11] = (binary_vals >> 1) & 1   # ts_4_4
-        vectors[:, 12] = (binary_vals >> 2) & 1   # ts_3_4
-        vectors[:, 13] = (binary_vals >> 3) & 1   # ts_5_4
-        vectors[:, 14] = (binary_vals >> 4) & 1   # ts_other
+        # === Unpack binary dimensions (use .copy() to make writable) ===
+        binary_numpy = records['binary'].astype(np.int64).copy()
+        binary_vals = torch.from_numpy(binary_numpy).to(self.device)
+        vectors[:, 9]  = (binary_vals >> 0) & 1
+        vectors[:, 11] = (binary_vals >> 1) & 1
+        vectors[:, 12] = (binary_vals >> 2) & 1
+        vectors[:, 13] = (binary_vals >> 3) & 1
+        vectors[:, 14] = (binary_vals >> 4) & 1
         
         # === Unpack scaled dimensions (uint16) ===
-        # Force writable copy to avoid PyTorch warning
-        scaled_numpy = records['scaled'].astype(np.float32)
+        scaled_numpy = records['scaled'].astype(np.float32).copy()
         scaled = torch.from_numpy(scaled_numpy).to(self.device)
-        
         vectors[:, 0]  = scaled[:, 0] / 10000.0
         vectors[:, 1]  = scaled[:, 1] / 10000.0
         vectors[:, 2]  = scaled[:, 2] / 10000.0
@@ -140,10 +129,8 @@ class VectorReaderGPU:
         vectors[:, 19:32] = scaled[:, 9:22] / 10000.0
         
         # === Unpack fp32 dimensions ===
-        # Force writable copy to avoid PyTorch warning
-        fp32_numpy = records['fp32'].astype(np.float32)
+        fp32_numpy = records['fp32'].astype(np.float32).copy()
         fp32 = torch.from_numpy(fp32_numpy).to(self.device)
-        
         vectors[:, 7]  = fp32[:, 0]
         vectors[:, 10] = fp32[:, 1]
         vectors[:, 15] = fp32[:, 2]
@@ -151,8 +138,7 @@ class VectorReaderGPU:
         vectors[:, 18] = fp32[:, 4]
         
         # === Apply validity mask (convert to int64 for bitwise ops) ===
-        # Force writable copy and convert to int64 for bit operations
-        mask_numpy = records['mask'].astype(np.int64)
+        mask_numpy = records['mask'].astype(np.int64).copy()
         mask = torch.from_numpy(mask_numpy).to(self.device)
         
         for dim in range(32):
@@ -171,7 +157,8 @@ class VectorReaderGPU:
     def read_masks(self, start_idx: int, num_vectors: int) -> torch.Tensor:
         """Read mask values as int32 tensor."""
         records = self._records[start_idx:start_idx + num_vectors]
-        return torch.from_numpy(records['mask'].astype(np.int32)).to(self.device)
+        mask_numpy = records['mask'].astype(np.int32).copy()
+        return torch.from_numpy(mask_numpy).to(self.device)
 
     def read_regions(self, start_idx: int, num_vectors: int) -> torch.Tensor:
         """Read region codes from byte 69 of each record."""
@@ -187,14 +174,12 @@ class VectorReaderGPU:
         return self.max_batch_size
     
     def close(self):
-        """Clean up resources."""
-        if hasattr(self, '_mmap') and self._mmap:
-            self._mmap.close()
+        """Clean up resources - but NOT the mmap (let GC handle it)."""
         if hasattr(self, '_file') and self._file:
             self._file.close()
     
     def __del__(self):
-        """Cleanup."""
+        """Let Python's garbage collector handle mmap cleanup."""
         self.close()
 
 
