@@ -88,8 +88,8 @@ class VectorOpsGPU:
         )
         
         # Apply weights and masks
-        weighted_query = query_expanded * weights.unsqueeze(0) * valid_mask.float()
-        weighted_vectors = vectors * weights_adj * valid_mask.float()
+        weighted_query = query_expanded * weights.unsqueeze(0) #* valid_mask.float()
+        weighted_vectors = vectors * weights_adj #* valid_mask.float()
         
         # Compute dot product
         dot = torch.sum(weighted_query * weighted_vectors, dim=1)
@@ -135,7 +135,7 @@ class VectorOpsGPU:
         
         # Compute weighted differences
         weights = self.baseline_weights * self.availability_boost * self.user_weights
-        weighted_diff = (query_expanded - vectors) * weights.unsqueeze(0) * valid_mask.float()
+        weighted_diff = (query_expanded - vectors) * weights.unsqueeze(0) #* valid_mask.float()
         
         # Compute Euclidean distance
         euclidean_dist = torch.norm(weighted_diff, dim=1)
@@ -168,7 +168,7 @@ class VectorOpsGPU:
         
         # Compute weighted differences
         weights = self.user_weights
-        weighted_diff = (query_expanded - vectors) * weights.unsqueeze(0) * valid_mask.float()
+        weighted_diff = (query_expanded - vectors) * weights.unsqueeze(0) #* valid_mask.float()
         
         # Compute Euclidean distance
         euclidean_dist = torch.norm(weighted_diff, dim=1)
@@ -211,20 +211,22 @@ class VectorOpsGPU:
         return blended_sim
     
     def _unpack_masks(self, masks: torch.Tensor) -> torch.Tensor:
-        """Unpack bitmask to boolean tensor."""
-        # Use int32 for all bit operations
-        masks_int = masks.to(torch.int32)
+        """
+        Unpack batch of int32 masks into boolean tensors of shape [n, 32].
+        Each bit in the int32 becomes a boolean True/False in the output.
+        """
+        # Convert to int64 for safe bit operations
+        masks_int64 = masks.to(torch.int64)
         
-        # Create boolean mask
-        bool_mask = torch.zeros(
-            masks_int.shape[0], 
-            32, 
-            dtype=torch.bool, 
-            device=self.device
-        )
+        # Create bitmask tensor: [1, 2, 4, 8, 16, ..., 2^31]
+        bitmask = torch.tensor([1 << i for i in range(32)], 
+                            dtype=torch.int64,
+                            device=masks.device)
         
-        # Unpack bits
-        for i in range(32):
-            bool_mask[:, i] = ((masks_int >> i) & 1) == 1
+        # Broadcast: masks [n, 1] & bitmask [1, 32] -> [n, 32]
+        masks_expanded = masks_int64.unsqueeze(-1)  # Shape: [n, 1]
+        bitmask_expanded = bitmask.unsqueeze(0)       # Shape: [1, 32]
         
-        return bool_mask
+        # Bitwise AND to extract each bit, then compare to 0
+        # Result shape: [n, 32], True if bit is set, False otherwise
+        return (masks_expanded & bitmask_expanded) != 0
