@@ -254,10 +254,22 @@ class SearchOrchestrator:
             deduplicate = config_manager.get_deduplicate()
         
         if deduplicate:
-            indices, similarities = self._advanced_deduplication(indices, similarities, top_k)
-        
-        # Convert to track IDs
+            indices, similarities = self._advanced_deduplication(
+                indices, 
+                similarities, 
+                top_k
+            )
+
+        # Convert vector indices to track IDs
         track_ids = self.index_manager.get_track_ids_from_vector_indices(indices)
+
+        # Apply secondary sort by popularity to break ties
+        if with_metadata:
+            metadata_list = self.metadata_manager.get_track_metadata_batch(track_ids)
+            results = list(zip(track_ids, similarities, metadata_list))
+            results = self._apply_secondary_sort(results, with_metadata=True)
+        else:
+            results = list(zip(track_ids, similarities))
         
         # Fetch metadata if requested
         if with_metadata:
@@ -296,26 +308,65 @@ class SearchOrchestrator:
             print(f"  ⚠️  Error reading region for {track_id}: {e}")
             return -1
     
+    def _get_release_year(self, metadata: Dict) -> str:
+        """Safely extract first 4 characters of release year."""
+        year = metadata.get('album_release_year', '')
+        return year[:4] if year and len(year) >= 4 else ''
+
+    def _apply_secondary_sort(self, results: List, with_metadata: bool) -> List:
+        """Apply secondary sort by popularity to break similarity ties"""
+        def get_popularity(item):
+            if with_metadata:
+                _, similarity, metadata = item
+                return metadata.get('popularity', 0) if metadata else 0
+            else:
+                return 0
+        
+        # Sort by similarity descending first
+        results.sort(key=lambda x: x[1], reverse=True)
+        
+        # Then sort groups with same similarity by popularity
+        grouped = {}
+        for item in results:
+            similarity = round(item[1], 6)  # Group by rounded similarity
+            if similarity not in grouped:
+                grouped[similarity] = []
+            grouped[similarity].append(item)
+        
+        # Reconstruct with popularity sort within each similarity group
+        sorted_results = []
+        for similarity in sorted(grouped.keys(), reverse=True):
+            group = grouped[similarity]
+            group.sort(key=get_popularity, reverse=True)
+            sorted_results.extend(group)
+        
+        return sorted_results
+    
     def _advanced_deduplication(self, indices: List[int], similarities: List[float], 
-                               top_k: int) -> Tuple[List[int], List[float]]:
-        """Remove duplicate tracks using ISRC signatures."""
-        # Get track IDs
-        track_ids = self.index_manager.get_track_ids_batch(indices[:top_k * 2])
-        
-        # Fetch ISRCs for these tracks
+                            top_k: int) -> Tuple[List[int], List[float]]:
+        """
+        ISRC-based deduplication with two-pass filtering.
+        Pass 1: Strict deduplication (ISRC + metadata signature)
+        Pass 2: Fill remaining slots (ISRC only)
+        """
+        # Get raw data in bulk from vector file
         isrcs = self.vector_reader.get_isrcs_batch(indices[:top_k * 2])
+        track_ids = self.vector_reader.get_track_ids_batch(indices[:top_k * 2])
         
-        # Get metadata
+        # Fetch metadata in single batch
         metadata_list = self.metadata_manager.get_track_metadata_batch(track_ids)
         
-        # Create track info with signatures
+        # Build track info with signatures
         track_info = []
         for i, idx in enumerate(indices[:top_k * 2]):
             metadata = metadata_list[i]
             artist = metadata.get('artist_name', 'Unknown').lower()
             title = metadata.get('track_name', 'Unknown').lower()
+            
+            # Extract core title (remove featured artists, remixes, live versions)
             core_title = title.split('(')[0].split('-')[0].split('[')[0].strip()
             
+            # Create robust signature
             signature = f"{artist}|{core_title}"
             
             track_info.append({
@@ -325,9 +376,10 @@ class SearchOrchestrator:
                 'signature': signature
             })
         
-        # Sort by similarity
+        # Sort by similarity descending for deterministic processing
         track_info.sort(key=lambda x: x['similarity'], reverse=True)
         
+        # Pass 1: Strict deduplication
         seen_signatures = set()
         seen_isrcs = set()
         deduped_indices = []
@@ -337,11 +389,11 @@ class SearchOrchestrator:
             if len(deduped_indices) >= top_k:
                 break
             
-            # Skip duplicate ISRCs
+            # Skip exact ISRC matches (same recording)
             if track['isrc'] and track['isrc'] in seen_isrcs:
                 continue
             
-            # Skip duplicate signatures
+            # Skip core song duplicates (different recordings, same song)
             if track['signature'] in seen_signatures:
                 continue
             
@@ -349,6 +401,24 @@ class SearchOrchestrator:
             deduped_similarities.append(track['similarity'])
             seen_signatures.add(track['signature'])
             seen_isrcs.add(track['isrc'])
+        
+        # Pass 2: Fill remaining slots if needed (only filter by ISRC)
+        if len(deduped_indices) < top_k:
+            for track in track_info:
+                if len(deduped_indices) >= top_k:
+                    break
+                
+                # Skip if already added
+                if track['index'] in deduped_indices:
+                    continue
+                
+                # Skip only ISRC duplicates (allow different song versions)
+                if track['isrc'] and track['isrc'] in seen_isrcs:
+                    continue
+                
+                deduped_indices.append(track['index'])
+                deduped_similarities.append(track['similarity'])
+                seen_isrcs.add(track['isrc'])
         
         return deduped_indices[:top_k], deduped_similarities[:top_k]
     
