@@ -7,6 +7,12 @@ FORCE_CPU_MODE = False
 REGION_FILTER_STRENGTH = 1.0 # 1 = stick to the same region; 0 = any region is fine
 EXPECTED_VECTORS = 256_039_007 # How many tracks are in the database
 
+# Paradigms for data/vectors/*.bin
+VECTOR_RECORD_SIZE = 104
+VECTOR_HEADER_SIZE = 16
+ISRC_OFFSET_IN_RECORD = 70
+TRACK_ID_OFFSET_IN_RECORD = 82
+
 import os
 from pathlib import Path
 

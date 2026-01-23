@@ -8,7 +8,7 @@ import mmap
 import os
 import threading
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Union
 from collections import OrderedDict
 from config import PathConfig
 
@@ -54,6 +54,7 @@ class IndexManager:
         # Thread-safe LRU cache for track ID → vector index lookups
         self._cache = OrderedDict()
         self._cache_lock = threading.Lock()
+        self._vector_index_cache = OrderedDict()
         self._max_cache_size = cache_size
         
         # Pre-compute memory offsets for quick access
@@ -228,6 +229,64 @@ class IndexManager:
         """
         # ISRCs are stored in vector file, not index
         return ["" for _ in indices]
+
+    def get_track_ids_from_vector_indices(self, vector_indices: List[int]) -> List[str]:
+        """
+        High-level wrapper to get track IDs from vector indices.
+        Uses VectorReader and caches results for performance.
+        """
+        # Cache setup (add to __init__ if not present)
+        if not hasattr(self, '_vector_index_cache'):
+            self._vector_index_cache = OrderedDict()
+            self._max_cache_size = 10000 
+        
+        if not vector_indices:
+            return []
+        
+        # Check cache first
+        results = [None] * len(vector_indices)
+        uncached_positions = []
+        uncached_indices = []
+        
+        for i, idx in enumerate(vector_indices):
+            if idx in self._vector_index_cache:
+                results[i] = self._vector_index_cache[idx]
+            else:
+                uncached_positions.append(i)
+                uncached_indices.append(idx)
+        
+        # Batch fetch uncached IDs
+        if uncached_indices:
+            # Get vector reader reference (set by orchestrator)
+            vector_reader = getattr(self, '_vector_reader', None)
+            
+            if vector_reader is None:
+                # Fallback: create temporary reader
+                from .vector_io_gpu import VectorReaderGPU
+                from config import PathConfig
+                
+                vector_reader = VectorReaderGPU(str(PathConfig.get_vector_file()))
+                uncached_ids = vector_reader.get_track_ids_batch(uncached_indices)
+                # Don't cache since this is temporary
+                
+                # Clean up temporary reader
+                vector_reader.close()
+            else:
+                uncached_ids = vector_reader.get_track_ids_batch(uncached_indices)
+                
+                # Cache the new results
+                for idx, track_id in zip(uncached_indices, uncached_ids):
+                    self._vector_index_cache[idx] = track_id
+                    
+                    # Maintain cache size limit
+                    if len(self._vector_index_cache) > self._max_cache_size:
+                        self._vector_index_cache.popitem(last=False)
+            
+            # Place fetched IDs in result array
+            for pos, track_id in zip(uncached_positions, uncached_ids):
+                results[pos] = track_id
+        
+        return results
     
     def validate_sorted_order(self, sample_size: int = 1000) -> bool:
         """

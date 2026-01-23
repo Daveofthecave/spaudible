@@ -8,7 +8,7 @@ import numpy as np
 import mmap
 import struct
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union, List
 from config import PathConfig, VRAM_SAFETY_FACTOR
 
 # Define the record structure (104 bytes)
@@ -168,6 +168,60 @@ class VectorReaderGPU:
     def get_total_vectors(self) -> int:
         """Get total number of vectors in the file."""
         return self.total_vectors
+
+    def get_track_ids_batch(self, indices: Union[List[int], np.ndarray]) -> List[str]:
+        """Batch read track IDs directly from vector file (offset 82-103)."""
+        # Handle both list and numpy array inputs
+        if isinstance(indices, np.ndarray):
+            if indices.size == 0:
+                return []
+            indices_list = indices.tolist()
+        else:
+            if len(indices) == 0:
+                return []
+            indices_list = indices
+
+        # Sort indices for sequential access and to restore original order
+        indexed_indices = sorted(enumerate(indices_list), key=lambda x: x[1])
+        results = [None] * len(indices_list)
+        
+        for orig_pos, idx in indexed_indices:
+            # Calculate offset: header + (record_index * record_size) + track_id_offset
+            offset = self.data_start + idx * self.RECORD_SIZE + 82
+            
+            # Read 22-byte track ID
+            track_id_bytes = self._mmap[offset:offset + 22]
+            track_id = track_id_bytes.decode('ascii', 'ignore').rstrip('\0')
+            
+            results[orig_pos] = track_id
+        
+        return results
+
+    def get_isrcs_batch(self, indices: Union[List[int], np.ndarray]) -> List[str]:
+        """Batch read ISRCs directly from vector file (offset 70-81)."""
+        # Handle both list and numpy array inputs
+        if isinstance(indices, np.ndarray):
+            if indices.size == 0:
+                return []
+            indices_list = indices.tolist()
+        else:
+            if len(indices) == 0:
+                return []
+            indices_list = indices
+
+        indexed_indices = sorted(enumerate(indices_list), key=lambda x: x[1])
+        results = [None] * len(indices_list)
+        
+        for orig_pos, idx in indexed_indices:
+            offset = self.data_start + idx * self.RECORD_SIZE + 70
+            
+            # Read 12-byte ISRC
+            isrc_bytes = self._mmap[offset:offset + 12]
+            isrc = isrc_bytes.decode('ascii', 'ignore').rstrip('\0')
+            
+            results[orig_pos] = isrc
+        
+        return results
     
     def get_max_batch_size(self) -> int:
         """Get maximum batch size for this VRAM configuration."""

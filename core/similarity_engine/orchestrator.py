@@ -75,6 +75,7 @@ class SearchOrchestrator:
         # Initialize components
         self._init_vector_reader(vectors_path)
         self.index_manager = IndexManager(index_path)
+        self.index_manager._vector_reader = self.vector_reader
         self.metadata_manager = MetadataManager(metadata_db)
         
         # Algorithm and weights
@@ -256,7 +257,7 @@ class SearchOrchestrator:
             indices, similarities = self._advanced_deduplication(indices, similarities, top_k)
         
         # Convert to track IDs
-        track_ids = self.index_manager.get_track_ids_batch(indices)
+        track_ids = self.index_manager.get_track_ids_from_vector_indices(indices)
         
         # Fetch metadata if requested
         if with_metadata:
@@ -302,14 +303,7 @@ class SearchOrchestrator:
         track_ids = self.index_manager.get_track_ids_batch(indices[:top_k * 2])
         
         # Fetch ISRCs for these tracks
-        isrcs = []
-        for idx in indices[:top_k * 2]:
-            offset = VECTOR_HEADER_SIZE + idx * VECTOR_RECORD_SIZE + ISRC_OFFSET_IN_RECORD
-            with open(PathConfig.get_vector_file(), 'rb') as f:
-                f.seek(offset)
-                isrc_bytes = f.read(12)
-                isrc = isrc_bytes.decode('ascii', 'ignore').rstrip('\0')
-                isrcs.append(isrc)
+        isrcs = self.vector_reader.get_isrcs_batch(indices[:top_k * 2])
         
         # Get metadata
         metadata_list = self.metadata_manager.get_track_metadata_batch(track_ids)
