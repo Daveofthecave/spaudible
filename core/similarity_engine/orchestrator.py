@@ -15,7 +15,7 @@ from .chunk_size_optimizer import ChunkSizeOptimizer
 from .index_manager import IndexManager
 from .metadata_service import MetadataManager
 from .vector_comparer import ChunkedSearch
-from .vector_io_gpu import VectorReaderGPU, RegionReaderGPU
+from .vector_io_gpu import VectorReaderGPU
 from .vector_math import VectorOps
 from core.utilities.config_manager import config_manager
 from core.vectorization.canonical_track_resolver import build_canonical_vector
