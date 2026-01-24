@@ -163,7 +163,9 @@ def _search_by_track_id(
                     color = get_similarity_color(similarity)
                     track_name = metadata.get('track_name', 'Unknown')
                     artist_name = metadata.get('artist_name', 'Unknown')
-                    print(f"  {i:2d}. {color} {similarity:.4f} - {track_name} - {artist_name}")
+                    year = metadata.get('album_release_year', '')
+                    year_str = f" ({year})" if year else ''
+                    print(f"  {i:2d}. {color} {similarity:.4f} - {track_name} - {artist_name}{year_str}")
                 else:
                     result_track_id, similarity = result
                     color = get_similarity_color(similarity)
