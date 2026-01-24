@@ -66,9 +66,9 @@ class VectorReaderGPU:
             Tensor of shape (num_vectors, 32)
         """
         # Enforce safe batch size
-        if num_vectors > self.max_batch_size:
-            print(f"  ⚠️  Requested {num_vectors:,} vectors, limiting to {self.max_batch_size:,} for safety")
-            num_vectors = self.max_batch_size
+        # if num_vectors > self.max_batch_size:
+        #     print(f"  ⚠️  Requested {num_vectors:,} vectors, limiting to {self.max_batch_size:,} for safety")
+        #     num_vectors = self.max_batch_size
         
         if start_idx + num_vectors > self.total_vectors:
             num_vectors = self.total_vectors - start_idx
@@ -90,50 +90,43 @@ class VectorReaderGPU:
         using PyTorch tensor ops. All operations are parallelized
         automatically by PyTorch's CUDA backend.
         """
-        # Ensure tensor is contiguous before any view operations
         records = raw_bytes.contiguous().view(num_vectors, VECTOR_RECORD_SIZE)
         
-        # Initialize output tensor with sentinel value -1.0
-        vectors = torch.full(
-            (num_vectors, 32), 
-            -1.0, 
-            dtype=torch.float32, 
-            device=self.device
-        )
+        vectors = torch.full((num_vectors, 32), -1.0, dtype=torch.float32, device=self.device)
         
-        # Binary dimensions (byte 0)
-        binary_byte = records[:, 0].to(torch.uint8)
-        vectors[:, 9]  = (binary_byte & 1).float()
-        vectors[:, 11] = ((binary_byte >> 1) & 1).float()
-        vectors[:, 12] = ((binary_byte >> 2) & 1).float()
-        vectors[:, 13] = ((binary_byte >> 3) & 1).float()
-        vectors[:, 14] = ((binary_byte >> 4) & 1).float()
+        # === BINARY DIMENSIONS ===
+        binary_byte = records[:, 0].to(torch.uint8, non_blocking=True)
+        vectors[:, 9]  = (binary_byte & 1).to(torch.float32, non_blocking=True)
+        vectors[:, 11] = ((binary_byte >> 1) & 1).to(torch.float32, non_blocking=True)
+        vectors[:, 12] = ((binary_byte >> 2) & 1).to(torch.float32, non_blocking=True)
+        vectors[:, 13] = ((binary_byte >> 3) & 1).to(torch.float32, non_blocking=True)
+        vectors[:, 14] = ((binary_byte >> 4) & 1).to(torch.float32, non_blocking=True)
+        del binary_byte
         
-        # Scaled dimensions - use narrow for zero-copy slicing, then contiguous for alignment
-        scaled_section = torch.narrow(records, 1, 1, 44).contiguous()  # bytes 1-44
+        # === SCALED DIMENSIONS ===
+        # FIX: Clone the slice to ensure proper alignment
+        scaled_section = records[:, 1:45].clone()  # Shape: (num_vectors, 44)
         scaled_int16 = scaled_section.view(torch.int16).view(num_vectors, 22)
-        scaled = scaled_int16.float() / 10000.0
+        scaled_float = scaled_int16.to(torch.float32, non_blocking=True)
+        scaled_float.mul_(0.0001)
         
-        # Map scaled values to their vector positions
-        vectors[:, 0]  = scaled[:, 0]   # acousticness
-        vectors[:, 1]  = scaled[:, 1]   # instrumentalness
-        vectors[:, 2]  = scaled[:, 2]   # speechiness
-        vectors[:, 3]  = scaled[:, 3]   # valence
-        vectors[:, 4]  = scaled[:, 4]   # danceability
-        vectors[:, 5]  = scaled[:, 5]   # energy
-        vectors[:, 6]  = scaled[:, 6]   # liveness
-        vectors[:, 8]  = scaled[:, 7]   # key
-        vectors[:, 16] = scaled[:, 8]   # release_date
-        vectors[:, 19:32] = scaled[:, 9:22]  # meta-genres 1-13
+        vectors[:, 0:7] = scaled_float[:, 0:7]
+        vectors[:, 8] = scaled_float[:, 7]
+        vectors[:, 16] = scaled_float[:, 8]
+        vectors[:, 19:32] = scaled_float[:, 9:22]
+        del scaled_section, scaled_int16, scaled_float
         
-        # FP32 dimensions - use narrow for zero-copy slicing, then contiguous for alignment
-        fp32_section = torch.narrow(records, 1, 45, 20).contiguous()  # bytes 45-64
+        # === FP32 DIMENSIONS ===
+        # FIX: Clone the slice to ensure proper alignment
+        fp32_section = records[:, 45:65].clone()  # Shape: (num_vectors, 20)
         fp32_tensor = fp32_section.view(torch.float32).view(num_vectors, 5)
-        vectors[:, 7]  = fp32_tensor[:, 0]  # loudness
-        vectors[:, 10] = fp32_tensor[:, 1]  # tempo
-        vectors[:, 15] = fp32_tensor[:, 2]  # duration
-        vectors[:, 17] = fp32_tensor[:, 3]  # popularity
-        vectors[:, 18] = fp32_tensor[:, 4]  # followers
+        
+        vectors[:, 7]  = fp32_tensor[:, 0]
+        vectors[:, 10] = fp32_tensor[:, 1]
+        vectors[:, 15] = fp32_tensor[:, 2]
+        vectors[:, 17] = fp32_tensor[:, 3]
+        vectors[:, 18] = fp32_tensor[:, 4]
+        del fp32_section, fp32_tensor, records
         
         return vectors
     
@@ -184,15 +177,8 @@ class VectorReaderGPU:
         return self.total_vectors
     
     def get_max_batch_size(self) -> int:
-        """Estimate max batch size based on available memory."""
-        if self.device == "cpu":
-            return 500_000  # Conservative for CPU memory
-        
-        # For GPU, calculate based on free VRAM
-        free_memory = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()
-        bytes_per_vector = VECTOR_RECORD_SIZE + (32 * 4)  # Raw + unpacked
-        max_batch = int(free_memory * 0.85 / bytes_per_vector)
-        return min(max_batch, 50_000_000)  # Cap at 50M
+        """Return the safe batch size that was calculated during initialization."""
+        return self.max_batch_size
     
     def get_isrcs_batch(self, indices: Union[list, torch.Tensor]) -> list:
         """Extract ISRCs directly from vector file."""

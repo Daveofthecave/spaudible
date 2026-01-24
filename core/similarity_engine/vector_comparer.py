@@ -23,20 +23,17 @@ class ChunkedSearch:
     def __init__(self, 
                  chunk_size: int = 100_000_000,
                  use_gpu: bool = True,
-                 max_batch_size: Optional[int] = None,
                  vector_ops: Optional[VectorOps] = None):
         """
         Initialize chunked search with unified format support.
         
         Args:
-            chunk_size: Number of vectors to process per chunk
+            chunk_size: Safe number of vectors to process per chunk (GPU limit or CPU chunk)
             use_gpu: Enable GPU acceleration
-            max_batch_size: GPU batch size limit
             vector_ops: Vector operations instance (contains algorithm)
         """
         self.chunk_size = chunk_size
         self.use_gpu = use_gpu
-        self.max_batch_size = max_batch_size or 100_000
         self.vector_ops = vector_ops
         
         # Extract algorithm from vector_ops or use default
@@ -58,7 +55,7 @@ class ChunkedSearch:
                     self.gpu_ops = VectorOpsGPU(device=self.device)
                     self.gpu_ops.set_user_weights(config_manager.get_weights())
             except Exception as e:
-                print(f"⚠️ GPU initialization failed: {e}")
+                print(f"⚠️  GPU initialization failed: {e}")
                 self.gpu_ops = None
     
     def sequential_scan(self,

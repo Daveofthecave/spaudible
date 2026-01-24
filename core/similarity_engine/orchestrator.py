@@ -51,13 +51,12 @@ class SearchOrchestrator:
             vectors_path: Path to unified track_vectors.bin
             index_path: Path to sorted track_index.bin
             metadata_db: Path to Spotify metadata database
-            chunk_size: Chunk size for processing (auto-optimized if not forced)
+            chunk_size: Base chunk size for processing (auto-optimized if not forced)
             use_gpu: Whether to prefer GPU acceleration
             force_cpu: Override to force CPU mode
             force_gpu: Override to force GPU mode
         """
         self.use_gpu = use_gpu
-        self.chunk_size = chunk_size
         
         # Force settings from config
         if force_cpu is None:
@@ -104,6 +103,9 @@ class SearchOrchestrator:
                     SearchOrchestrator._benchmark_results['recommended_device'] == 'gpu'
                 )
                 self.chunk_size = SearchOrchestrator._benchmark_results['optimal_chunk_size']
+        else:
+            # If forced, use the provided chunk_size
+            self.chunk_size = chunk_size
         
         # Force CPU/GPU settings
         if self.force_cpu:
@@ -111,14 +113,20 @@ class SearchOrchestrator:
             self.chunk_size = self._optimize_cpu_chunk()
         elif self.force_gpu:
             self.use_gpu = True
+            # When forcing GPU, use the safe batch size from the reader
             self.chunk_size = self.vector_reader.get_max_batch_size()
         
-        # Initialize chunked search
-        max_batch = self.vector_reader.get_max_batch_size() if self.use_gpu else None
+        # Initialize chunked search with the correct chunk_size
+        # For GPU: chunk_size must equal the safe max_batch_size limit
+        if self.use_gpu:
+            safe_batch = self.vector_reader.get_max_batch_size()
+            self.chunk_size = safe_batch  # Use GPU-safe limit
+            print(f"  ⚙️  Using GPU batch size: {safe_batch:,}")
+        
+        # Now pass the correct chunk_size to ChunkedSearch
         self.chunked_search = ChunkedSearch(
-            self.chunk_size,
+            chunk_size=self.chunk_size,
             use_gpu=self.use_gpu,
-            max_batch_size=max_batch,
             vector_ops=self.vector_ops
         )
         
