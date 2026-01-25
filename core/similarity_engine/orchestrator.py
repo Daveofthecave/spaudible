@@ -102,7 +102,8 @@ class SearchOrchestrator:
                 self.chunk_size = SearchOrchestrator._benchmark_results['optimal_chunk_size']
         else:
             if self.force_cpu:
-                self.chunk_size = self._optimize_cpu_chunk()
+                # Skip optimizer; use adaptive resizing during search
+                self.chunk_size = 200_000
             elif self.force_gpu:
                 self.chunk_size = self.vector_reader.get_max_batch_size()
         

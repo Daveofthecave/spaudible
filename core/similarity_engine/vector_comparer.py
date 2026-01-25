@@ -210,7 +210,7 @@ class ChunkedSearch:
         if query_vector.shape != (self.VECTOR_DIMENSIONS,):
             raise ValueError(f"Query vector must be {self.VECTOR_DIMENSIONS}D")
         
-        # Initialize GLOBAL results arrays (fixed size for efficiency)
+        # Initialize global results arrays
         top_similarities = np.full(top_k, -1.0, dtype=np.float32)
         top_indices = np.full(top_k, -1, dtype=np.int64)
         
@@ -223,80 +223,83 @@ class ChunkedSearch:
         if show_progress:
             self._init_progress_bar(vectors_to_scan, "🔍 CPU Sequential Scan")
         
-        # Adaptive chunk sizing state
-        processed_count = 0
-        speed_history = []  # Simple list, will keep last 5 speeds
-        adjustment_counter = 0
+        # === Adaptive Chunk Resizing===
+        current_chunk_size = 200_000
+        min_chunk_size = 5_000
+        max_chunk_size = 20_000_000
         
-        # CPU-specific adaptive parameters
-        min_chunk_size = 50_000
-        max_chunk_size = 2_000_000
-        adaptive_chunk_size = self.chunk_size
+        speed_history = []  # Last 3 wall-clock speeds
+        adjustment_counter = 0
+        processed_count = 0
         
         while processed_count < vectors_to_scan:
-            # Adaptive logic: adjust every 5 chunks based on recent performance
-            if len(speed_history) >= 3 and adjustment_counter >= 5:
-                avg_speed = sum(speed_history[-3:]) / 3
-                
-                # Performance dropping? Reduce chunk size
-                if avg_speed < 1_000_000 and adaptive_chunk_size > min_chunk_size:
-                    old_size = adaptive_chunk_size
-                    adaptive_chunk_size = max(min_chunk_size, 
-                                               int(adaptive_chunk_size * 0.8))
-                    # print(f"   Reducing chunk size {old_size:,} -> {adaptive_chunk_size:,} "
-                    #       f"(speed: {avg_speed/1e6:.2f}M vec/s)")
-                
-                # Performance strong? Increase chunk size
-                elif avg_speed > 5_000_000 and adaptive_chunk_size < max_chunk_size:
-                    old_size = adaptive_chunk_size
-                    adaptive_chunk_size = min(max_chunk_size,
-                                              int(adaptive_chunk_size * 1.2))
-                    # print(f"   Increasing chunk size {old_size:,} -> {adaptive_chunk_size:,} "
-                    #       f"(speed: {avg_speed/1e6:.2f}M vec/s)")
-                
-                adjustment_counter = 0
-            
-            # Calculate actual chunk size for this iteration
+            # Calculate chunk boundaries
             chunk_start = processed_count
-            current_chunk_size = min(adaptive_chunk_size, vectors_to_scan - processed_count)
+            actual_chunk_size = min(current_chunk_size, vectors_to_scan - processed_count)
             
-            # Read data from sources (NumPy arrays)
-            chunk_start_time = time.time()
-            vectors = vector_source(chunk_start, current_chunk_size)
-            masks = mask_source(chunk_start, current_chunk_size)
-            regions = region_source(chunk_start, current_chunk_size)
+            # Wall clock timing
+            chunk_wall_start = time.time()
             
-            # Compute similarities using Numba-accelerated operations
-            compute_start_time = time.time()
+            # Read data
+            vectors = vector_source(chunk_start, actual_chunk_size)
+            masks = mask_source(chunk_start, actual_chunk_size)
+            regions = region_source(chunk_start, actual_chunk_size)
+            
+            # Compute similarities
             similarities = self.vector_ops.compute_similarity(query_vector, vectors, masks)
             
-            # Apply region filtering if enabled
+            # Apply region filtering
             if query_region >= 0 and region_strength > 0.0:
                 region_match = (regions == query_region).astype(np.float32)
                 region_penalty = np.where(region_match, 1.0, 1.0 - region_strength)
                 similarities *= region_penalty
             
-            compute_time = time.time() - compute_start_time
+            chunk_wall_time = time.time() - chunk_wall_start
             
-            # Record speed for adaptive logic (vectors per second)
-            if compute_time > 0:
-                chunk_speed = current_chunk_size / compute_time
-                speed_history.append(chunk_speed)
-                # Keep only last 5 speeds
-                if len(speed_history) > 5:
-                    speed_history.pop(0)
-            
-            # Update GLOBAL top-k efficiently (no sorting)
+            # Update global top-k
             self._update_topk_cpu(similarities, chunk_start, top_similarities, top_indices)
             
-            # Update progress
-            processed_count += current_chunk_size
+            # Record real speed
+            if chunk_wall_time > 0:
+                chunk_speed = actual_chunk_size / chunk_wall_time
+                speed_history.append(chunk_speed)
+                # Keep only last 3
+                if len(speed_history) > 3:
+                    speed_history.pop(0)
+            
+            # Advance counters
+            processed_count += actual_chunk_size
             adjustment_counter += 1
             
+            # Update progress (uses its own timing)
             if show_progress:
                 last_update = self._update_progress_bar(
                     processed_count, vectors_to_scan, start_time, last_update
                 )
+            
+            # Adaptive logic every 3 chunks for quicker response
+            if len(speed_history) >= 3 and adjustment_counter >= 3:
+                avg_speed = sum(speed_history[-3:]) / 3
+                
+                # Reduce if speed drops below safe threshold
+                if avg_speed < 1_500_000 and current_chunk_size > min_chunk_size:
+                    old_size = current_chunk_size
+                    current_chunk_size = max(min_chunk_size, int(current_chunk_size * 0.8))
+                    if show_progress:
+                        print(f"   Reducing chunk size {old_size:,} -> {current_chunk_size:,} "
+                            f"(speed: {avg_speed/1e6:.2f}M vec/s)\n\n")
+                    adjustment_counter = 0
+                    speed_history.clear()
+                
+                # Increase only if speed is healthy
+                elif avg_speed > 6_000_000 and current_chunk_size < max_chunk_size:
+                    old_size = current_chunk_size
+                    current_chunk_size = min(max_chunk_size, int(current_chunk_size * 1.2))
+                    if show_progress:
+                        print(f"   Increasing chunk size {old_size:,} -> {current_chunk_size:,} "
+                            f"(speed: {avg_speed/1e6:.2f}M vec/s)\n\n")
+                    adjustment_counter = 0
+                    speed_history.clear()
         
         if show_progress:
             self._complete_progress_bar(vectors_to_scan, processed_count, start_time)
