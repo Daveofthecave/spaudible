@@ -3,7 +3,6 @@
 Chunked similarity search algorithms for unified vector format.
 Only sequential search is maintained for maximum performance.
 """
-
 import numpy as np
 import sys
 import time
@@ -106,7 +105,7 @@ class ChunkedSearch:
                              show_progress: bool,
                              query_region: int,
                              region_strength: float) -> Tuple[List[int], List[float]]:
-        """GPU implementation using CUDA kernels."""
+        """GPU implementation using CUDA kernels via PyTorch."""
         # Move query to GPU
         query_t = torch.tensor(
             query_vector, 
@@ -205,60 +204,102 @@ class ChunkedSearch:
                              show_progress: bool,
                              query_region: int,
                              region_strength: float) -> Tuple[List[int], List[float]]:
-        """CPU implementation using NumPy."""
+        """
+        CPU implementation with global top-k tracking and adaptive chunk sizing.
+        """
+        if query_vector.shape != (self.VECTOR_DIMENSIONS,):
+            raise ValueError(f"Query vector must be {self.VECTOR_DIMENSIONS}D")
+        
+        # Initialize GLOBAL results arrays (fixed size for efficiency)
         top_similarities = np.full(top_k, -1.0, dtype=np.float32)
         top_indices = np.full(top_k, -1, dtype=np.int64)
         
         vectors_to_scan = min(total_vectors, max_vectors or total_vectors)
-        num_chunks = (vectors_to_scan + self.chunk_size - 1) // self.chunk_size
         
+        # Progress tracking
         start_time = time.time()
         last_update = start_time
         
         if show_progress:
             self._init_progress_bar(vectors_to_scan, "🔍 CPU Sequential Scan")
         
-        processed_vectors = 0
+        # Adaptive chunk sizing state
+        processed_count = 0
+        speed_history = []  # Simple list, will keep last 5 speeds
+        adjustment_counter = 0
         
-        for chunk_idx in range(num_chunks):
-            chunk_start = chunk_idx * self.chunk_size
-            chunk_end = min(chunk_start + self.chunk_size, vectors_to_scan)
-            actual_chunk_size = chunk_end - chunk_start
+        # CPU-specific adaptive parameters
+        min_chunk_size = 50_000
+        max_chunk_size = 2_000_000
+        adaptive_chunk_size = self.chunk_size
+        
+        while processed_count < vectors_to_scan:
+            # Adaptive logic: adjust every 5 chunks based on recent performance
+            if len(speed_history) >= 3 and adjustment_counter >= 5:
+                avg_speed = sum(speed_history[-3:]) / 3
+                
+                # Performance dropping? Reduce chunk size
+                if avg_speed < 1_000_000 and adaptive_chunk_size > min_chunk_size:
+                    old_size = adaptive_chunk_size
+                    adaptive_chunk_size = max(min_chunk_size, 
+                                               int(adaptive_chunk_size * 0.8))
+                    # print(f"   Reducing chunk size {old_size:,} -> {adaptive_chunk_size:,} "
+                    #       f"(speed: {avg_speed/1e6:.2f}M vec/s)")
+                
+                # Performance strong? Increase chunk size
+                elif avg_speed > 5_000_000 and adaptive_chunk_size < max_chunk_size:
+                    old_size = adaptive_chunk_size
+                    adaptive_chunk_size = min(max_chunk_size,
+                                              int(adaptive_chunk_size * 1.2))
+                    # print(f"   Increasing chunk size {old_size:,} -> {adaptive_chunk_size:,} "
+                    #       f"(speed: {avg_speed/1e6:.2f}M vec/s)")
+                
+                adjustment_counter = 0
             
-            # Read data
-            vectors = vector_source(chunk_start, actual_chunk_size)
-            masks = mask_source(chunk_start, actual_chunk_size)
-            regions = region_source(chunk_start, actual_chunk_size)
+            # Calculate actual chunk size for this iteration
+            chunk_start = processed_count
+            current_chunk_size = min(adaptive_chunk_size, vectors_to_scan - processed_count)
             
-            # Convert tensors to numpy if needed
-            if isinstance(vectors, torch.Tensor):
-                vectors = vectors.cpu().numpy()
-            if isinstance(masks, torch.Tensor):
-                masks = masks.cpu().numpy()
-            if isinstance(regions, torch.Tensor):
-                regions = regions.cpu().numpy()
+            # Read data from sources (NumPy arrays)
+            chunk_start_time = time.time()
+            vectors = vector_source(chunk_start, current_chunk_size)
+            masks = mask_source(chunk_start, current_chunk_size)
+            regions = region_source(chunk_start, current_chunk_size)
             
-            # Compute similarities
+            # Compute similarities using Numba-accelerated operations
+            compute_start_time = time.time()
+            similarities = self.vector_ops.compute_similarity(query_vector, vectors, masks)
+            
+            # Apply region filtering if enabled
             if query_region >= 0 and region_strength > 0.0:
-                similarities = self.vector_ops.fused_similarity(
-                    query_vector, vectors, masks, regions,
-                    query_region, region_strength, self.algorithm
-                )
-            else:
-                similarities = self.vector_ops.compute_similarity(query_vector, vectors, masks)
+                region_match = (regions == query_region).astype(np.float32)
+                region_penalty = np.where(region_match, 1.0, 1.0 - region_strength)
+                similarities *= region_penalty
             
-            # Update top-k
+            compute_time = time.time() - compute_start_time
+            
+            # Record speed for adaptive logic (vectors per second)
+            if compute_time > 0:
+                chunk_speed = current_chunk_size / compute_time
+                speed_history.append(chunk_speed)
+                # Keep only last 5 speeds
+                if len(speed_history) > 5:
+                    speed_history.pop(0)
+            
+            # Update GLOBAL top-k efficiently (no sorting)
             self._update_topk_cpu(similarities, chunk_start, top_similarities, top_indices)
             
             # Update progress
-            processed_vectors += actual_chunk_size
+            processed_count += current_chunk_size
+            adjustment_counter += 1
+            
             if show_progress:
                 last_update = self._update_progress_bar(
-                    processed_vectors, vectors_to_scan, start_time, last_update
+                    processed_count, vectors_to_scan, start_time, last_update
                 )
         
         if show_progress:
-            self._complete_progress_bar(vectors_to_scan, processed_vectors, start_time)
+            self._complete_progress_bar(vectors_to_scan, processed_count, start_time)
         
         return top_indices.tolist(), top_similarities.tolist()
 
@@ -279,59 +320,73 @@ class ChunkedSearch:
     
     def _update_topk_cpu(self, similarities: np.ndarray, chunk_start: int,
                         top_sim: np.ndarray, top_idx: np.ndarray):
-        """CPU: Update global top-k."""
+        """CPU: Update global top-k using NumPy partitioning (no full sort)"""
+        # Get top-k in this chunk
         chunk_top_k = min(len(similarities), len(top_sim))
-        chunk_indices = np.argpartition(-similarities, chunk_top_k)[:chunk_top_k]
-        chunk_vals = similarities[chunk_indices]
+        chunk_top_indices = np.argpartition(-similarities, chunk_top_k)[:chunk_top_k]
+        chunk_top_values = similarities[chunk_top_indices]
         
-        combined_vals = np.concatenate([top_sim, chunk_vals])
-        combined_indices = np.concatenate([top_idx, chunk_indices + chunk_start])
+        # Combine with global top-k
+        combined_sim = np.concatenate([top_sim, chunk_top_values])
+        combined_idx = np.concatenate([top_idx, chunk_top_indices + chunk_start])
         
-        new_top_k = min(len(combined_vals), len(top_sim))
-        top_pos = np.argpartition(-combined_vals, new_top_k)[:new_top_k]
+        # Get new global top-k
+        new_top_k = min(len(combined_sim), len(top_sim))
+        global_indices = np.argpartition(-combined_sim, new_top_k)[:new_top_k]
         
-        top_sim[:] = combined_vals[top_pos]
-        top_idx[:] = combined_indices[top_pos]
+        # Update in-place
+        top_sim[:] = combined_sim[global_indices]
+        top_idx[:] = combined_idx[global_indices]
     
     def _init_progress_bar(self, total: int, description: str):
-        """Initialize progress bar display."""
+        """Initialize progress bar display"""
         print(f"\n{description}")
         print(f"  [{'░' * self.PROGRESS_BAR_WIDTH}] 0.0%")
         print(f"   Speed: -- vectors/sec | ETA: --")
+        sys.stdout.flush()
         return time.time()
     
-    def _update_progress_bar(self, processed: int, total: int,
+    def _update_progress_bar(self, processed: int, total: int, 
                            start_time: float, last_update: float) -> float:
-        """Update progress with throttling."""
+        """Update progress bar with throttling (max 2 updates/sec)"""
         current_time = time.time()
-        if current_time - last_update < 0.5:
+        if current_time - last_update < 0.5:  # Throttle updates
             return last_update
         
         elapsed = current_time - start_time
         percent = processed / total
+        
+        # Calculate speed and ETA
         speed = processed / elapsed if elapsed > 0 else 0
-        eta = (total - processed) / speed if speed > 0 else 0
+        remaining = total - processed
+        eta = remaining / speed if speed > 0 else 0
         
+        # Format display strings
         speed_str = f"{speed/1e6:.2f}M" if speed > 1e6 else f"{speed/1e3:.1f}K"
-        eta_str = format_elapsed_time(eta)
+        eta_str = format_elapsed_time(eta).strip()
         
+        # Update bar
         filled = int(self.PROGRESS_BAR_WIDTH * percent)
         bar = '█' * filled + '░' * (self.PROGRESS_BAR_WIDTH - filled)
         
+        # Move cursor up 2 lines and overwrite
         sys.stdout.write("\033[2A\033[K")
-        print(f"  [{bar}] {percent:.1%}")
-        print(f"   Speed: {speed_str} vectors/sec | ETA: {eta_str}")
+        sys.stdout.write(f"  [{bar}] {percent:.1%}\n")
+        sys.stdout.write(f"   Speed: {speed_str} vectors/sec | ETA: {eta_str}\n")
+        sys.stdout.flush()
         
         return current_time
     
     def _complete_progress_bar(self, total: int, processed: int, start_time: float):
-        """Finalize progress bar."""
+        """Finalize progress bar with summary"""
         elapsed = time.time() - start_time
         avg_speed = processed / elapsed if elapsed > 0 else 0
         
+        # Move cursor up for final update
         sys.stdout.write("\033[2A\033[K")
         bar = '█' * self.PROGRESS_BAR_WIDTH
         print(f"  [{bar}] 100.0%")
         
+        # Format final speed
         speed_str = f"{avg_speed/1e6:.2f}M" if avg_speed > 1e6 else f"{avg_speed/1e3:.1f}K"
         print(f"   Average: {speed_str} vectors/sec | Total: {format_elapsed_time(elapsed)}\n")

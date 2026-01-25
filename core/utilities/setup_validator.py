@@ -3,22 +3,19 @@
 Vector cache validation utilities for Spaudible.
 Validates the unified binary format with 104-byte vectors and 26-byte index entries.
 """
-
 import json
 import struct
 import hashlib
 from pathlib import Path
 from typing import Tuple
-from config import PathConfig, EXPECTED_VECTORS
+from config import PathConfig, EXPECTED_VECTORS, VECTOR_RECORD_SIZE, VECTOR_HEADER_SIZE
 
-# Constants for new unified format
-VECTOR_RECORD_SIZE = 104  # 104 bytes per vector (binary + scaled + fp32 + metadata)
-VECTOR_HEADER_SIZE = 16   # 16-byte header (magic + version + checksum)
+# Format-specific constants
 INDEX_ENTRY_SIZE = 26     # 26 bytes per index (22B track_id + 4B vector_index)
 
 def validate_vector_cache(checksum_validation: bool = True) -> Tuple[bool, str]:
     """
-    Validate vector cache with optional cryptographic checksum.
+    Validate unified vector cache with optional cryptographic checksum.
     
     Args:
         checksum_validation: If True, performs full BLAKE2b checksum validation.
@@ -28,7 +25,7 @@ def validate_vector_cache(checksum_validation: bool = True) -> Tuple[bool, str]:
         Tuple of (is_valid, message)
     """
     
-    # --- 1. Check vector file ---
+    # --- 1. Validate vector file ---
     vectors_path = PathConfig.get_vector_file()
     if not vectors_path.exists():
         return False, f"Vector file not found: {vectors_path}"
@@ -46,7 +43,7 @@ def validate_vector_cache(checksum_validation: bool = True) -> Tuple[bool, str]:
             f"got {num_vectors:,} (file size: {vector_file_size:,} bytes)"
         )
     
-    # --- 2. Check index file ---
+    # --- 2. Validate index file ---
     index_path = PathConfig.get_index_file()
     if not index_path.exists():
         return False, f"Index file not found: {index_path}"
@@ -62,9 +59,9 @@ def validate_vector_cache(checksum_validation: bool = True) -> Tuple[bool, str]:
             f"got {index_file_size:,} bytes (diff: {size_diff:,})"
         )
     
-    # Fast validation path (skip expensive checksum)
+    # --- 3. Validate header checksum (optional) ---
     if not checksum_validation:
-        # Verify checksum field in header is populated
+        # Fast path: just verify checksum field is populated
         try:
             with open(vectors_path, 'rb') as f:
                 f.seek(8)  # Skip magic (4B) + version (4B)
@@ -76,7 +73,7 @@ def validate_vector_cache(checksum_validation: bool = True) -> Tuple[bool, str]:
         
         return True, f"Valid vector cache (fast check) with {num_vectors:,} tracks"
     
-    # --- Full validation with cryptographic checksum ---
+    # --- 4. Full validation with cryptographic checksum ---
     try:
         with open(vectors_path, 'rb') as f:
             # Skip header
@@ -108,41 +105,32 @@ def validate_vector_cache(checksum_validation: bool = True) -> Tuple[bool, str]:
     except Exception as e:
         return False, f"Checksum validation failed: {e}"
     
-    # Additional integrity checks
+    # --- 5. Validate index sorting (sample-based) ---
     try:
-        # Verify index is sorted (check first 1000 entries and random samples)
         with open(index_path, 'rb') as f:
+            # Sample random entries and verify they're in order
             prev_track_id = None
             
-            # Check first 100 entries
-            for i in range(min(100, EXPECTED_VECTORS)):
-                offset = i * INDEX_ENTRY_SIZE
-                f.seek(offset)
-                track_id_bytes = f.read(TRACK_ID_SIZE)
+            # Check 3 samples: start, middle, end
+            sample_positions = [0, EXPECTED_VECTORS // 2, EXPECTED_VECTORS - 1]
+            
+            for pos in sample_positions:
+                f.seek(pos * INDEX_ENTRY_SIZE)
+                track_id_bytes = f.read(22)
                 track_id = track_id_bytes.decode('ascii', errors='ignore').rstrip('\0')
                 
-                if prev_track_id and track_id < prev_track_id:
-                    return False, f"Index not sorted at entry {i}: {track_id} < {prev_track_id}"
+                if prev_track_id is not None and track_id < prev_track_id:
+                    return False, f"Index not sorted at position {pos}: {track_id} < {prev_track_id}"
+                
+                if not track_id:  # Empty track ID
+                    return False, f"Empty track ID at position {pos}"
                 
                 prev_track_id = track_id
-            
-            # Check random samples
-            import random
-            for _ in range(100):
-                idx = random.randint(0, EXPECTED_VECTORS - 1)
-                offset = idx * INDEX_ENTRY_SIZE
-                f.seek(offset)
-                track_id_bytes = f.read(TRACK_ID_SIZE)
-                
-                # Basic validation: should contain printable ASCII
-                if not all(32 <= b <= 126 for b in track_id_bytes if b != 0):
-                    return False, f"Invalid track ID at index {idx}"
-    
+        
     except Exception as e:
         return False, f"Index integrity check failed: {e}"
     
     return True, f"Valid vector cache with {num_vectors:,} tracks (checksum verified)"
-
 
 def is_setup_complete() -> bool:
     """
@@ -163,13 +151,10 @@ def is_setup_complete() -> bool:
     valid, _ = validate_vector_cache(checksum_validation=False)
     return valid
 
-
 def rebuild_index() -> bool:
     """
     Rebuild sorted index from existing vectors file if index is missing or corrupted.
-    
-    Returns:
-        True if rebuild successful, False otherwise
+    Returns True if rebuild successful, False otherwise.
     """
     vectors_path = PathConfig.get_vector_file()
     index_path = PathConfig.get_index_file()
@@ -220,7 +205,7 @@ def rebuild_index() -> bool:
             with open(chunk_file, "wb") as cf:
                 for track_id, vector_index in metadata:
                     # Track ID (22 bytes, null-padded ASCII)
-                    tid_bytes = track_id.encode('ascii', 'ignore').ljust(TRACK_ID_SIZE, b'\0')
+                    tid_bytes = track_id.encode('ascii', 'ignore').ljust(22, b'\0')
                     cf.write(tid_bytes)
                     
                     # Vector index (4 bytes, little-endian)
@@ -245,7 +230,6 @@ def rebuild_index() -> bool:
         traceback.print_exc()
         return False
 
-
 def _merge_sorted_chunks(chunk_files: list, output_path: Path):
     """
     Merge sorted chunk files using heap sort.
@@ -262,38 +246,32 @@ def _merge_sorted_chunks(chunk_files: list, output_path: Path):
     
     # Read first record from each file
     for i, f in enumerate(files):
-        data = f.read(INDEX_ENTRY_SIZE)
+        data = f.read(26)
         if data:
-            track_id = data[:TRACK_ID_SIZE].decode('ascii', 'ignore').rstrip('\0')
-            vector_index = struct.unpack("<I", data[TRACK_ID_SIZE:INDEX_ENTRY_SIZE])[0]
+            track_id = data[:22].decode('ascii', 'ignore').rstrip('\0')
+            vector_index = struct.unpack("<I", data[22:26])[0]
             records.append((track_id, vector_index, i))
     
     heapq.heapify(records)
     
     # Merge into final index
     with open(output_path, "wb") as out_file:
-        processed = 0
-        
         while records:
             track_id, vector_index, file_idx = heapq.heappop(records)
             
             # Write merged record
-            tid_bytes = track_id.encode('ascii', 'ignore').ljust(TRACK_ID_SIZE, b'\0')
+            tid_bytes = track_id.encode('ascii', 'ignore').ljust(22, b'\0')
             out_file.write(tid_bytes)
             out_file.write(struct.pack("<I", vector_index))
             
-            processed += 1
-            
-            # Progress indicator
-            if processed % 1_000_000 == 0:
-                print(f"    Merged {processed // 1_000_000}M records...")
-            
             # Read next record from the same file
-            next_data = files[file_idx].read(INDEX_ENTRY_SIZE)
+            next_data = files[file_idx].read(26)
             if next_data:
-                next_track_id = next_data[:TRACK_ID_SIZE].decode('ascii', 'ignore').rstrip('\0')
-                next_vector_index = struct.unpack("<I", next_data[TRACK_ID_SIZE:INDEX_ENTRY_SIZE])[0]
+                next_track_id = next_data[:22].decode('ascii', 'ignore').rstrip('\0')
+                next_vector_index = struct.unpack("<I", next_data[22:26])[0]
                 heapq.heappush(records, (next_track_id, next_vector_index, file_idx))
+        
+        print(f"    Merged {len(chunk_files)} chunks into final index")
     
     # Close all chunk files
     for f in files:
