@@ -6,6 +6,7 @@ import torch
 import numpy as np
 import struct
 import mmap
+import warnings
 from pathlib import Path
 from typing import Optional, Union
 from config import PathConfig
@@ -40,10 +41,14 @@ class VectorReaderGPU:
         # Create persistent memory map
         self._mmap = mmap.mmap(self._file.fileno(), 0, access=mmap.ACCESS_READ)
         
-        # Use numpy's frombuffer to create properly aligned array
-        # This handles the byte offset correctly and avoids alignment issues
-        numpy_array = np.frombuffer(self._mmap, dtype=np.uint8, offset=VECTOR_HEADER_SIZE)
-        self._full_mmap_tensor = torch.from_numpy(numpy_array).view(-1, VECTOR_RECORD_SIZE)
+        # Suppress the non-writable tensor warning for memory-mapped files 
+        # (it's harmless because we never write to them, anyway)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            # Use numpy's frombuffer to create properly aligned array
+            # This handles the byte offset correctly and avoids alignment issues
+            numpy_array = np.frombuffer(self._mmap, dtype=np.uint8, offset=VECTOR_HEADER_SIZE)
+            self._full_mmap_tensor = torch.from_numpy(numpy_array).view(-1, VECTOR_RECORD_SIZE)
         
         # Pre-allocate GPU unpacking buffer for reuse
         self._gpu_unpack_buffer = None
