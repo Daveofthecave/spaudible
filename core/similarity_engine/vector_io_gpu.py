@@ -53,20 +53,20 @@ class VectorReaderGPU:
         # Pre-allocate GPU unpacking buffer for reuse
         self._gpu_unpack_buffer = None
         
-        # Auto-detect safe batch size - use 25% of free VRAM (more conservative)
+        # Auto-detect safe batch size - use 75% of free VRAM
         if self.device == "cuda":
             free_vram = torch.cuda.mem_get_info()[0]
             # Each vector needs: 104B (raw) + 128B (unpacked) + ~256B (intermediates) = ~488B
-            # Add 25% safety margin
-            safe_batch = int(free_vram * 0.25 / 488)
-            self.max_batch_size = min(safe_batch, 2_000_000)  # Cap at 2M for stability
-            print(f"  📊 Loaded {self.total_vectors:,} vectors ({self.file_size/1024**3:.1f} GB)")
-            print(f"  🚀 Using PyTorch unpacking on {self.device}")
-            print(f"  ⚙️  Auto-limited batch size to {self.max_batch_size:,} vectors for safety")
+            # Add 75% safety margin
+            safe_batch = int(free_vram * 0.75 / 488)
+             # Empirically-determined ideal size: 500k uses <1GB VRAM
+            self.max_batch_size = min(safe_batch, 500_000)
+            # print(f"   Loaded {self.total_vectors:,} track vectors ({self.file_size/1000**3:.1f} GB)")
+            print(f"   Loaded {self.total_vectors:,} track vectors")
         else:
-            self.max_batch_size = 250_000
-            print(f"  📊 Loaded {self.total_vectors:,} vectors ({self.file_size/1024**3:.1f} GB)")
-            print(f"  🚀 Using PyTorch unpacking on {self.device}")
+            self.max_batch_size = 200_000
+            print(f"   Loaded {self.total_vectors:,} vectors")
+            print(f"   Using PyTorch unpacking on {self.device}")
 
     def read_chunk(self, start_idx: int, num_vectors: int) -> torch.Tensor:
         """

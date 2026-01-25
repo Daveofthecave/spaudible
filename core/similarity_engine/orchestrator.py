@@ -121,7 +121,7 @@ class SearchOrchestrator:
         if self.use_gpu:
             safe_batch = self.vector_reader.get_max_batch_size()
             self.chunk_size = safe_batch  # Use GPU-safe limit
-            print(f"  ⚙️  Using GPU batch size: {safe_batch:,}")
+            print(f"   Using batch size: {safe_batch:,}")
         
         # Now pass the correct chunk_size to ChunkedSearch
         self.chunked_search = ChunkedSearch(
