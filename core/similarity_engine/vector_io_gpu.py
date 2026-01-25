@@ -5,6 +5,7 @@ Vector file reader using PyTorch operations run on the GPU.
 import torch
 import numpy as np
 import struct
+import mmap
 from pathlib import Path
 from typing import Optional, Union
 from config import PathConfig
@@ -36,8 +37,16 @@ class VectorReaderGPU:
         self.file_size = self.vectors_path.stat().st_size
         self.total_vectors = (self.file_size - VECTOR_HEADER_SIZE) // VECTOR_RECORD_SIZE
         
-        # Use numpy memmap to avoid PyTorch's non-writable buffer warning
-        self.mmap = np.memmap(self._file, mode='r', dtype=np.uint8, offset=0)
+        # Create persistent memory map
+        self._mmap = mmap.mmap(self._file.fileno(), 0, access=mmap.ACCESS_READ)
+        
+        # Use numpy's frombuffer to create properly aligned array
+        # This handles the byte offset correctly and avoids alignment issues
+        numpy_array = np.frombuffer(self._mmap, dtype=np.uint8, offset=VECTOR_HEADER_SIZE)
+        self._full_mmap_tensor = torch.from_numpy(numpy_array).view(-1, VECTOR_RECORD_SIZE)
+        
+        # Pre-allocate GPU unpacking buffer for reuse
+        self._gpu_unpack_buffer = None
         
         # Auto-detect safe batch size - use 25% of free VRAM (more conservative)
         if self.device == "cuda":
@@ -66,70 +75,74 @@ class VectorReaderGPU:
             Tensor of shape (num_vectors, 32)
         """
         # Enforce safe batch size
-        # if num_vectors > self.max_batch_size:
-        #     print(f"  ⚠️  Requested {num_vectors:,} vectors, limiting to {self.max_batch_size:,} for safety")
-        #     num_vectors = self.max_batch_size
+        if num_vectors > self.max_batch_size:
+            num_vectors = self.max_batch_size
         
         if start_idx + num_vectors > self.total_vectors:
             num_vectors = self.total_vectors - start_idx
         
-        # Calculate byte range
-        byte_offset = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE
-        num_bytes = num_vectors * VECTOR_RECORD_SIZE
+        # Slice pre-mapped tensor (ZERO copy - just a view)
+        cpu_records = self._full_mmap_tensor[start_idx:start_idx + num_vectors]
         
-        # Create explicit writable copy to avoid PyTorch warning/implicit copies
-        numpy_data = np.array(self.mmap[byte_offset:byte_offset + num_bytes], copy=True)
-        raw_bytes = torch.from_numpy(numpy_data).to(self.device, non_blocking=True)
+        # Move to GPU with async transfer
+        gpu_records = cpu_records.to(self.device, non_blocking=True)
         
-        # Unpack and return
-        return self._unpack_vectors(raw_bytes, num_vectors)
-    
-    def _unpack_vectors(self, raw_bytes: torch.Tensor, num_vectors: int) -> torch.Tensor:
+        # Unpack using optimized manual method (no torch.compile to avoid alignment errors)
+        return self._unpack_vectors(gpu_records, num_vectors)
+
+    def _unpack_vectors(self, records_gpu: torch.Tensor, num_vectors: int) -> torch.Tensor:
         """
         Unpack 104-byte records from track_vectors.bin into 32D vectors 
         using PyTorch tensor ops. All operations are parallelized
         automatically by PyTorch's CUDA backend.
+        
+        This version avoids torch.compile to prevent alignment view errors.
+        All operations are standard PyTorch ops that work with misaligned memory.
         """
-        records = raw_bytes.contiguous().view(num_vectors, VECTOR_RECORD_SIZE)
+        # Pre-allocate or reuse GPU buffer (crucial for performance)
+        if self._gpu_unpack_buffer is None or self._gpu_unpack_buffer.size(0) < num_vectors:
+            self._gpu_unpack_buffer = torch.empty(
+                num_vectors, 32, 
+                dtype=torch.float32, 
+                device=records_gpu.device
+            )
+        vectors = self._gpu_unpack_buffer[:num_vectors].fill_(-1.0)
         
-        vectors = torch.full((num_vectors, 32), -1.0, dtype=torch.float32, device=self.device)
+        # === BINARY DIMENSIONS (single byte at offset 0) ===
+        # These are always aligned and can be extracted directly
+        binary_byte = records_gpu[:, 0]
+        vectors[:, 9]  = (binary_byte & 1).float()
+        vectors[:, 11] = ((binary_byte >> 1) & 1).float()
+        vectors[:, 12] = ((binary_byte >> 2) & 1).float()
+        vectors[:, 13] = ((binary_byte >> 3) & 1).float()
+        vectors[:, 14] = ((binary_byte >> 4) & 1).float()
         
-        # === BINARY DIMENSIONS ===
-        binary_byte = records[:, 0].to(torch.uint8, non_blocking=True)
-        vectors[:, 9]  = (binary_byte & 1).to(torch.float32, non_blocking=True)
-        vectors[:, 11] = ((binary_byte >> 1) & 1).to(torch.float32, non_blocking=True)
-        vectors[:, 12] = ((binary_byte >> 2) & 1).to(torch.float32, non_blocking=True)
-        vectors[:, 13] = ((binary_byte >> 3) & 1).to(torch.float32, non_blocking=True)
-        vectors[:, 14] = ((binary_byte >> 4) & 1).to(torch.float32, non_blocking=True)
-        del binary_byte
+        # === SCALED DIMENSIONS (22 uint16 values starting at byte 1) ===
+        # Byte 1 is at offset 1 in the tensor, which is NOT 2-byte aligned
+        # Solution: clone the slice to get aligned memory, then view
+        scaled_bytes = records_gpu[:, 1:45].clone().contiguous()
+        scaled_int16 = scaled_bytes.view(torch.int16).view(num_vectors, 22)
+        scaled_float = scaled_int16.float() * 0.0001
         
-        # === SCALED DIMENSIONS ===
-        # FIX: Clone the slice to ensure proper alignment
-        scaled_section = records[:, 1:45].clone()  # Shape: (num_vectors, 44)
-        scaled_int16 = scaled_section.view(torch.int16).view(num_vectors, 22)
-        scaled_float = scaled_int16.to(torch.float32, non_blocking=True)
-        scaled_float.mul_(0.0001)
-        
+        # Copy to output (all these destinations are properly indexed)
         vectors[:, 0:7] = scaled_float[:, 0:7]
         vectors[:, 8] = scaled_float[:, 7]
         vectors[:, 16] = scaled_float[:, 8]
         vectors[:, 19:32] = scaled_float[:, 9:22]
-        del scaled_section, scaled_int16, scaled_float
         
-        # === FP32 DIMENSIONS ===
-        # FIX: Clone the slice to ensure proper alignment
-        fp32_section = records[:, 45:65].clone()  # Shape: (num_vectors, 20)
-        fp32_tensor = fp32_section.view(torch.float32).view(num_vectors, 5)
+        # === FP32 DIMENSIONS (5 float32 values starting at byte 45) ===
+        # Byte 45 is NOT 4-byte aligned, so we MUST clone first
+        fp32_bytes = records_gpu[:, 45:65].clone().contiguous()
+        fp32_section = fp32_bytes.view(torch.float32).view(num_vectors, 5)
         
-        vectors[:, 7]  = fp32_tensor[:, 0]
-        vectors[:, 10] = fp32_tensor[:, 1]
-        vectors[:, 15] = fp32_tensor[:, 2]
-        vectors[:, 17] = fp32_tensor[:, 3]
-        vectors[:, 18] = fp32_tensor[:, 4]
-        del fp32_section, fp32_tensor, records
+        vectors[:, 7]  = fp32_section[:, 0]
+        vectors[:, 10] = fp32_section[:, 1]
+        vectors[:, 15] = fp32_section[:, 2]
+        vectors[:, 17] = fp32_section[:, 3]
+        vectors[:, 18] = fp32_section[:, 4]
         
         return vectors
-    
+
     def read_masks(self, start_idx: int, num_vectors: int) -> torch.Tensor:
         """
         Read validity masks where bit j indicates dimension j is valid.
@@ -143,14 +156,12 @@ class VectorReaderGPU:
         if start_idx + num_vectors > self.total_vectors:
             num_vectors = self.total_vectors - start_idx
         
-        byte_offset = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE
-        numpy_data = np.array(self.mmap[byte_offset:byte_offset + num_vectors * VECTOR_RECORD_SIZE], copy=True)
-        records = torch.from_numpy(numpy_data).to(self.device)
+        # Extract mask bytes directly from mmap tensor
+        # Byte 65 may not be 4-byte aligned, so clone first
+        mask_bytes = self._full_mmap_tensor[start_idx:start_idx + num_vectors, 65:69].clone().contiguous()
         
-        # Reshape to 2D and then use narrow
-        records = records.contiguous().view(num_vectors, VECTOR_RECORD_SIZE)
-        mask_section = torch.narrow(records, 1, 65, 4).contiguous()
-        return mask_section.view(torch.int32).view(num_vectors)
+        # Reinterpret as int32 and return
+        return mask_bytes.view(torch.int32).view(num_vectors).to(self.device, non_blocking=True)
 
     def read_regions(self, start_idx: int, num_vectors: int) -> torch.Tensor:
         """
@@ -165,21 +176,16 @@ class VectorReaderGPU:
         if start_idx + num_vectors > self.total_vectors:
             num_vectors = self.total_vectors - start_idx
         
-        byte_offset = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE
-        numpy_data = np.array(self.mmap[byte_offset:byte_offset + num_vectors * VECTOR_RECORD_SIZE], copy=True)
-        records = torch.from_numpy(numpy_data).to(self.device)
-        
-        # Reshape to 2D before accessing column
-        records = records.contiguous().view(num_vectors, VECTOR_RECORD_SIZE)
-        return records[:, 69].view(torch.uint8)
-    
+        # Direct slice and return (single bytes don't have alignment issues)
+        return self._full_mmap_tensor[start_idx:start_idx + num_vectors, 69].view(torch.uint8).to(self.device, non_blocking=True)
+
     def get_total_vectors(self) -> int:
         return self.total_vectors
-    
+
     def get_max_batch_size(self) -> int:
         """Return the safe batch size that was calculated during initialization."""
         return self.max_batch_size
-    
+
     def get_isrcs_batch(self, indices: Union[list, torch.Tensor]) -> list:
         """Extract ISRCs directly from vector file."""
         if isinstance(indices, torch.Tensor):
@@ -188,14 +194,12 @@ class VectorReaderGPU:
         results = []
         for idx in indices:
             # ISRC is at bytes 70-81 (12 bytes)
-            byte_offset = VECTOR_HEADER_SIZE + idx * VECTOR_RECORD_SIZE + 70
-            isrc_bytes = self.mmap[byte_offset:byte_offset + 12]
-            # FIX: Convert numpy array slice to bytes before decoding
-            isrc = isrc_bytes.tobytes().decode('ascii', errors='ignore').rstrip('\0')
+            isrc_bytes = self._full_mmap_tensor[idx, 70:82]
+            isrc = isrc_bytes.view(torch.uint8).tobytes().decode('ascii', errors='ignore').rstrip('\0')
             results.append(isrc)
         
         return results
-    
+
     def get_track_ids_batch(self, indices: Union[list, torch.Tensor]) -> list:
         """Extract track IDs directly from vector file."""
         if isinstance(indices, torch.Tensor):
@@ -203,17 +207,19 @@ class VectorReaderGPU:
         
         results = []
         for idx in indices:
-            byte_offset = VECTOR_HEADER_SIZE + idx * VECTOR_RECORD_SIZE + 82
-            track_id_bytes = self.mmap[byte_offset:byte_offset + 22]
-            # FIX: Convert numpy array slice to bytes before decoding
-            track_id = track_id_bytes.tobytes().decode('ascii', errors='ignore').rstrip('\0')
+            track_id_bytes = self._full_mmap_tensor[idx, 82:104]
+            track_id = track_id_bytes.view(torch.uint8).tobytes().decode('ascii', errors='ignore').rstrip('\0')
             results.append(track_id)
         
         return results
-    
+
     def close(self):
         """Clean up resources."""
-        if hasattr(self, 'mmap'):
-            self.mmap._mmap.close()
+        if hasattr(self, '_full_mmap_tensor'):
+            del self._full_mmap_tensor
+        if hasattr(self, '_mmap'):
+            self._mmap.close()
         if hasattr(self, '_file'):
             self._file.close()
+        if hasattr(self, '_gpu_unpack_buffer'):
+            del self._gpu_unpack_buffer
