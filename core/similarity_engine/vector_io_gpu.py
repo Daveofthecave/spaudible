@@ -195,7 +195,7 @@ class VectorReaderGPU:
         for idx in indices:
             # ISRC is at bytes 70-81 (12 bytes)
             isrc_bytes = self._full_mmap_tensor[idx, 70:82]
-            isrc = isrc_bytes.view(torch.uint8).tobytes().decode('ascii', errors='ignore').rstrip('\0')
+            isrc = isrc_bytes.contiguous().numpy().tobytes().decode('ascii', errors='ignore').rstrip('\0')
             results.append(isrc)
         
         return results
@@ -208,7 +208,7 @@ class VectorReaderGPU:
         results = []
         for idx in indices:
             track_id_bytes = self._full_mmap_tensor[idx, 82:104]
-            track_id = track_id_bytes.view(torch.uint8).tobytes().decode('ascii', errors='ignore').rstrip('\0')
+            track_id = track_id_bytes.contiguous().numpy().tobytes().decode('ascii', errors='ignore').rstrip('\0')
             results.append(track_id)
         
         return results
