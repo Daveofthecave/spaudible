@@ -227,13 +227,15 @@ class ChunkedSearch:
             self._init_progress_bar(vectors_to_scan, "🔍 CPU Sequential Scan")
         
         # === Adaptive Chunk Resizer ===
-        current_chunk_size = 400_000
         min_chunk_size = 2_000
         max_chunk_size = 100_000_000
+        current_chunk_size = config_manager.get_optimal_chunk_size()
+        if not (min_chunk_size <= current_chunk_size <= max_chunk_size):
+            current_chunk_size = 400_000  # Fallback to default if corrupted
         
-        # State tracking with automatic length limits
-        speed_history = deque(maxlen=15)  # Rolling window of speed measurements
-        size_history = deque(maxlen=15)   # Corresponding chunk sizes
+        # State tracking
+        speed_history = deque(maxlen=15)
+        size_history = deque(maxlen=15)
         
         # Optimization state variables for the adaptive chunk resizer
         best_speed = 0.0
@@ -252,7 +254,7 @@ class ChunkedSearch:
         # Store last adaptation message for display
         last_adaptation_msg = ""
         adaptation_display_time = 0
-
+        
         # Force initial render to establish 3-line layout
         if show_progress:
             sys.stdout.flush()
@@ -319,50 +321,55 @@ class ChunkedSearch:
                 if speed > best_speed:
                     best_speed = speed
                     best_chunk_size = current_chunk_size
-            
-            samples_since_adjustment += 1
-            
-            # Run adaptation every 3 chunks with sufficient history
-            if samples_since_adjustment >= 3 and len(speed_history) >= 5:
-                recent_speeds = list(speed_history)[-5:]
-                recent_sizes = list(size_history)[-5:]
-                avg_speed = np.mean(recent_speeds)
                 
-                # Simple hill climbing: measure speed change
-                speed_change = 0
-                if last_speed > 0:
-                    speed_change = (avg_speed - last_speed) / last_speed
+                samples_since_adjustment += 1
                 
-                # Adjust direction and step size based on performance
-                if speed_change > 0.01:  # Speed improved
-                    direction = 1
-                    step_size = min(1.5, step_size * 1.02)  # Slightly more aggressive
-                elif speed_change < -0.05:  # Speed dropped significantly
-                    # Reverse direction
-                    direction = -1 if direction == 0 else -direction
-                    step_size = max(1.05, step_size * 0.8)
-                else:  # Stable or small change
-                    # Reduce momentum
-                    step_size = max(1.05, step_size * 0.95)
-                    if abs(direction) > 0:
-                        direction = direction // 2  # Decay direction
-                
-                # Calculate new chunk size
-                if abs(direction) > 0:
-                    potential_new_size = int(current_chunk_size * (step_size ** direction))
-                    new_chunk_size = max(min_chunk_size, min(max_chunk_size, potential_new_size))
-                
-                # Store adaptation message if chunk size changed
-                if show_progress and new_chunk_size != current_chunk_size:
-                    last_adaptation_msg = (
-                        f"   Chunk size: {new_chunk_size:,} "
-                        f"({speed_change:+.1%} speed)      "
-                    )
-                    adaptation_display_time = time.time()
-                
-                # Update tracking variables
-                last_speed = avg_speed
-                samples_since_adjustment = 0
+                # Run adaptation every 3 chunks with sufficient history
+                if samples_since_adjustment >= 3 and len(speed_history) >= 5:
+                    recent_speeds = list(speed_history)[-5:]
+                    recent_sizes = list(size_history)[-5:]
+                    avg_speed = np.mean(recent_speeds)
+                    
+                    # Simple hill climbing: measure speed change
+                    speed_change = 0
+                    if last_speed > 0:
+                        speed_change = (avg_speed - last_speed) / last_speed
+                    
+                    # Adjust direction and step size based on performance
+                    if speed_change > 0.01:  # Speed improved
+                        direction = 1 if direction >= 0 else -1  # Continue current direction
+                        step_size = min(1.5, step_size * 1.02)  # Slightly more aggressive
+                    elif speed_change < -0.05:  # Speed dropped significantly
+                        # Reverse direction
+                        direction = -direction if direction != 0 else -1
+                        step_size = max(1.05, step_size * 0.65)  # More aggressive backoff
+                        
+                        # If we regressed significantly, reset to best known configuration
+                        if avg_speed < best_speed * 0.85:
+                            new_chunk_size = best_chunk_size
+                    else:  # Stable or small change
+                        # Reduce momentum gradually
+                        step_size = max(1.05, step_size * 0.95)
+                        # Decay direction gradually
+                        if abs(direction) > 0.1:
+                            direction *= 0.9
+                    
+                    # Calculate new chunk size if we haven't set it via reset
+                    if new_chunk_size == current_chunk_size and abs(direction) > 0.1:
+                        potential_new_size = int(current_chunk_size * (step_size ** direction))
+                        new_chunk_size = max(min_chunk_size, min(max_chunk_size, potential_new_size))
+                    
+                    # Store adaptation message
+                    if show_progress and new_chunk_size != current_chunk_size:
+                        last_adaptation_msg = (
+                            f"   Chunk size: {new_chunk_size:,} "
+                            f"({speed_change:+.1%} speed)      "
+                        )
+                        adaptation_display_time = time.time()
+                    
+                    # Update tracking variables
+                    last_speed = avg_speed
+                    samples_since_adjustment = 0
             
             # Apply the new chunk size
             current_chunk_size = new_chunk_size
@@ -380,6 +387,9 @@ class ChunkedSearch:
         
         if show_progress:
             self._complete_progress_bar(vectors_to_scan, processed_count, start_time)
+        
+        # Store the best chunk size discovered during this scan for the next run
+        config_manager.set_optimal_chunk_size(best_chunk_size)
         
         return top_indices.tolist(), top_similarities.tolist()
 

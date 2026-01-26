@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 from config import PathConfig
+from datetime import datetime
 
 class ConfigManager:
     ALGORITHM_CHOICES = {
@@ -115,6 +116,15 @@ class ConfigManager:
         """Set region filter strength (0.0-1.0)."""
         value = max(0.0, min(1.0, float(value)))
         self.set('region_strength', value)
+
+    def get_optimal_chunk_size(self) -> int:
+        """Get stored optimal chunk size for this hardware (default 400k)."""
+        return self.get('optimal_chunk_size', 400_000)
+    
+    def set_optimal_chunk_size(self, size: int):
+        """Store optimal chunk size and timestamp."""
+        self.set('optimal_chunk_size', size)
+        self.set('chunk_size_last_updated', datetime.now().isoformat())
 
 # Singleton access
 config_manager = ConfigManager()
