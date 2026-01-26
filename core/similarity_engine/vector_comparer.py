@@ -244,6 +244,11 @@ class ChunkedSearch:
         step_size = 1.25  # Initial step multiplier
         last_speed = 0.0
         
+        # Multi-phase optimization to handle cache warmup
+        warmup_threshold = min(vectors_to_scan * 0.20, 30_000_000)  # 20% or 30M vectors
+        exploration_phase = True
+        stable_configurations = deque(maxlen=5)  # Track consistent performers
+        
         processed_count = 0
         samples_since_adjustment = 0
         
@@ -317,8 +322,8 @@ class ChunkedSearch:
                 speed_history.append(speed)
                 size_history.append(current_chunk_size)
                 
-                # Track personal best
-                if speed > best_speed:
+                # Track best speed but ignore early cache-warmed results
+                if speed > best_speed and processed_count > warmup_threshold:
                     best_speed = speed
                     best_chunk_size = current_chunk_size
                 
@@ -335,17 +340,27 @@ class ChunkedSearch:
                     if last_speed > 0:
                         speed_change = (avg_speed - last_speed) / last_speed
                     
+                    # Phase transition: exit exploration after warmup
+                    if exploration_phase and processed_count > warmup_threshold:
+                        exploration_phase = False
+                        # Reset best to ignore cache-warmed values
+                        best_speed = 0.0
+                    
                     # Adjust direction and step size based on performance
                     if speed_change > 0.01:  # Speed improved
                         direction = 1 if direction >= 0 else -1  # Continue current direction
                         step_size = min(1.5, step_size * 1.02)  # Slightly more aggressive
+                        
+                        # Track stable configurations (only after warmup)
+                        if not exploration_phase:
+                            stable_configurations.append((avg_speed, current_chunk_size))
                     elif speed_change < -0.05:  # Speed dropped significantly
-                        # Reverse direction
+                        # Aggressive backoff with direction reversal
                         direction = -direction if direction != 0 else -1
-                        step_size = max(1.05, step_size * 0.65)  # More aggressive backoff
+                        step_size = max(1.05, step_size * 0.6)  # Very aggressive backoff
                         
                         # If we regressed significantly, reset to best known configuration
-                        if avg_speed < best_speed * 0.85:
+                        if avg_speed < best_speed * 0.85 and best_speed > 0:
                             new_chunk_size = best_chunk_size
                     else:  # Stable or small change
                         # Reduce momentum gradually
@@ -353,6 +368,10 @@ class ChunkedSearch:
                         # Decay direction gradually
                         if abs(direction) > 0.1:
                             direction *= 0.9
+                        
+                        # Track stable configurations (only after warmup)
+                        if not exploration_phase:
+                            stable_configurations.append((avg_speed, current_chunk_size))
                     
                     # Calculate new chunk size if we haven't set it via reset
                     if new_chunk_size == current_chunk_size and abs(direction) > 0.1:
@@ -389,7 +408,17 @@ class ChunkedSearch:
             self._complete_progress_bar(vectors_to_scan, processed_count, start_time)
         
         # Store the best chunk size discovered during this scan for the next run
-        config_manager.set_optimal_chunk_size(best_chunk_size)
+        # Prefer sustainable performance over early cache-spiked performance
+        if len(stable_configurations) > 0:
+            # Use median of stable configurations for robustness
+            stable_sizes = [size for _, size in stable_configurations]
+            final_chunk_size = int(np.median(stable_sizes))
+        elif best_speed > 0:  # Should only trigger if scan was very short
+            final_chunk_size = best_chunk_size
+        else:  # Ultimate fallback
+            final_chunk_size = current_chunk_size
+        
+        config_manager.set_optimal_chunk_size(final_chunk_size)
         
         return top_indices.tolist(), top_similarities.tolist()
 
