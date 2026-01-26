@@ -356,7 +356,7 @@ class ChunkedSearch:
                 if show_progress and new_chunk_size != current_chunk_size:
                     last_adaptation_msg = (
                         f"   Chunk size: {current_chunk_size:,} → {new_chunk_size:,} "
-                        f"(Speed: {avg_speed/1e6:.2f}M vec/s, Change: {speed_change:+.1%})"
+                        f"({speed_change:+.1%} speed)      "
                     )
                     adaptation_display_time = time.time()
                 
