@@ -77,7 +77,7 @@ class SearchOrchestrator:
         index_path = index_path or str(PathConfig.get_index_file())
         
         # Initialize components with correct GPU/CPU setting
-        self._init_vector_reader(vectors_path)
+        self.vector_reader = self._init_vector_reader(vectors_path)
         self.index_manager = IndexManager(index_path)
         self.index_manager._vector_reader = self.vector_reader
         self.metadata_manager = MetadataManager(metadata_db)
@@ -122,14 +122,22 @@ class SearchOrchestrator:
                 self._validate_implementation_parity()
             except Exception as e:
                 print(f"  ⚠️  Implementation validation failed: {e}")
-    
+
     def _init_vector_reader(self, vectors_path: str):
-        """Initialize appropriate vector reader (GPU or CPU)."""
+        """Initialize appropriate vector reader (CPU or GPU)."""
+        # Use dedicated GPU reader for GPU mode
         if self.use_gpu and torch.cuda.is_available():
-            self.vector_reader = VectorReaderGPU(vectors_path)
-        else:
-            self.vector_reader = VectorReader(vectors_path)
-    
+            try:
+                from .vector_io_gpu import VectorReaderGPU
+                return VectorReaderGPU(vectors_path)
+            except ImportError:
+                print("  ⚠️  VectorReaderGPU not available, falling back to CPU")
+                self.use_gpu = False
+        
+        # Use new unified VectorReader for CPU mode (fast PyTorch implementation)
+        device = "cpu"
+        return VectorReader(vectors_path, device=device)
+
     def _optimize_cpu_chunk(self) -> int:
         """Optimize chunk size for CPU processing."""
         optimizer = ChunkSizeOptimizer(self.vector_reader)
@@ -265,7 +273,9 @@ class SearchOrchestrator:
             self._mask_source,
             self._region_source,
             self.total_vectors,
+            self.vector_ops,
             top_k=top_k * 3,  # Get extra candidates for deduplication
+            max_vectors=None, 
             show_progress=show_progress,
             query_region=query_region,
             region_strength=self.region_strength

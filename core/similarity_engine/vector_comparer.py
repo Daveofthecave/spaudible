@@ -64,6 +64,7 @@ class ChunkedSearch:
                         mask_source: Callable[[int, int], torch.Tensor],
                         region_source: Callable[[int, int], torch.Tensor],
                         total_vectors: int,
+                        vector_ops: VectorOps,
                         top_k: int = 10,
                         max_vectors: Optional[int] = None,
                         show_progress: bool = True,
@@ -87,12 +88,13 @@ class ChunkedSearch:
         if self.use_gpu and self.gpu_ops:
             return self._gpu_sequential_scan(
                 query_vector, vector_source, mask_source, region_source,
-                total_vectors, top_k, max_vectors, show_progress, query_region, region_strength
+                total_vectors, vector_ops, top_k, max_vectors, show_progress, query_region, region_strength
             )
         else:
             return self._cpu_sequential_scan(
                 query_vector, vector_source, mask_source, region_source,
-                total_vectors, top_k, max_vectors, show_progress, query_region, region_strength
+                total_vectors, vector_ops, top_k, max_vectors, show_progress,
+                query_region=query_region, region_strength=region_strength
             )
     
     def _gpu_sequential_scan(self,
@@ -196,15 +198,15 @@ class ChunkedSearch:
 
     def _cpu_sequential_scan(self,
                              query_vector: np.ndarray,
-                             vector_source: Callable,
-                             mask_source: Callable,
-                             region_source: Callable,
+                             vector_source: Callable[[int, int], torch.Tensor],
+                             mask_source: Callable[[int, int], torch.Tensor],
+                             region_source: Callable[[int, int], torch.Tensor],
                              total_vectors: int,
-                             top_k: int,
-                             max_vectors: Optional[int],
-                             show_progress: bool,
-                             query_region: int,
-                             region_strength: float) -> Tuple[List[int], List[float]]:
+                             vector_ops: VectorOps,
+                             top_k: int = 10,
+                             max_vectors: Optional[int] = None,
+                             show_progress: bool = True,
+                             **kwargs) -> Tuple[List[int], List[float]]:
         """
         CPU implementation with intelligent adaptive chunk sizing 
         using hill climbing algorithm.
@@ -232,8 +234,8 @@ class ChunkedSearch:
         if show_progress:
             self._init_progress_bar(vectors_to_scan, "🔍 CPU Sequential Scan")
         
-        # === Enhanced Adaptive Chunk Resizing State ===
-        current_chunk_size = 200_000
+        # === Adaptive Chunk Resizer ===
+        current_chunk_size = 400_000
         min_chunk_size = 2_000
         max_chunk_size = 100_000_000
         
@@ -256,6 +258,10 @@ class ChunkedSearch:
         processed_count = 0
         samples_since_adjustment = 0
         
+        # Extract region parameters from kwargs
+        query_region = kwargs.get('query_region', -1)
+        region_strength = kwargs.get('region_strength', 1.0)
+        
         while processed_count < vectors_to_scan:
             # Calculate chunk boundaries
             chunk_start = processed_count
@@ -267,21 +273,39 @@ class ChunkedSearch:
             # Read data from unified vector file
             vectors = vector_source(chunk_start, actual_chunk_size)
             masks = mask_source(chunk_start, actual_chunk_size)
+            
+            # Read regions for filtering
             regions = region_source(chunk_start, actual_chunk_size)
             
+            # Convert to numpy for Numba kernels
+            vectors_np = vectors.numpy()
+            masks_np = masks.numpy()
+            regions_np = regions.numpy()
+            
             # Compute similarities with vectorized operations
-            similarities = self.vector_ops.compute_similarity(query_vector, vectors, masks)
+            similarities = vector_ops.compute_similarity(query_vector, vectors_np, masks_np)
             
             # Apply region filtering if enabled
             if query_region >= 0 and region_strength > 0.0:
-                region_match = (regions == query_region).astype(np.float32)
+                region_match = (regions_np == query_region).astype(np.float32)
                 region_penalty = np.where(region_match, 1.0, 1.0 - region_strength)
                 similarities *= region_penalty
             
             chunk_wall_time = time.time() - chunk_wall_start
             
-            # Update global top-k using efficient partial sort
-            self._update_topk_cpu(similarities, chunk_start, top_similarities, top_indices)
+            # Update global top-k efficiently
+            if actual_chunk_size > 0:
+                chunk_top_k = min(top_k, actual_chunk_size)
+                chunk_top_indices = np.argpartition(-similarities, chunk_top_k)[:chunk_top_k]
+                
+                combined_sim = np.concatenate([top_similarities, similarities[chunk_top_indices]])
+                combined_idx = np.concatenate([top_indices, chunk_top_indices + chunk_start])
+                
+                new_top_k = min(top_k, len(combined_sim))
+                top_indices_in_combined = np.argpartition(-combined_sim, new_top_k)[:new_top_k]
+                
+                top_similarities = combined_sim[top_indices_in_combined]
+                top_indices = combined_idx[top_indices_in_combined]
             
             # === Adaptive Chunk Sizing Logic ===
             if chunk_wall_time > 0:

@@ -1,117 +1,146 @@
 # core/similarity_engine/vector_io.py
 import mmap
+import torch
+import warnings
 import numpy as np
 from pathlib import Path
 from typing import Union
 
 class VectorReader:
-    """CPU-based reader for track_vectors.bin employing structured dtypes
-    to interpret the new 104-byte unified vector format"""
+    """
+    Unified vector reader using CPU-based PyTorch with zero-copy memory mapping.
+    PyTorch's CPU backend has superior SIMD and multithreading vs NumPy 
+    for byte-manipulation workloads.
+    """
     
     VECTOR_RECORD_SIZE = 104
     VECTOR_HEADER_SIZE = 16
     
-    def __init__(self, vectors_path: Union[str, Path]):
+    def __init__(self, vectors_path: Union[str, Path], device: str = "cpu"):
         self.vectors_path = Path(vectors_path)
+        self.device = device
         
-        # Define structured dtype matching the binary record layout in track_vectors.bin
-        self.record_dtype = np.dtype([
-            ('binary', np.uint8),             # byte 0: packed binary dims
-            ('scaled', np.uint16, (22,)),     # bytes 1-44: 22 uint16 values
-            ('fp32', np.float32, (5,)),       # bytes 45-64: 5 float32 values
-            ('mask', np.uint32),              # bytes 65-68: validity bitmask
-            ('region', np.uint8),             # byte 69: region code
-            ('isrc', 'S12'),                  # bytes 70-81: ISRC
-            ('track_id', 'S22'),              # bytes 82-103: track ID
-        ])
-        
-        # Open and memory-map the unified file
+        # Open and memory-map
         self._file = open(self.vectors_path, 'rb')
-        self._file_size = self.vectors_path.stat().st_size
-        self.total_vectors = (self._file_size - self.VECTOR_HEADER_SIZE) // self.VECTOR_RECORD_SIZE
+        self.file_size = self.vectors_path.stat().st_size
+        self.total_vectors = (self.file_size - self.VECTOR_HEADER_SIZE) // self.VECTOR_RECORD_SIZE
         
         # Create memory map
         self._mmap = mmap.mmap(self._file.fileno(), 0, access=mmap.ACCESS_READ)
         
-        # Map as structured records (avoids alignment issues)
-        self._records = np.frombuffer(self._mmap, dtype=self.record_dtype,
-                                      offset=self.VECTOR_HEADER_SIZE,
-                                      count=self.total_vectors)
+        # Create torch tensor view
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning) # We never write to this array
+            numpy_array = np.frombuffer(self._mmap, dtype=np.uint8, offset=self.VECTOR_HEADER_SIZE)
+            self._full_mmap_tensor = torch.from_numpy(numpy_array).view(-1, self.VECTOR_RECORD_SIZE)
         
+        print(f"   Loaded {self.total_vectors:,} vectors")
+        print(f"   Using {self.device} tensor operations")
+        
+    def read_chunk(self, start_idx: int, num_vectors: int) -> torch.Tensor:
+        if start_idx >= self.total_vectors:
+            return torch.empty((0, 32), dtype=torch.float32, device=self.device)
+        
+        num_vectors = min(num_vectors, self.total_vectors - start_idx)
+        records = self._full_mmap_tensor[start_idx:start_idx + num_vectors]
+        
+        return self._unpack_vectors(records, num_vectors)
+    
+    def _unpack_vectors(self, records: torch.Tensor, num_vectors: int) -> torch.Tensor:
+        vectors = torch.full((num_vectors, 32), -1.0, dtype=torch.float32)
+        
+        # Binary dims (byte 0) - no alignment issues
+        binary_byte = records[:, 0]
+        vectors[:, 9] = (binary_byte & 1).float()
+        vectors[:, 11] = ((binary_byte >> 1) & 1).float()
+        vectors[:, 12] = ((binary_byte >> 2) & 1).float()
+        vectors[:, 13] = ((binary_byte >> 3) & 1).float()
+        vectors[:, 14] = ((binary_byte >> 4) & 1).float()
+        
+        # Scaled dims (bytes 1-44) - must clone for alignment
+        scaled_bytes = records[:, 1:45].clone().contiguous()
+        scaled = scaled_bytes.view(torch.int16).view(num_vectors, 22).float() * 0.0001
+        vectors[:, 0:7] = scaled[:, 0:7]
+        vectors[:, 8] = scaled[:, 7]
+        vectors[:, 16] = scaled[:, 8]
+        vectors[:, 19:32] = scaled[:, 9:22]
+        
+        # FP32 dims (bytes 45-64) - must clone for alignment
+        fp32_bytes = records[:, 45:65].clone().contiguous()
+        fp32 = fp32_bytes.view(torch.float32).view(num_vectors, 5)
+        vectors[:, 7] = fp32[:, 0]
+        vectors[:, 10] = fp32[:, 1]
+        vectors[:, 15] = fp32[:, 2]
+        vectors[:, 17] = fp32[:, 3]
+        vectors[:, 18] = fp32[:, 4]
+        
+        return vectors.to(self.device)
+
+    def read_masks(self, start_idx: int, num_vectors: int) -> torch.Tensor:
+        if start_idx >= self.total_vectors:
+            return torch.empty(0, dtype=torch.int32, device=self.device)
+        
+        records = self._full_mmap_tensor[start_idx:start_idx + num_vectors]
+        
+        # Clone to ensure 4-byte alignment for int32 view
+        mask_bytes = records[:, 65:69].clone().contiguous()
+        return mask_bytes.view(torch.int32).view(num_vectors).to(self.device)
+    
+    def read_regions(self, start_idx: int, num_vectors: int) -> torch.Tensor:
+        if start_idx >= self.total_vectors:
+            return torch.empty(0, dtype=torch.uint8, device=self.device)
+        
+        records = self._full_mmap_tensor[start_idx:start_idx + num_vectors]
+        
+        # Clone to be safe (though uint8 is less alignment-sensitive)
+        region_bytes = records[:, 69].clone().contiguous()
+        return region_bytes.view(torch.uint8).view(num_vectors).to(self.device)
+    
+    def get_isrcs_batch(self, indices: Union[list, torch.Tensor]) -> list:
+        """Extract ISRCs directly from vector file."""
+        if isinstance(indices, torch.Tensor):
+            indices = indices.cpu().numpy().tolist()
+        
+        results = []
+        for idx in indices:
+            # ISRC is at bytes 70-81 (12 bytes)
+            isrc_bytes = self._full_mmap_tensor[idx, 70:82]
+            isrc = isrc_bytes.contiguous().numpy().tobytes().decode('ascii', errors='ignore').rstrip('\0')
+            results.append(isrc)
+        
+        return results
+
+    def get_track_ids_batch(self, indices: Union[list, torch.Tensor]) -> list:
+        """Extract track IDs directly from vector file."""
+        if isinstance(indices, torch.Tensor):
+            indices = indices.cpu().numpy().tolist()
+        
+        results = []
+        for idx in indices:
+            track_id_bytes = self._full_mmap_tensor[idx, 82:104]
+            track_id = track_id_bytes.contiguous().numpy().tobytes().decode('ascii', errors='ignore').rstrip('\0')
+            results.append(track_id)
+        
+        return results
+
     def get_total_vectors(self) -> int:
         return self.total_vectors
     
-    def read_chunk(self, start_idx: int, num_vectors: int) -> np.ndarray:
-        """Read and unpack vectors to float32[32] from the unified format"""
-        if start_idx >= self.total_vectors:
-            return np.empty((0, 32), dtype=np.float32)
+    def get_max_batch_size(self) -> int:
+        if self.device == "cpu":
+            return 500_000  # Conservative CPU limit
         
-        if start_idx + num_vectors > self.total_vectors:
-            num_vectors = self.total_vectors - start_idx
+        if torch.cuda.is_available():
+            free_vram = torch.cuda.mem_get_info()[0]
+            safe_batch = int(free_vram * 0.75 / 256)
+            return min(safe_batch, 2_000_000)
         
-        # Access records slice (this is a view, very fast)
-        records = self._records[start_idx:start_idx + num_vectors]
-        
-        # Initialize output array
-        vectors = np.full((num_vectors, 32), -1.0, dtype=np.float32)
-        
-        # === Unpack binary-packed dimensions (byte 0) ===
-        binary_byte = records['binary']
-        vectors[:, 9]  = (binary_byte & 0b00000001).astype(np.float32)  # mode (dim 10)
-        vectors[:, 11] = ((binary_byte >> 1) & 1).astype(np.float32)   # ts_4_4 (dim 12)
-        vectors[:, 12] = ((binary_byte >> 2) & 1).astype(np.float32)   # ts_3_4 (dim 13)
-        vectors[:, 13] = ((binary_byte >> 3) & 1).astype(np.float32)   # ts_5_4 (dim 14)
-        vectors[:, 14] = ((binary_byte >> 4) & 1).astype(np.float32)   # ts_other (dim 15)
-        
-        # === Unpack scaled uint16 dimensions (bytes 1-44) ===
-        scaled = records['scaled'].astype(np.float32) * 0.0001
-        vectors[:, 0:7] = scaled[:, 0:7]       # dims 1-7: acousticness through liveness
-        vectors[:, 8]   = scaled[:, 7]         # dim 9: key
-        vectors[:, 16]  = scaled[:, 8]         # dim 17: release_date
-        vectors[:, 19:32] = scaled[:, 9:22]    # dims 20-32: meta-genres
-        
-        # === Unpack fp32 dimensions (bytes 45-64) ===
-        fp32 = records['fp32']
-        vectors[:, 7]  = fp32[:, 0]  # dim 8: loudness
-        vectors[:, 10] = fp32[:, 1]  # dim 11: tempo
-        vectors[:, 15] = fp32[:, 2]  # dim 16: duration
-        vectors[:, 17] = fp32[:, 3]  # dim 18: popularity
-        vectors[:, 18] = fp32[:, 4]  # dim 19: artist followers
-        
-        return vectors
-    
-    def read_masks(self, start_idx: int, num_vectors: int) -> np.ndarray:
-        """Read 4-byte validity masks from byte 65-68 of each record"""
-        if start_idx >= self.total_vectors:
-            return np.empty(0, dtype=np.uint32)
-        
-        return self._records[start_idx:start_idx + num_vectors]['mask']
-    
-    def read_regions(self, start_idx: int, num_vectors: int) -> np.ndarray:
-        """Read 1-byte region codes from byte 69 of each record"""
-        if start_idx >= self.total_vectors:
-            return np.empty(0, dtype=np.uint8)
-        
-        return self._records[start_idx:start_idx + num_vectors]['region'].astype(np.uint8)
-    
-    def get_isrcs_batch(self, indices: np.ndarray) -> list:
-        """Extract ISRCs from bytes 70-81 of records for given indices"""
-        return [r['isrc'].decode('ascii', errors='ignore').rstrip('\0') 
-                for r in self._records[indices]]
-    
-    def get_track_ids_batch(self, indices: np.ndarray) -> list:
-        """Extract track IDs from bytes 82-103 of records for given indices"""
-        return [r['track_id'].decode('ascii', errors='ignore').rstrip('\0') 
-                for r in self._records[indices]]
+        return 100_000
     
     def close(self):
-        """Clean up memory-mapped resources"""
-        if hasattr(self, '_records'):
-            # Delete numpy reference first
-            del self._records
-        
+        if hasattr(self, '_full_mmap_tensor'):
+            del self._full_mmap_tensor
         if hasattr(self, '_mmap'):
             self._mmap.close()
-        
         if hasattr(self, '_file'):
             self._file.close()
