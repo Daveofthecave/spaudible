@@ -249,6 +249,12 @@ class ChunkedSearch:
         exploration_phase = True
         stable_configurations = deque(maxlen=5)  # Track consistent performers
         
+        # === Periodic forced exploration ===
+        # Forces a downward probe every N vectors to escape bad basins
+        last_exploration_reset = 0
+        exploration_interval = 50_000_000  # Every 50M vectors, force exploration
+        exploration_factor = 3  # Divide current chunk size by this amount
+        
         processed_count = 0
         samples_since_adjustment = 0
         
@@ -265,6 +271,22 @@ class ChunkedSearch:
             sys.stdout.flush()
         
         while processed_count < vectors_to_scan:
+            # === Force exploration every interval ===
+            # This prevents permanent entrapment in large chunk sizes
+            if processed_count - last_exploration_reset >= exploration_interval:
+                # Jump to a much smaller size to test if smaller is better
+                new_chunk_size = max(min_chunk_size, current_chunk_size // exploration_factor)
+                
+                # Reset only if we're not already at a small size
+                if new_chunk_size < current_chunk_size * 0.9:
+                    # Reset momentum to allow upward climb from this new size
+                    direction = -1  # Start decreasing from here
+                    step_size = 1.25
+                    last_exploration_reset = processed_count
+                    
+                    current_chunk_size = new_chunk_size
+                    continue  # Skip normal adaptation this iteration
+            
             # Calculate chunk boundaries
             chunk_start = processed_count
             actual_chunk_size = min(current_chunk_size, vectors_to_scan - processed_count)
@@ -382,7 +404,7 @@ class ChunkedSearch:
                     if show_progress and new_chunk_size != current_chunk_size:
                         last_adaptation_msg = (
                             f"   Chunk size: {new_chunk_size:,} "
-                            f"({speed_change:+.1%} speed)      "
+                            f"({speed_change:+.1%} speed)                "
                         )
                         adaptation_display_time = time.time()
                     
