@@ -249,6 +249,14 @@ class ChunkedSearch:
         query_region = kwargs.get('query_region', -1)
         region_strength = kwargs.get('region_strength', 1.0)
         
+        # Store last adaptation message for display
+        last_adaptation_msg = ""
+        adaptation_display_time = 0
+
+        # Force initial render to establish 3-line layout
+        if show_progress:
+            sys.stdout.flush()
+        
         while processed_count < vectors_to_scan:
             # Calculate chunk boundaries
             chunk_start = processed_count
@@ -344,13 +352,13 @@ class ChunkedSearch:
                     potential_new_size = int(current_chunk_size * (step_size ** direction))
                     new_chunk_size = max(min_chunk_size, min(max_chunk_size, potential_new_size))
                 
-                # Print adaptation info
+                # Store adaptation message if chunk size changed
                 if show_progress and new_chunk_size != current_chunk_size:
-                    # Move past progress bar and print
-                    # sys.stdout.write("\n\n")
-                    print(f"   📊 Adapted: {current_chunk_size:,} → {new_chunk_size:,} "
-                          f"(speed: {avg_speed/1e6:.2f}M vec/s, change: {speed_change:+.1%})\n\n")
-                    # sys.stdout.write("\033[2A")  # Move back up
+                    last_adaptation_msg = (
+                        f"   Chunk size: {current_chunk_size:,} → {new_chunk_size:,} "
+                        f"(Speed: {avg_speed/1e6:.2f}M vec/s, Change: {speed_change:+.1%})"
+                    )
+                    adaptation_display_time = time.time()
                 
                 # Update tracking variables
                 last_speed = avg_speed
@@ -362,8 +370,12 @@ class ChunkedSearch:
             # Update progress display
             processed_count += actual_chunk_size
             if show_progress:
+                # Check if adaptation message should be cleared (after 2 seconds)
+                clear_adaptation = (time.time() - adaptation_display_time > 2.0)
+                
                 last_update = self._update_progress_bar(
-                    processed_count, vectors_to_scan, start_time, last_update
+                    processed_count, vectors_to_scan, start_time, last_update,
+                    last_adaptation_msg if not clear_adaptation else ""
                 )
         
         if show_progress:
@@ -407,54 +419,60 @@ class ChunkedSearch:
         top_idx[:] = combined_idx[global_indices]
     
     def _init_progress_bar(self, total: int, description: str):
-        """Initialize progress bar display"""
+        """Initialize progress bar display with 3 reserved lines"""
         print(f"\n{description}")
         print(f"  [{'░' * self.PROGRESS_BAR_WIDTH}] 0.0%")
         print(f"   Speed: -- vectors/sec | ETA: --")
+        print(" " * 70)  # Reserve third line for adaptation
         sys.stdout.flush()
         return time.time()
-    
+
     def _update_progress_bar(self, processed: int, total: int, 
-                           start_time: float, last_update: float) -> float:
-        """Update progress bar with throttling (max 2 updates/sec)"""
+                        start_time: float, last_update: float,
+                        adaptation_msg: str = "") -> float:
+        """Update progress display with consistent 3-line positioning"""
         current_time = time.time()
-        if current_time - last_update < 0.5:  # Throttle updates
+        if current_time - last_update < 0.5:
             return last_update
         
         elapsed = current_time - start_time
         percent = processed / total
-        
-        # Calculate speed and ETA
         speed = processed / elapsed if elapsed > 0 else 0
         remaining = total - processed
         eta = remaining / speed if speed > 0 else 0
         
-        # Format display strings
+        filled = int(self.PROGRESS_BAR_WIDTH * percent)
         speed_str = f"{speed/1e6:.2f}M" if speed > 1e6 else f"{speed/1e3:.1f}K"
         eta_str = format_elapsed_time(eta).strip()
         
-        # Update bar
-        filled = int(self.PROGRESS_BAR_WIDTH * percent)
-        bar = '█' * filled + '░' * (self.PROGRESS_BAR_WIDTH - filled)
+        # Always move up 3 lines and redraw all three
+        sys.stdout.write("\033[3A\033[K")
+        print(f"  [{'█' * filled}{'░' * (self.PROGRESS_BAR_WIDTH - filled)}] {percent:.1%}")
+        print(f"   Speed: {speed_str} vectors/sec | ETA: {eta_str}")
+        print(adaptation_msg if adaptation_msg else " " * 70)  # Clear third line if no message
         
-        # Move cursor up 2 lines and overwrite
-        sys.stdout.write("\033[2A\033[K")
-        sys.stdout.write(f"  [{bar}] {percent:.1%}\n")
-        sys.stdout.write(f"   Speed: {speed_str} vectors/sec | ETA: {eta_str}\n")
         sys.stdout.flush()
-        
         return current_time
-    
+
     def _complete_progress_bar(self, total: int, processed: int, start_time: float):
-        """Finalize progress bar with summary"""
+        """Finalize progress bar with proper 3-line cleanup"""
         elapsed = time.time() - start_time
         avg_speed = processed / elapsed if elapsed > 0 else 0
         
-        # Move cursor up for final update
-        sys.stdout.write("\033[2A\033[K")
+        # Move up 3 lines and clear each line individually
+        sys.stdout.write("\033[3A")
+        
+        # Line 1: Progress bar
+        sys.stdout.write("\033[K")  # Clear line
         bar = '█' * self.PROGRESS_BAR_WIDTH
         print(f"  [{bar}] 100.0%")
         
-        # Format final speed
+        # Line 2: Final stats
+        sys.stdout.write("\033[K")  # Clear line
         speed_str = f"{avg_speed/1e6:.2f}M" if avg_speed > 1e6 else f"{avg_speed/1e3:.1f}K"
-        print(f"   Average: {speed_str} vectors/sec | Total: {format_elapsed_time(elapsed)}\n")
+        print(f"   Average: {speed_str} vectors/sec | Total: {format_elapsed_time(elapsed)}")
+        
+        # Line 3: Clear and move cursor to next line
+        sys.stdout.write("\033[K")  # Clear line
+        print()  # Newline to move cursor to clean position
+        sys.stdout.flush()
