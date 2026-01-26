@@ -208,15 +208,7 @@ class ChunkedSearch:
                              show_progress: bool = True,
                              **kwargs) -> Tuple[List[int], List[float]]:
         """
-        CPU implementation with intelligent adaptive chunk sizing 
-        using hill climbing algorithm.
-        
-        This algorithm continuously searches for the optimal chunk size by:
-        1. Exploring initial directions to find performance gradient
-        2. Climbing toward peak performance with momentum
-        3. Backtracking when performance degrades significantly
-        4. Detecting and stabilizing oscillations
-        5. Tracking the best-known configuration for fallback
+        CPU-based scan with adaptive chunk resizing using a hill climbing algorithm.
         """
         if query_vector.shape != (self.VECTOR_DIMENSIONS,):
             raise ValueError(f"Query vector must be {self.VECTOR_DIMENSIONS}D")
@@ -243,17 +235,12 @@ class ChunkedSearch:
         speed_history = deque(maxlen=15)  # Rolling window of speed measurements
         size_history = deque(maxlen=15)   # Corresponding chunk sizes
         
-        # Optimization state variables
+        # Optimization state variables for the adaptive chunk resizer
         best_speed = 0.0
         best_chunk_size = current_chunk_size
         direction = 0  # +1=increasing, -1=decreasing, 0=exploring
         step_size = 1.15  # Conservative initial step multiplier
-        patience_counter = 0
-        max_patience = 3  # Steps before forced backtrack
-        
-        # Performance stability tracking
-        state = "exploring"  # exploring, climbing, tracking, oscillating
-        recent_improvements = deque(maxlen=5)
+        last_speed = 0.0
         
         processed_count = 0
         samples_since_adjustment = 0
@@ -288,7 +275,11 @@ class ChunkedSearch:
             # Apply region filtering if enabled
             if query_region >= 0 and region_strength > 0.0:
                 region_match = (regions_np == query_region).astype(np.float32)
-                region_penalty = np.where(region_match, 1.0, 1.0 - region_strength)
+                region_penalty = np.where(
+                    region_match == 1.0,
+                    1.0,
+                    1.0 - region_strength
+                )
                 similarities *= region_penalty
             
             chunk_wall_time = time.time() - chunk_wall_start
@@ -297,23 +288,26 @@ class ChunkedSearch:
             if actual_chunk_size > 0:
                 chunk_top_k = min(top_k, actual_chunk_size)
                 chunk_top_indices = np.argpartition(-similarities, chunk_top_k)[:chunk_top_k]
+                chunk_top_values = similarities[chunk_top_indices]
                 
-                combined_sim = np.concatenate([top_similarities, similarities[chunk_top_indices]])
+                combined_sim = np.concatenate([top_similarities, chunk_top_values])
                 combined_idx = np.concatenate([top_indices, chunk_top_indices + chunk_start])
                 
-                new_top_k = min(top_k, len(combined_sim))
+                new_top_k = min(len(combined_sim), len(top_similarities))
                 top_indices_in_combined = np.argpartition(-combined_sim, new_top_k)[:new_top_k]
                 
                 top_similarities = combined_sim[top_indices_in_combined]
                 top_indices = combined_idx[top_indices_in_combined]
             
-            # === Adaptive Chunk Sizing Logic ===
+            # === Adaptive Chunk Resizer ===
+            new_chunk_size = current_chunk_size  # Default: no change
+            
             if chunk_wall_time > 0:
                 speed = actual_chunk_size / chunk_wall_time
                 speed_history.append(speed)
                 size_history.append(current_chunk_size)
                 
-                # Track personal best for backtracking
+                # Track personal best
                 if speed > best_speed:
                     best_speed = speed
                     best_chunk_size = current_chunk_size
@@ -326,94 +320,46 @@ class ChunkedSearch:
                 recent_sizes = list(size_history)[-5:]
                 avg_speed = np.mean(recent_speeds)
                 
-                # Detect oscillation (frequent direction changes)
-                if len(recent_sizes) >= 4:
-                    size_changes = np.diff(recent_sizes)
-                    direction_changes = np.sum(np.diff(np.sign(size_changes)) != 0)
-                    if direction_changes >= 2:  # More than 1 reversal
-                        state = "oscillating"
-                        step_size = max(1.05, step_size * 0.6)
+                # Simple hill climbing: measure speed change
+                speed_change = 0
+                if last_speed > 0:
+                    speed_change = (avg_speed - last_speed) / last_speed
                 
-                # State-based adaptation
-                if state == "exploring":
-                    if direction == 0:
-                        # Initial exploration: try increasing first
-                        direction = +1
-                        new_chunk_size = int(current_chunk_size * step_size)
-                    else:
-                        # Check if exploration is yielding improvement
-                        baseline_speed = np.mean(list(speed_history)[0:5])
-                        if avg_speed > baseline_speed * 1.05:
-                            state = "climbing"
-                        else:
-                            # Try decreasing instead
-                            direction = -1
-                            state = "climbing"
-                    
-                    if show_progress and state == "climbing":
-                        print(f"   Exploring: {current_chunk_size:,} → {new_chunk_size:,} "
-                            f"(speed: {avg_speed/1e6:.2f}M vec/s)\n\n")
+                # Adjust direction and step size based on performance
+                if speed_change > 0.01:  # Speed improved
+                    direction = 1
+                    step_size = min(1.5, step_size * 1.02)  # Slightly more aggressive
+                elif speed_change < -0.05:  # Speed dropped significantly
+                    # Reverse direction
+                    direction = -1 if direction == 0 else -direction
+                    step_size = max(1.05, step_size * 0.8)
+                else:  # Stable or small change
+                    # Reduce momentum
+                    step_size = max(1.05, step_size * 0.95)
+                    if abs(direction) > 0:
+                        direction = direction // 2  # Decay direction
                 
-                elif state == "climbing":
-                    # Measure improvement over pre-change baseline
-                    prev_avg = np.mean(list(speed_history)[-6:-1])
-                    improvement = (avg_speed - prev_avg) / (prev_avg + 1e-9)
-                    
-                    if improvement > 0.05:  # >5% speed gain
-                        # Good direction - accelerate slightly
-                        patience_counter = 0
-                        step_size = min(2.0, step_size * 1.02)
-                    elif improvement < -0.03:  # >3% speed loss
-                        # Bad direction - reduce patience
-                        patience_counter += 1
-                        if (patience_counter >= max_patience or 
-                            avg_speed < best_speed * 0.95):
-                            # Backtrack to best-known configuration
-                            state = "tracking"
-                            direction = 0
-                            new_chunk_size = best_chunk_size
-                            step_size = max(1.05, step_size * 0.7)
-                            if show_progress:
-                                print(f"   ↩️  Backtracking to best: {best_chunk_size:,}\n\n")
-                        else:
-                            # Reverse direction
-                            direction *= -1
-                            step_size = max(1.05, step_size * 0.8)
-                    else:
-                        # Stable performance - coast with small steps
-                        step_size = max(1.05, step_size * 0.98)
-                    
-                    # Continue in current direction unless backtracking
-                    if state != "tracking":
-                        new_chunk_size = int(current_chunk_size * (step_size ** direction))
+                # Calculate new chunk size
+                if abs(direction) > 0:
+                    potential_new_size = int(current_chunk_size * (step_size ** direction))
+                    new_chunk_size = max(min_chunk_size, min(max_chunk_size, potential_new_size))
                 
-                elif state == "tracking":
-                    # Monitor if current conditions still support best config
-                    if avg_speed < best_speed * 0.92:  # Degraded >8%
-                        # Environment changed, re-explore
-                        state = "exploring"
-                        direction = 0
-                        new_chunk_size = best_chunk_size
-                    else:
-                        # Stay near best configuration
-                        new_chunk_size = best_chunk_size
+                # Print adaptation info
+                if show_progress and new_chunk_size != current_chunk_size:
+                    # Move past progress bar and print
+                    # sys.stdout.write("\n\n")
+                    print(f"   📊 Adapted: {current_chunk_size:,} → {new_chunk_size:,} "
+                          f"(speed: {avg_speed/1e6:.2f}M vec/s, change: {speed_change:+.1%})\n\n")
+                    # sys.stdout.write("\033[2A")  # Move back up
                 
-                elif state == "oscillating":
-                    # Stabilize at best-known size
-                    new_chunk_size = best_chunk_size
-                    step_size = max(1.05, step_size * 0.75)
-                    # Exit oscillation if stable for 5+ samples
-                    if np.std(recent_speeds) / (avg_speed + 1e-9) < 0.03:
-                        state = "tracking"
-                
-                # Apply bounds and commit new size
-                if state != "tracking":  # Don't modify if stabilizing/backtracking
-                    current_chunk_size = max(min_chunk_size, 
-                                        min(max_chunk_size, new_chunk_size))
-                
+                # Update tracking variables
+                last_speed = avg_speed
                 samples_since_adjustment = 0
             
-            # Update progress display (throttled to max 2 updates/sec)
+            # Apply the new chunk size
+            current_chunk_size = new_chunk_size
+            
+            # Update progress display
             processed_count += actual_chunk_size
             if show_progress:
                 last_update = self._update_progress_bar(
