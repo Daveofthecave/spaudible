@@ -239,7 +239,7 @@ class ChunkedSearch:
         best_speed = 0.0
         best_chunk_size = current_chunk_size
         direction = 0  # +1=increasing, -1=decreasing, 0=exploring
-        step_size = 1.15  # Conservative initial step multiplier
+        step_size = 1.25  # Initial step multiplier
         last_speed = 0.0
         
         processed_count = 0
