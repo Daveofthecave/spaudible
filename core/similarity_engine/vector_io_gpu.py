@@ -62,10 +62,10 @@ class VectorReaderGPU:
              # Empirically-determined ideal size: 500k uses <1GB VRAM
             self.max_batch_size = min(safe_batch, 500_000)
             # print(f"   Loaded {self.total_vectors:,} track vectors ({self.file_size/1000**3:.1f} GB)")
-            print(f"   Loaded {self.total_vectors:,} track vectors")
+            # print(f"   Loaded {self.total_vectors:,} track vectors")
         else:
             self.max_batch_size = 200_000
-            print(f"   Loaded {self.total_vectors:,} vectors")
+            # print(f"   Loaded {self.total_vectors:,} vectors")
             print(f"   Using PyTorch unpacking on {self.device}")
 
     def read_chunk(self, start_idx: int, num_vectors: int) -> torch.Tensor:

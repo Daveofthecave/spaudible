@@ -34,8 +34,8 @@ class VectorReader:
             numpy_array = np.frombuffer(self._mmap, dtype=np.uint8, offset=self.VECTOR_HEADER_SIZE)
             self._full_mmap_tensor = torch.from_numpy(numpy_array).view(-1, self.VECTOR_RECORD_SIZE)
         
-        print(f"   Loaded {self.total_vectors:,} vectors")
-        print(f"   Using {self.device} tensor operations")
+        # print(f"   Loaded {self.total_vectors:,} vectors")
+        # print(f"   Using {self.device} tensor operations")
         
     def read_chunk(self, start_idx: int, num_vectors: int) -> torch.Tensor:
         if start_idx >= self.total_vectors:

@@ -16,7 +16,7 @@ from .utils import (
 )
 from core.similarity_engine.orchestrator import SearchOrchestrator
 from core.vectorization.canonical_track_resolver import build_canonical_vector
-from config import PathConfig, REGION_FILTER_STRENGTH
+from config import PathConfig, REGION_FILTER_STRENGTH, EXPECTED_VECTORS
 from core.utilities.config_manager import config_manager
 
 def handle_core_search() -> str:
@@ -116,7 +116,7 @@ def _search_by_track_id(
             track_name = track_data.get('name', 'Unknown Track')
             artist_names = track_data.get('artist_names', [])
             artist_display = ', '.join(artist_names) if artist_names else 'Unknown Artist'
-            print(f"   Searching for songs similar to:\n")
+            print(f"   Searching {EXPECTED_VECTORS:,} vectors for songs similar to:\n")
             print(f"   🎵   {track_name} - {artist_display}\n")
 
         force_cpu = config_manager.get_force_cpu()

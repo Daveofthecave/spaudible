@@ -211,30 +211,28 @@ class SearchOrchestrator:
             test_vectors_limit = 1_000_000  # Small subset for speed
             
             # CPU benchmark - let adaptive resizer handle chunk sizing automatically
-            print("   Testing CPU performance...")
+            print("     Testing CPU performance...")
             cpu_speed = self._benchmark_device('cpu', test_vectors_limit)
             results['cpu_speed'] = cpu_speed
+            print(f"       CPU: {results['cpu_speed']/1e6:.1f}M vec/sec")
             
             # GPU benchmark - use its max batch size
-            print("   Testing GPU performance...")
+            print("     Testing GPU performance...")
             gpu_chunk = self.vector_reader.get_max_batch_size()
             gpu_speed = self._benchmark_device('gpu', test_vectors_limit)
             results['gpu_speed'] = gpu_speed
-            
-            # Show both speeds
-            print(f"   CPU: {results['cpu_speed']/1e6:.1f}M vec/sec")
-            print(f"   GPU: {results['gpu_speed']/1e6:.1f}M vec/sec")
+            print(f"       GPU: {results['gpu_speed']/1e6:.1f}M vec/sec")
             
             # Choose faster device (with 10% GPU preference)
             if gpu_speed > cpu_speed * 1.1:
                 results['recommended_device'] = 'gpu'
                 results['optimal_chunk_size'] = gpu_chunk
-                print(f"   ✅ Selected GPU ({results['gpu_speed']/1e6:.1f}M vec/sec)")
+                print(f"   Using GPU...")
             else:
                 results['recommended_device'] = 'cpu'
                 # For CPU, we don't need to tune chunk size - adaptive resizer will handle it
                 results['optimal_chunk_size'] = 200_000  # Reasonable default
-                print(f"   ✅ Selected CPU ({results['cpu_speed']/1e6:.1f}M vec/sec)")
+                print(f"   Using CPU...")
         
         return results
 
