@@ -504,7 +504,7 @@ class ChunkedSearch:
         
         filled = int(self.PROGRESS_BAR_WIDTH * percent)
         speed_str = f"{speed/1e6:.2f}M" if speed > 1e6 else f"{speed/1e3:.1f}K"
-        eta_str = format_elapsed_time(eta).strip()
+        eta_str = format_elapsed_time(eta)
         
         # Always move up 3 lines and redraw all three
         sys.stdout.write("\033[3A\033[K")
