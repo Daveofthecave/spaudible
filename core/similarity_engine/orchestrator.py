@@ -97,10 +97,19 @@ class SearchOrchestrator:
         self.region_strength = config_manager.get_region_strength()
         
         # Determine optimal chunk size and device
-        if not self.force_cpu and not self.force_gpu:
-            if SearchOrchestrator._benchmark_results is None and not skip_benchmark:
-                SearchOrchestrator._benchmark_results = self.run_auto_benchmark()
+        if not self.force_cpu and not self.force_gpu and not skip_benchmark:
+            # Clear memory cache when entering auto mode
+            SearchOrchestrator._benchmark_results = None
             
+            # Check for cached benchmark result (from config file)
+            config_result = config_manager.get_benchmark_result()
+            if config_result is not None:
+                SearchOrchestrator._benchmark_results = config_result
+            else:
+                # Run benchmark and save to both memory and config
+                SearchOrchestrator._benchmark_results = self.run_auto_benchmark()
+                config_manager.set_benchmark_result(SearchOrchestrator._benchmark_results)
+
             if SearchOrchestrator._benchmark_results:
                 self.use_gpu = (
                     SearchOrchestrator._benchmark_results['recommended_device'] == 'gpu'
@@ -539,6 +548,7 @@ class SearchOrchestrator:
     def clear_benchmark_cache(cls):
         """Clear benchmark results cache."""
         cls._benchmark_results = None
+        config_manager.clear_benchmark_result()
 
 
 def find_similar_tracks(

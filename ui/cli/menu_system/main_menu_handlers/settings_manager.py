@@ -94,17 +94,18 @@ def handle_settings() -> str:
 
 def _force_cpu_mode() -> str:
     """Toggle CPU mode setting"""
-    current = config_manager.get_force_cpu()
-    new_setting = not current
+    current = config_manager.get_force_cpu()  # Current state before toggle
+    new_setting = not current  # State after toggle
     
-    # Disable GPU mode if enabling CPU mode
+    # Disable GPU mode if enabling CPU mode to maintain mutual exclusivity
     if new_setting:
         config_manager.set_force_gpu(False)
     
     config_manager.set_force_cpu(new_setting)
     
-    # Clear benchmark cache
-    SearchOrchestrator.clear_benchmark_cache()
+    # Only clear benchmark when entering auto mode (both OFF)
+    if not new_setting and not config_manager.get_force_gpu():
+        SearchOrchestrator.clear_benchmark_cache()
     
     status = "ON" if new_setting else "OFF"
     print(f"\n  ✅ CPU mode set to: {status}")
@@ -114,17 +115,18 @@ def _force_cpu_mode() -> str:
 
 def _force_gpu_mode() -> str:
     """Toggle GPU mode setting"""
-    current = config_manager.get_force_gpu()
-    new_setting = not current
+    current = config_manager.get_force_gpu()  # Current state before toggle
+    new_setting = not current  # State after toggle
     
-    # Disable CPU mode if enabling GPU mode
+    # Disable CPU mode if enabling GPU mode to maintain mutual exclusivity
     if new_setting:
         config_manager.set_force_cpu(False)
     
     config_manager.set_force_gpu(new_setting)
     
-    # Clear benchmark cache
-    SearchOrchestrator.clear_benchmark_cache()
+    # Only clear benchmark when entering auto mode (both OFF)
+    if not new_setting and not config_manager.get_force_cpu():
+        SearchOrchestrator.clear_benchmark_cache()
     
     status = "ON" if new_setting else "OFF"
     print(f"\n  ✅ GPU mode set to: {status}")

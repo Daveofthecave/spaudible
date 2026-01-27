@@ -126,5 +126,27 @@ class ConfigManager:
         self.set('optimal_chunk_size', size)
         self.set('chunk_size_last_updated', datetime.now().isoformat())
 
+    def get_benchmark_result(self):
+        """Get cached benchmark result if available and valid."""
+        result = self.get('benchmark_result', None)
+        if result is None:
+            return None
+        
+        # Validate structure
+        required_keys = ['recommended_device', 'cpu_speed', 'gpu_speed', 'optimal_chunk_size']
+        if not all(key in result for key in required_keys):
+            # print("  ⚠️  Cached benchmark result is corrupted, ignoring...")
+            return None
+        
+        return result
+
+    def set_benchmark_result(self, result: dict):
+        """Save benchmark result to config file for persistence."""
+        self.set('benchmark_result', result)
+
+    def clear_benchmark_result(self):
+        """Clear cached benchmark result (e.g., when toggling force modes)."""
+        self.set('benchmark_result', None)
+
 # Singleton access
 config_manager = ConfigManager()
