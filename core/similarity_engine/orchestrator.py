@@ -11,7 +11,6 @@ import gc
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional, Union, Callable
 from config import PathConfig, VRAM_SAFETY_FACTOR
-from .chunk_size_optimizer import ChunkSizeOptimizer
 from .index_manager import IndexManager
 from .metadata_service import MetadataManager
 from .vector_comparer import ChunkedSearch
@@ -36,6 +35,8 @@ class SearchOrchestrator:
                  use_gpu: bool = True,
                  force_cpu: bool = False,
                  force_gpu: bool = False,
+                 skip_benchmark: bool = False,
+                 skip_validation: bool = False,
                  **kwargs):
         """
         Initialize orchestrator for unified vector format.
@@ -48,9 +49,14 @@ class SearchOrchestrator:
             use_gpu: Whether to prefer GPU acceleration
             force_cpu: Override to force CPU mode
             force_gpu: Override to force GPU mode
+            skip_benchmark: Skip auto-benchmark for lightweight operations
+            skip_validation: Skip validation during benchmark
         """
         # Start with provided settings
         self.use_gpu = use_gpu
+        
+        # Initialize chunk_size to safe default before any conditional logic
+        self.chunk_size = 200_000
         
         # Get and apply force settings from config
         self.force_cpu = force_cpu or config_manager.get_force_cpu()
@@ -64,13 +70,13 @@ class SearchOrchestrator:
             self.use_gpu = True
             # print("ℹ️  GPU mode forced by configuration")
         
-        # Clear benchmark cache if force settings changed
-        if SearchOrchestrator._benchmark_results is not None:
-            current_cpu = self.force_cpu
-            current_gpu = self.force_gpu
-            
-            if (current_cpu != self.force_cpu) or (current_gpu != self.force_gpu):
-                SearchOrchestrator._benchmark_results = None
+        # Determine device early
+        gpu_available = torch.cuda.is_available()
+        if self.use_gpu and gpu_available:
+            self.device = "cuda"
+        else:
+            self.device = "cpu"
+            self.use_gpu = False  # Override if GPU not available
         
         # Path resolution
         vectors_path = vectors_path or str(PathConfig.get_vector_file())
@@ -92,20 +98,30 @@ class SearchOrchestrator:
         
         # Determine optimal chunk size and device
         if not self.force_cpu and not self.force_gpu:
-            if SearchOrchestrator._benchmark_results is None:
+            if SearchOrchestrator._benchmark_results is None and not skip_benchmark:
                 SearchOrchestrator._benchmark_results = self.run_auto_benchmark()
             
             if SearchOrchestrator._benchmark_results:
                 self.use_gpu = (
                     SearchOrchestrator._benchmark_results['recommended_device'] == 'gpu'
                 )
-                self.chunk_size = SearchOrchestrator._benchmark_results['optimal_chunk_size']
+                
+                # Re-determine device after benchmark
+                if self.use_gpu and gpu_available:
+                    self.device = "cuda"
+                else:
+                    self.device = "cpu"
+                    self.use_gpu = False
         else:
             if self.force_cpu:
                 # Skip optimizer; use adaptive resizing during search
                 self.chunk_size = 200_000
             elif self.force_gpu:
                 self.chunk_size = self.vector_reader.get_max_batch_size()
+        
+        # Initialize GPU operations if needed
+        if self.use_gpu and self.device == "cuda":
+            self._init_gpu_ops()
         
         # Initialize chunked search
         self.chunked_search = ChunkedSearch(
@@ -116,8 +132,8 @@ class SearchOrchestrator:
         
         self.total_vectors = self.vector_reader.get_total_vectors()
         
-        # Validate implementations (only when not forced)
-        if not self.force_cpu and not self.force_gpu:
+        # Skip validation during benchmark to avoid dtype errors
+        if not skip_validation and not self.force_cpu and not self.force_gpu and hasattr(self, 'gpu_ops') and self.gpu_ops is not None:
             try:
                 self._validate_implementation_parity()
             except Exception as e:
@@ -133,10 +149,29 @@ class SearchOrchestrator:
             except ImportError:
                 print("  ⚠️  VectorReaderGPU not available, falling back to CPU")
                 self.use_gpu = False
+                self.device = "cpu"
         
         # Use new unified VectorReader for CPU mode (fast PyTorch implementation)
-        device = "cpu"
+        device = self.device
         return VectorReader(vectors_path, device=device)
+
+    def _init_gpu_ops(self):
+        """Initialize GPU operations."""
+        try:
+            free_vram = torch.cuda.mem_get_info()[0]
+            if free_vram < 500_000_000:  # 500MB minimum
+                print("⚠️ Low VRAM available, disabling GPU acceleration")
+                self.use_gpu = False
+                self.device = "cpu"
+                return False
+            else:
+                self.gpu_ops = VectorOpsGPU(device=self.device)
+                self.gpu_ops.set_user_weights(config_manager.get_weights())
+                return True
+        except Exception as e:
+            print(f"⚠️  GPU initialization failed: {e}")
+            self.gpu_ops = None
+            return False
 
     def _optimize_cpu_chunk(self) -> int:
         """Optimize chunk size for CPU processing."""
@@ -144,87 +179,112 @@ class SearchOrchestrator:
         return optimizer.optimize()
     
     def run_auto_benchmark(self) -> dict:
-        """Run CPU vs GPU benchmark and return best configuration."""
+        """
+        Run CPU vs GPU benchmark and return best configuration.
+        OPTIMIZED: Uses small test vectors and lets CPU adaptive resizer do its job.
+        """
         print("   Running auto-benchmark...")
         results = {
             'cpu_speed': 0,
             'gpu_speed': 0,
             'recommended_device': 'cpu',
-            'optimal_chunk_size': 100_000
+            'optimal_chunk_size': 200_000  # Default for CPU
         }
         
         # Skip GPU benchmark if forced CPU
         if self.force_cpu:
-            # Benchmark CPU only
-            cpu_chunk = self._optimize_cpu_chunk()
-            cpu_speed = self._benchmark_device('cpu', cpu_chunk)
-            results['cpu_speed'] = cpu_speed
-            results['optimal_chunk_size'] = cpu_chunk
-            print(f"   ✅ Using CPU ({cpu_speed/1e6:.1f}M vec/sec)")
+            results['cpu_speed'] = self._benchmark_device('cpu')
+            results['optimal_chunk_size'] = 200_000
+            print(f"   ✅ Using CPU ({results['cpu_speed']/1e6:.1f}M vec/sec)")
             return results
         
         # Skip GPU benchmark if forced GPU or no GPU available
         if not self.force_gpu and not torch.cuda.is_available():
-            # Benchmark CPU only
-            cpu_chunk = self._optimize_cpu_chunk()
-            cpu_speed = self._benchmark_device('cpu', cpu_chunk)
-            results['cpu_speed'] = cpu_speed
-            results['optimal_chunk_size'] = cpu_chunk
-            print(f"   ✅ Using CPU ({cpu_speed/1e6:.1f}M vec/sec)")
+            results['cpu_speed'] = self._benchmark_device('cpu')
+            results['optimal_chunk_size'] = 200_000
+            print(f"   ✅ Using CPU ({results['cpu_speed']/1e6:.1f}M vec/sec)")
             return results
         
-        # Benchmark both CPU and GPU
-        cpu_chunk = self._optimize_cpu_chunk()
-        cpu_speed = self._benchmark_device('cpu', cpu_chunk)
-        results['cpu_speed'] = cpu_speed
-        results['optimal_cpu_chunk'] = cpu_chunk
-        
+        # Benchmark both CPU and GPU at the same time
         if torch.cuda.is_available():
+            # Use a small test size for quick benchmark
+            test_vectors_limit = 1_000_000  # Small subset for speed
+            
+            # CPU benchmark - let adaptive resizer handle chunk sizing automatically
+            print("   Testing CPU performance...")
+            cpu_speed = self._benchmark_device('cpu', test_vectors_limit)
+            results['cpu_speed'] = cpu_speed
+            
+            # GPU benchmark - use its max batch size
+            print("   Testing GPU performance...")
             gpu_chunk = self.vector_reader.get_max_batch_size()
-            gpu_speed = self._benchmark_device('gpu', gpu_chunk)
+            gpu_speed = self._benchmark_device('gpu', test_vectors_limit)
             results['gpu_speed'] = gpu_speed
+            
+            # Show both speeds
+            print(f"   CPU: {results['cpu_speed']/1e6:.1f}M vec/sec")
+            print(f"   GPU: {results['gpu_speed']/1e6:.1f}M vec/sec")
             
             # Choose faster device (with 10% GPU preference)
             if gpu_speed > cpu_speed * 1.1:
                 results['recommended_device'] = 'gpu'
                 results['optimal_chunk_size'] = gpu_chunk
+                print(f"   ✅ Selected GPU ({results['gpu_speed']/1e6:.1f}M vec/sec)")
             else:
                 results['recommended_device'] = 'cpu'
-                results['optimal_chunk_size'] = cpu_chunk
-        else:
-            results['recommended_device'] = 'cpu'
-            results['optimal_chunk_size'] = cpu_chunk
-        
-        device_name = results['recommended_device'].upper()
-        speed = results['gpu_speed'] or results['cpu_speed']
-        print(f"   ✅ Using {device_name} ({speed/1e6:.1f}M vec/sec)")
+                # For CPU, we don't need to tune chunk size - adaptive resizer will handle it
+                results['optimal_chunk_size'] = 200_000  # Reasonable default
+                print(f"   ✅ Selected CPU ({results['cpu_speed']/1e6:.1f}M vec/sec)")
         
         return results
-    
-    def _benchmark_device(self, device: str, chunk_size: int) -> float:
-        """Benchmark a single device."""
+
+    def _benchmark_device(self, device: str, test_vectors: int = 500_000) -> float:
+        """
+        Benchmark a single device with small test size for speed.
+        Uses skip_benchmark=True to avoid recursion.
+        """
         if device == 'cpu':
-            orchestrator = SearchOrchestrator(use_gpu=False, force_cpu=True, skip_benchmark=True)
+            orchestrator = SearchOrchestrator(
+                use_gpu=False, 
+                force_cpu=True, 
+                skip_benchmark=True,
+                skip_validation=True
+            )
         else:
-            orchestrator = SearchOrchestrator(use_gpu=True, force_gpu=True, skip_benchmark=True)
+            orchestrator = SearchOrchestrator(
+                use_gpu=True, 
+                force_gpu=True, 
+                skip_benchmark=True,
+                skip_validation=True
+            )
         
         test_vector = np.random.rand(32).astype(np.float32)
         
-        # Warm-up
-        orchestrator.search(test_vector, top_k=10, show_progress=False)
+        # Warm-up with small subset
+        orchestrator.search(
+            test_vector, 
+            top_k=10, 
+            show_progress=False,
+            max_vectors=test_vectors // 10
+        )
         
-        # Timed run
+        # Timed run with small subset
         start = time.time()
-        orchestrator.search(test_vector, top_k=10, show_progress=False)
+        orchestrator.search(
+            test_vector, 
+            top_k=10, 
+            show_progress=False,
+            max_vectors=test_vectors
+        )
         elapsed = time.time() - start
         
         orchestrator.close()
-        return 1_000_000 / elapsed if elapsed > 0 else 0
-    
+        return test_vectors / elapsed if elapsed > 0 else 0
+
     def _vector_source(self, start_idx: int, num_vectors: int):
         """Read vector chunk from track_vectors.bin."""
         return self.vector_reader.read_chunk(start_idx, num_vectors)
-    
+
     def _mask_source(self, start_idx: int, num_vectors: int):
         """Read mask chunk from track_vectors.bin."""
         return self.vector_reader.read_masks(start_idx, num_vectors)
@@ -240,6 +300,7 @@ class SearchOrchestrator:
                show_progress: bool = True,
                deduplicate: Optional[bool] = None,
                query_track_id: Optional[str] = None,
+               max_vectors: Optional[int] = None,
                **kwargs) -> List[Tuple[str, float, Optional[Dict]]]:
         """
         Perform sequential similarity search.
@@ -251,6 +312,7 @@ class SearchOrchestrator:
             show_progress: Show progress bar
             deduplicate: Remove duplicate tracks
             query_track_id: Track ID for region filtering
+            max_vectors: Optional limit on vectors to scan (for benchmarks)
             
         Returns:
             List of (track_id, similarity, metadata) tuples
@@ -274,8 +336,8 @@ class SearchOrchestrator:
             self._region_source,
             self.total_vectors,
             self.vector_ops,
-            top_k=top_k * 3,  # Get extra candidates for deduplication
-            max_vectors=None, 
+            top_k=top_k * 3,
+            max_vectors=max_vectors,
             show_progress=show_progress,
             query_region=query_region,
             region_strength=self.region_strength
@@ -436,6 +498,7 @@ class SearchOrchestrator:
         """Ensure CPU and GPU produce identical results."""
         test_vector = np.random.rand(32).astype(np.float32)
         test_vectors = np.random.rand(1000, 32).astype(np.float32)
+        # FIX: Use uint32 for masks since they're stored as unsigned in the file
         test_masks = np.random.randint(0, 2**32, size=1000, dtype=np.uint32)
         
         # CPU
@@ -443,20 +506,21 @@ class SearchOrchestrator:
         cpu_results = cpu_ops.compute_similarity(test_vector, test_vectors, test_masks)
         
         # GPU
-        if torch.cuda.is_available() and self.gpu_ops:
+        if torch.cuda.is_available() and hasattr(self, 'gpu_ops') and self.gpu_ops is not None:
             gpu_tensor = torch.tensor(test_vectors, device='cuda')
-            gpu_masks = torch.tensor(test_masks, device='cuda')
+            # Convert to int32 for PyTorch (no uint32 in torch), but preserve bit pattern
+            gpu_masks = torch.tensor(test_masks.astype(np.int32), device='cuda')
             
             if self.algorithm == 'cosine':
                 gpu_results = self.gpu_ops.masked_weighted_cosine_similarity(test_vector, gpu_tensor, gpu_masks)
             elif self.algorithm == 'cosine-euclidean':
                 gpu_results = self.gpu_ops.masked_weighted_cosine_euclidean_similarity(test_vector, gpu_tensor, gpu_masks)
-            else:
+            else:  # cosine-euclidean (default)
                 gpu_results = self.gpu_ops.masked_euclidean_similarity(test_vector, gpu_tensor, gpu_masks)
             
             if not np.allclose(cpu_results, gpu_results.cpu().numpy(), atol=1e-5):
                 raise ValueError("CPU/GPU implementation mismatch!")
-    
+
     def close(self):
         """Clean up resources."""
         self.metadata_manager.close()

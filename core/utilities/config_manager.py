@@ -118,8 +118,8 @@ class ConfigManager:
         self.set('region_strength', value)
 
     def get_optimal_chunk_size(self) -> int:
-        """Get stored optimal chunk size for this hardware (default 400k)."""
-        return self.get('optimal_chunk_size', 400_000)
+        """Get stored optimal chunk size for this hardware (default 200k)."""
+        return self.get('optimal_chunk_size', 200_000)
     
     def set_optimal_chunk_size(self, size: int):
         """Store optimal chunk size and timestamp."""

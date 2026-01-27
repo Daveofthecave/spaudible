@@ -88,7 +88,7 @@ class ChunkedSearch:
         if self.use_gpu and self.gpu_ops:
             return self._gpu_sequential_scan(
                 query_vector, vector_source, mask_source, region_source,
-                total_vectors, vector_ops, top_k, max_vectors, show_progress, query_region, region_strength
+                total_vectors, top_k, max_vectors, show_progress, query_region, region_strength
             )
         else:
             return self._cpu_sequential_scan(
@@ -231,7 +231,7 @@ class ChunkedSearch:
         max_chunk_size = 100_000_000
         current_chunk_size = config_manager.get_optimal_chunk_size()
         if not (min_chunk_size <= current_chunk_size <= max_chunk_size):
-            current_chunk_size = 400_000  # Fallback to default if corrupted
+            current_chunk_size = 200_000  # Fallback to default if corrupted
         
         # State tracking
         speed_history = deque(maxlen=15)

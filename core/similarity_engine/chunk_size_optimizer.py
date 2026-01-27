@@ -1,6 +1,7 @@
 # core/similarity_engine/chunk_size_optimizer.py
 import time
 import numpy as np
+import torch
 from .vector_math import VectorOps
 
 class ChunkSizeOptimizer:
@@ -105,6 +106,16 @@ class ChunkSizeOptimizer:
         # Read vectors and masks using unified reader
         vectors = self.reader.read_chunk(start_idx, test_size)
         masks = self.reader.read_masks(start_idx, test_size)
+        
+        if torch.is_tensor(vectors):
+            # Move CUDA tensors to CPU first, then convert to numpy
+            if vectors.is_cuda:
+                vectors = vectors.cpu()
+            vectors = vectors.numpy()
+        if torch.is_tensor(masks):
+            if masks.is_cuda:
+                masks = masks.cpu()
+            masks = masks.numpy()
         
         # Compute similarity
         start_time = time.time()
