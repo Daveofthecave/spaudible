@@ -130,6 +130,7 @@ class UnifiedVectorWriter:
         scaled_indices = [0,1,2,3,4,5,6,8,16] + list(range(19,32))
         for i, idx in enumerate(scaled_indices):
             vals = np.clip(vectors_array[:, idx], -1.0, 1.0)
+            vals = np.nan_to_num(vals, nan=-1.0)
             scaled = np.where(vals == -1.0, 0, (vals * 10000).astype(np.uint16))
             records['scaled'][:, i] = np.clip(scaled, 0, 65535)
         

@@ -59,7 +59,7 @@ class TrackResolver:
         
         # Strategy 4: Return original
         return track_id, False, {"strategy": "exact_match", "reason": "No canonical version found"}
-    
+
     def _has_audio_features(self, track_id: str) -> bool:
         """Check if a track has valid audio features."""
         conn = sqlite3.connect(self.audio_db_path)
@@ -73,7 +73,7 @@ class TrackResolver:
         """Resolve track by ISRC."""
         conn = sqlite3.connect(self.main_db_path)
         cursor = conn.cursor()
-        cursor.execute("SELECT external_id_isrc FROM tracks WHERE id = ?", (track_id,))
+        cursor.execute("SELECT external_id_isrc FROM tracks WHERE id = ? LIMIT 1", (track_id,))
         result = cursor.fetchone()
         if not result or not result[0]:
             conn.close()
@@ -97,7 +97,9 @@ class TrackResolver:
             if self._has_audio_features(version_id):
                 return version_id, isrc
         
-        return None, isrc
+        # If no version has audio features, return the most popular one
+        # This ensures we always return a valid track ID instead of None
+        return versions[0][0], isrc
     
     def _resolve_by_metadata(self, track_id: str) -> Tuple[Optional[str], Dict]:
         """Resolve track by metadata."""

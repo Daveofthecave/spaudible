@@ -83,44 +83,34 @@ class DatabaseReader:
     
     def _preload_artist_metadata_numpy(self):
         """
-        OPTIMIZATION 2: Load artist metadata into NumPy arrays.
-        KEY FIX: Pre-compute genre SETS for each artist to avoid set building during streaming.
+        Preload artist metadata into NumPy arrays for fast vectorized access.
+        Pre-computes genre sets for each artist to avoid set building during streaming.
         """
         cursor = self.main_db.cursor()
         
-        # Get max rowid for array sizing
+        # Size arrays based on max rowid
         cursor.execute("SELECT MAX(rowid) FROM artists")
         max_rowid = cursor.fetchone()[0] + 1
         
-        # Initialize arrays
         self.artist_followers = np.zeros(max_rowid, dtype=np.int64)
-        
-        # NEW: Pre-computed genre sets for each artist
         self.artist_genres_sets = [set() for _ in range(max_rowid)]
         
         # Load followers (vectorized)
-        followers_start = time.time()
         cursor.execute("SELECT rowid, followers_total FROM artists")
         for rowid, followers in cursor:
             if rowid < max_rowid:
                 self.artist_followers[rowid] = followers
         
-        # Load genres into pre-built sets (this is the key optimization!)
-        genres_start = time.time()
+        # Load genres into pre-built sets
         cursor.execute("SELECT artist_rowid, genre FROM artist_genres ORDER BY artist_rowid")
-        genre_count = 0
         for artist_rowid, genre in cursor:
             if artist_rowid < max_rowid:
                 self.artist_genres_sets[artist_rowid].add(genre)
-                genre_count += 1
         
-        # print(f"     {genre_count:,} genres loaded into sets in {time.time() - genres_start:.2f}s")
         cursor.close()
-        
-        # print(f"     Loaded {max_rowid:,} artists with pre-computed genre sets")
-    
+
     def _preload_region_lut(self):
-        """OPTIMIZATION 1: Precompute ISRC-to-region lookup table."""
+        """Precompute ISRC-to-region lookup table."""
         self.region_lut = np.full(26*26, 7, dtype=np.uint8)  # Default "Other" (7)
         
         for region_id, countries in REGION_MAPPING.items():
@@ -154,8 +144,8 @@ class DatabaseReader:
     
     def _get_artist_data_batch(self, artist_ids_batch: List[List[int]]) -> tuple:
         """
-        OPTIMIZATION 2: Batch artist data retrieval using NumPy.
-        KEY FIX: Use pre-computed genre sets instead of building them on the fly.
+        Batch artist data retrieval using NumPy.
+        Use pre-computed genre sets instead of building them on the fly.
         """
         batch_size = len(artist_ids_batch)
         max_followers = np.zeros(batch_size, dtype=np.int64)

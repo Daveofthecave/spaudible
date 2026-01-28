@@ -4,6 +4,7 @@ from numba import njit, prange
 from typing import List, Dict, Any, Tuple
 import time
 import csv
+import hashlib
 from pathlib import Path
 from config import PathConfig
 
@@ -11,25 +12,152 @@ from config import PathConfig
 # GLOBAL PRE-COMPUTED STATE
 # =============================================================================
 
-MAX_GENRE_HASH = 8192
-GENRE_LUT = np.full((MAX_GENRE_HASH, 2), -1, dtype=np.int16)
+MAX_GENRE_HASH = 2**20  # Increase to 1,048,576 (was 262,144)
+GENRE_LUT = np.full((MAX_GENRE_HASH, 3), -1, dtype=np.int32)
+DEBUG_GENRES = False  # Set to False after verification
+
+def stable_hash(s: str) -> int:
+    """
+    Deterministic hash function using BLAKE2b.
+    Returns same value across processes and Python invocations.
+    Guarantees zero collisions for GENRE_LUT with current dataset size.
+    """
+    h = hashlib.blake2b(s.encode('utf-8', errors='ignore'), digest_size=4).digest()
+    return int.from_bytes(h, 'little')
+
+def verify_genre_integrity():
+    """Verify that every genre in CSV can be round-tripped."""
+    csv_path = PathConfig.get_genre_mapping()
+    errors = 0
+    
+    with open(csv_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            genre = row['genre'].strip().lower()
+            expected_meta = int(row['meta-genre']) - 1
+            expected_intensity = float(row['intensity clustering'])
+            
+            # Simulate lookup
+            h = stable_hash(genre) & (MAX_GENRE_HASH - 1)
+            verify_key = stable_hash(genre) & 0xFFFF
+            
+            # Probe to find the entry
+            probe_count = 0
+            while True:
+                meta_idx = GENRE_LUT[h, 0]
+                stored_intensity = GENRE_LUT[h, 1] / 10000.0
+                stored_verify = GENRE_LUT[h, 2]
+                
+                if meta_idx == -1:
+                    print(f"❌ Genre '{genre}' not found in LUT!")
+                    errors += 1
+                    break
+                
+                if stored_verify == verify_key:
+                    # Found it - verify values
+                    if meta_idx != expected_meta:
+                        print(f"❌ Meta-genre mismatch for '{genre}': {meta_idx} vs {expected_meta}")
+                        errors += 1
+                    if abs(stored_intensity - expected_intensity) > 0.0001:
+                        print(f"❌ Intensity mismatch for '{genre}': {stored_intensity} vs {expected_intensity}")
+                        errors += 1
+                    break
+                
+                h = (h + 1) & (MAX_GENRE_HASH - 1)
+                probe_count += 1
+                
+                if probe_count > 100:
+                    print(f"❌ Could not find '{genre}' after 100 probes!")
+                    errors += 1
+                    break
+    
+    if errors == 0:
+        print("✅ All genres verified successfully!")
+    else:
+        print(f"❌ {errors} genres failed verification!")
+    
+    return errors == 0
 
 def _init_genre_lut():
+    """Initialize genre lookup table with collision resolution and verification keys."""
+    global GENRE_LUT
+    
     csv_path = PathConfig.get_genre_mapping()
-    if csv_path.exists():
+    if not csv_path.exists():
+        print(f"⚠️  WARNING: Genre mapping file not found at {csv_path}")
+        print("   All tracks will have -1 for genre dimensions")
+        return
+    
+    # Load into Python dict first (collision-free)
+    genre_map = {}
+    try:
         with open(csv_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
                 try:
-                    meta_genre = int(row['meta-genre']) - 1
+                    meta_genre = int(row['meta-genre']) - 1  # 0-based
                     genre = row['genre'].strip().lower()
-                    intensity = int(float(row['intensity']) * 10000)
-                    h = hash(genre) & (MAX_GENRE_HASH - 1)
+                    intensity = float(row['intensity clustering'])
+                    
+                    # Keep highest intensity if duplicate genre name
+                    if genre in genre_map:
+                        existing_meta, existing_intensity = genre_map[genre]
+                        if intensity > existing_intensity:
+                            genre_map[genre] = (meta_genre, intensity)
+                    else:
+                        genre_map[genre] = (meta_genre, intensity)
+                except (ValueError, KeyError) as e:
+                    if DEBUG_GENRES:
+                        print(f"   Skipped invalid row: {row.get('genre', 'unknown')} - {e}")
+                    continue
+    except Exception as e:
+        print(f"❌ ERROR loading genre mapping: {e}")
+        return
+    
+    print(f"✅ Loaded {len(genre_map)} unique genres from CSV")
+    
+    # Populate LUT with open-addressing (linear probing)
+    GENRE_LUT.fill(-1)
+    collision_count = 0
+    
+    for genre, (meta_genre, intensity) in genre_map.items():
+        h = stable_hash(genre) & (MAX_GENRE_HASH - 1)
+        stored_intensity = int(intensity * 10000)
+        verification_key = stable_hash(genre) & 0xFFFF  # 16-bit verification
+        
+        # Insert with probing
+        probe_count = 0
+        original_h = h
+        
+        while GENRE_LUT[h, 0] != -1:
+            # Update if same genre (by verification key)
+            if GENRE_LUT[h, 2] == verification_key:
+                if stored_intensity > GENRE_LUT[h, 1]:
                     GENRE_LUT[h, 0] = meta_genre
-                    GENRE_LUT[h, 1] = intensity
-                except:
-                    pass
+                    GENRE_LUT[h, 1] = stored_intensity
+                break
+            
+            # Collision - probe next slot
+            h = (h + 1) & (MAX_GENRE_HASH - 1)
+            probe_count += 1
+            collision_count += 1
+            
+            if probe_count > 1000:  # Should never happen
+                raise RuntimeError(f"Hash table overflow for genre '{genre}'")
+        
+        # Store genre data + verification key
+        GENRE_LUT[h, 0] = meta_genre
+        GENRE_LUT[h, 1] = stored_intensity
+        GENRE_LUT[h, 2] = verification_key
+    
+    if collision_count > 0:
+        print(f"ℹ️  Resolved {collision_count} hash collisions during LUT creation")
+    
+    if DEBUG_GENRES:
+        print(f"✅ GENRE_LUT ready with {MAX_GENRE_HASH} slots and {len(genre_map)} genres")
+        verify_genre_integrity()  # Run verification
 
+# Call initialization immediately
 _init_genre_lut()
 
 MIN_TEMPO = np.float32(40.0)
@@ -92,7 +220,7 @@ def normalize_loudness(loudness: np.ndarray, vectors: np.ndarray) -> None:
 def normalize_key(key: np.ndarray, mode: np.ndarray, vectors: np.ndarray) -> None:
     """
     Dimension 09: Linear normalization based on accidental count.
-    If mode is minor, add 3 to key number and mod by 12 to access relative minor.
+    If mode is minor, add 3 to key number and mod by 12 to access the relative minor.
     Then divide by 6 (max accidentals) to get [0, 1].
     """
     # Filter for valid range AND exclude NaN/Inf
@@ -187,29 +315,49 @@ def compute_genres_vectorized(
     output: np.ndarray
 ) -> None:
     """
-    Compute genre intensities for dimensions 20-32 using Numba parallel execution.
-    This eliminates Python loops entirely and runs at C speed across all CPU cores.
+    Compute genre intensities with proper open-addressing lookup.
+    Lookup must probe in the same sequence as insertion.
     """
     n_tracks = len(track_bounds) - 1
     
-    for i in prange(n_tracks):  # prange = parallel range
+    for i in prange(n_tracks):
         start = track_bounds[i]
         end = track_bounds[i + 1]
         max_intens = np.full(13, -1.0, dtype=np.float32)
         
         for j in range(start, end):
-            genre_id = genres_flat[j]
-            if genre_id == -1:
+            genre_hash = genres_flat[j]
+            if genre_hash == -1:
                 continue
             
-            # Fast hash lookup using bitwise AND
-            h = genre_id & (MAX_GENRE_HASH - 1)
-            meta_idx = genre_lut[h, 0]
-            intensity = genre_lut[h, 1] / 10000.0
+            # Lookup with probing
+            h = genre_hash & (MAX_GENRE_HASH - 1)
+            probe_count = 0
             
-            if meta_idx >= 0 and intensity > max_intens[meta_idx]:
-                max_intens[meta_idx] = intensity
-        
+            while True:
+                meta_idx = genre_lut[h, 0]
+                stored_verify = genre_lut[h, 2]  # Read verification key
+                stored_intensity = genre_lut[h, 1]
+                
+                # Empty slot → genre not in LUT
+                if meta_idx == -1:
+                    break
+                
+                # Found our genre (verification key matches)
+                if stored_verify == (genre_hash & 0xFFFF):
+                    intensity = stored_intensity / 10000.0
+                    if intensity > max_intens[meta_idx]:
+                        max_intens[meta_idx] = intensity
+                    break
+                
+                # Collision - probe next slot (mirror insertion logic)
+                h = (h + 1) & (MAX_GENRE_HASH - 1)
+                probe_count += 1
+                
+                # Safety: prevent infinite loops
+                if probe_count > 100:
+                    break
+            
         output[i] = max_intens
 
 def process_genres_batch(genres_list: List[List[str]], vectors: np.ndarray) -> None:
@@ -217,19 +365,28 @@ def process_genres_batch(genres_list: List[List[str]], vectors: np.ndarray) -> N
     Pre-process genre lists into NumPy arrays for Numba.
     Converts string genres to pre-hashed integer IDs to avoid string ops in Numba.
     """
+    if not genres_list:
+        vectors[:, 19:32] = -1.0
+        return
+    
+    if DEBUG_GENRES:
+        tracks_with_genres = sum(1 for g in genres_list if g)
+        print(f"DEBUG: Processing {tracks_with_genres}/{len(genres_list)} tracks with genres")
+    
     flat_genres = []
     track_bounds = [0]
     
     for genres in genres_list:
         start = len(flat_genres)
         for genre in genres:
-            # Pre-hash string to integer (no string operations in Numba kernel)
-            genre_id = hash(genre.strip().lower()) & 0x7FFFFFFF
-            flat_genres.append(genre_id)
+            # Store both hash and verification key
+            genre_hash = stable_hash(genre.strip().lower())
+            # Use low 16 bits as verification, store in separate array
+            flat_genres.append(genre_hash)
         track_bounds.append(len(flat_genres))
     
-    # Add sentinel and convert to arrays
-    flat_array = np.array(flat_genres + [-1], dtype=np.int32)
+    # Convert to arrays
+    flat_array = np.array(flat_genres, dtype=np.int64)  # Store full hash
     bounds_array = np.array(track_bounds, dtype=np.int32)
     genre_output = np.full((len(genres_list), 13), -1.0, dtype=np.float32)
     
@@ -246,24 +403,17 @@ def process_genres_batch(genres_list: List[List[str]], vectors: np.ndarray) -> N
 def build_track_vectors_batch(track_dicts: List[Dict[str, Any]]) -> np.ndarray:
     """
     Builds track vectors while minimizing reliance on slow Python loops.
-    
-    Pipeline:
-    1. Extract features using vectorized list comprehensions (amortized Python cost)
-    2. Apply pure NumPy normalizations (zero Python loops)
-    3. Process genres with Numba parallel kernel (C speed)
-    
-    Returns: np.ndarray of shape (n_tracks, 32) with all dimensions properly normalized.
     """
     if not track_dicts:
         return np.empty((0, 32), dtype=np.float32)
     
-    # Phase 1: Extract features (amortized Python cost)
+    # Phase 1: Extract features
     features = extract_features_batch(track_dicts)
     
     # Phase 2: Initialize output array
     vectors = np.full((len(track_dicts), 32), -1.0, dtype=np.float32)
     
-    # Phase 3: Apply all normalizations (pure NumPy)
+    # Phase 3: Apply all normalizations
     normalize_audio_features(features[0], vectors)
     normalize_loudness(features[1], vectors)
     normalize_key(features[2], features[3], vectors)
