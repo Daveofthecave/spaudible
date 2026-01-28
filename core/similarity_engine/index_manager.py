@@ -240,7 +240,7 @@ class IndexManager:
             self._vector_index_cache = OrderedDict()
             self._max_cache_size = 10000 
         
-        if not vector_indices:
+        if len(vector_indices) == 0:
             return []
         
         # Check cache first
