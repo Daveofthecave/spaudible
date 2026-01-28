@@ -1,9 +1,17 @@
 # config.py
-VERSION = "0.1.5"
+VERSION = "0.2.0"
 AUTO_OPTIMIZE_CHUNK_SIZE = True
 VRAM_SAFETY_FACTOR = 0.85 # What percentage of available VRAM to use
 VRAM_SCALING_FACTOR_MB = 2**8
 FORCE_CPU_MODE = False
+REGION_FILTER_STRENGTH = 1.0 # 1 = stick to the same region; 0 = any region is fine
+EXPECTED_VECTORS = 256_039_007 # How many tracks are in the database
+
+# Constants pertaining to the file structure of data/vectors/track_vectors.bin
+VECTOR_RECORD_SIZE = 104        # Total bytes per vector record
+VECTOR_HEADER_SIZE = 16         # Header size at start of file
+ISRC_OFFSET_IN_RECORD = 70      # ISRC starts at byte 70
+TRACK_ID_OFFSET_IN_RECORD = 82  # Track ID starts at byte 82
 
 import os
 from pathlib import Path
@@ -21,10 +29,6 @@ class PathConfig:
     @classmethod
     def get_index_file(cls):
         return cls.VECTORS / "track_index.bin"
-    
-    @classmethod
-    def get_mask_file(cls):
-        return cls.VECTORS / "track_masks.bin"
 
     @classmethod
     def get_metadata_file(cls):
@@ -50,18 +54,9 @@ class PathConfig:
             cls.get_audio_db(),
             cls.get_vector_file(),
             cls.get_index_file(),
-            cls.get_mask_file(),
             cls.get_metadata_file()
         ]
-
-    def get_gpu_config():
-        return {
-            "enabled": True,
-            "half_precision": False,
-            "max_batch_size": 5_000_000  # ~2GB for FP32
-        }
 
     @classmethod
     def get_config_path(cls):
         return cls.BASE_DIR / "config.json"
-        

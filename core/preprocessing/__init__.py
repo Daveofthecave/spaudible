@@ -3,12 +3,14 @@
 Preprocessing Package
 """
 from .db_to_vectors import DatabaseReader, PreprocessingEngine
-from .vector_exporter import VectorWriter
+from .unified_vector_writer import UnifiedVectorWriter
+from .unified_vector_reader import UnifiedVectorReader
 from .progress import ProgressTracker
 
 __all__ = [
     'DatabaseReader',
     'PreprocessingEngine',
-    'VectorWriter',
+    'UnifiedVectorWriter',
+    'UnifiedVectorReader',
     'ProgressTracker'
 ]

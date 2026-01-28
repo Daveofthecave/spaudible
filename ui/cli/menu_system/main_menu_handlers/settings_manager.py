@@ -37,7 +37,9 @@ def handle_settings() -> str:
     force_cpu = config_manager.get_force_cpu()
     force_gpu = config_manager.get_force_gpu()
     algorithm_name = config_manager.get_algorithm_name()
-    
+    deduplicate = config_manager.get_deduplicate()
+    region_strength = config_manager.get_region_strength()
+
     # Ensure mutual exclusivity
     if force_cpu and force_gpu:
         config_manager.set_force_gpu(False)
@@ -45,6 +47,8 @@ def handle_settings() -> str:
 
     cpu_status = "ON" if force_cpu else "OFF"
     gpu_status = "ON" if force_gpu else "OFF"
+    deduplicate_status = "ON" if deduplicate else "OFF"
+    region_strength_str = f"{region_strength:.2f}"
     
     print("\n  ⚙️  Configuration & Diagnostics")
     
@@ -52,6 +56,8 @@ def handle_settings() -> str:
         f"🐌 Force CPU Mode: {cpu_status}",
         f"🐆 Force GPU Mode: {gpu_status}",
         f"🧮 Select Similarity Algorithm: {algorithm_name}", 
+        f"🧦 Deduplicate Results: {deduplicate_status}",
+        f"🌎️ Region Filter Strength: {region_strength_str}",
         "⚖️  Adjust Feature Weights",
         "❔ Check System Status",
         "📊 Performance Test",
@@ -70,31 +76,36 @@ def handle_settings() -> str:
     elif choice == 3:
         return _select_algorithm()
     elif choice == 4:
-        return _adjust_feature_weights()
+        return _toggle_deduplicate()
     elif choice == 5:
-        return _handle_system_status()
+        return _adjust_region_strength()
     elif choice == 6:
-        return _handle_performance_test()
+        return _adjust_feature_weights()
     elif choice == 7:
-        return _handle_rerun_setup()
+        return _handle_system_status()
     elif choice == 8:
+        return _handle_performance_test()
+    elif choice == 9:
+        return _handle_rerun_setup()
+    elif choice == 10:
         return _handle_about()
     else:
         return "main_menu"
 
 def _force_cpu_mode() -> str:
     """Toggle CPU mode setting"""
-    current = config_manager.get_force_cpu()
-    new_setting = not current
+    current = config_manager.get_force_cpu()  # Current state before toggle
+    new_setting = not current  # State after toggle
     
-    # Disable GPU mode if enabling CPU mode
+    # Disable GPU mode if enabling CPU mode to maintain mutual exclusivity
     if new_setting:
         config_manager.set_force_gpu(False)
     
     config_manager.set_force_cpu(new_setting)
     
-    # Clear benchmark cache
-    SearchOrchestrator.clear_benchmark_cache()
+    # Only clear benchmark when entering auto mode (both OFF)
+    if not new_setting and not config_manager.get_force_gpu():
+        SearchOrchestrator.clear_benchmark_cache()
     
     status = "ON" if new_setting else "OFF"
     print(f"\n  ✅ CPU mode set to: {status}")
@@ -104,17 +115,18 @@ def _force_cpu_mode() -> str:
 
 def _force_gpu_mode() -> str:
     """Toggle GPU mode setting"""
-    current = config_manager.get_force_gpu()
-    new_setting = not current
+    current = config_manager.get_force_gpu()  # Current state before toggle
+    new_setting = not current  # State after toggle
     
-    # Disable CPU mode if enabling GPU mode
+    # Disable CPU mode if enabling GPU mode to maintain mutual exclusivity
     if new_setting:
         config_manager.set_force_cpu(False)
     
     config_manager.set_force_gpu(new_setting)
     
-    # Clear benchmark cache
-    SearchOrchestrator.clear_benchmark_cache()
+    # Only clear benchmark when entering auto mode (both OFF)
+    if not new_setting and not config_manager.get_force_cpu():
+        SearchOrchestrator.clear_benchmark_cache()
     
     status = "ON" if new_setting else "OFF"
     print(f"\n  ✅ GPU mode set to: {status}")
@@ -143,6 +155,40 @@ def _select_algorithm() -> str:
     input("\n  Press Enter to continue...")
     return "settings" 
 
+def _toggle_deduplicate() -> str:
+    """Toggle deduplication setting"""
+    current = config_manager.get_deduplicate()
+    new_setting = not current
+    
+    config_manager.set_deduplicate(new_setting)
+    
+    status = "ON" if new_setting else "OFF"
+    print(f"\n  ✅ Deduplication set to: {status}")
+    
+    input("\n  Press Enter to continue...")
+    return "settings"
+
+def _adjust_region_strength() -> str:
+    """Adjust region filter strength."""
+    print_header("Adjust Region Filter Strength")
+    
+    current = config_manager.get_region_strength()
+    print(f"\n  Current region filter strength: {current:.2f}")
+    print("  (1.0 = Stick to the same region, 0.0 = Any region is ok)")
+    
+    while True:
+        try:
+            new_value = float(input("\n  Enter new strength [0.0-1.0]: "))
+            if 0.0 <= new_value <= 1.0:
+                config_manager.set_region_strength(new_value)
+                print(f"\n  ✅ Region filter strength set to: {new_value:.2f}")
+                input("\n  Press Enter to continue...")
+                return "settings"
+            else:
+                print("  ❌ Value must be between 0.0 and 1.0")
+        except ValueError:
+            print("  ❌ Please enter a valid number")
+
 def _adjust_feature_weights() -> str:
     """Adjust feature weights for similarity calculations."""
     print_header("Adjust Feature Weights")
@@ -155,7 +201,7 @@ def _adjust_feature_weights() -> str:
         "Acousticness", "Instrumentalness", "Speechiness", "Valence", "Danceability",
         "Energy", "Liveness", "Loudness", "Key", "Mode", "Tempo", "Time Signature 4/4",
         "Time Signature 3/4", "Time Signature 5/4", "Time Signature Other", "Duration",
-        "Release Date", "Popularity", "Artist Followers", "Electronic & Dance", 
+        "Release Year", "Popularity", "Artist Followers", "Electronic & Dance", 
         "Rock & Alternative", "World & Traditional", "Latin", "Hip Hop & Rap", "Pop",
         "Classical & Art Music", "Jazz & Blues", "Christian & Religious", "Country & Folk",
         "R&B & Soul", "Reggae & Caribbean", "Other Genres"
@@ -236,7 +282,7 @@ def _handle_system_status() -> str:
     print(f"   • Audio Features Database: {audio_db.name}")
     print(f"       Size: {audio_db_size}")
     
-    # Vector files
+    # Vector files (new unified format)
     vector_file = PathConfig.get_vector_file()
     vector_size = format_file_size(vector_file.stat().st_size) if vector_file.exists() else "Not found"
     print(f"   • Vector Cache: {vector_file.name}")
@@ -247,16 +293,9 @@ def _handle_system_status() -> str:
     print(f"   • Vector Index: {index_file.name}")
     print(f"       Size: {index_size}")
     
-    # Bit mask file
-    mask_file = PathConfig.get_mask_file()
-    mask_size = format_file_size(mask_file.stat().st_size) if mask_file.exists() else "Not found"
-    print(f"   • Vector Masks: {mask_file.name}")
-    print(f"       Size: {mask_size}")
-    
-    metadata_file = PathConfig.get_metadata_file()
-    metadata_size = format_file_size(metadata_file.stat().st_size) if metadata_file.exists() else "Not found"
-    print(f"   • Vector Metadata: {metadata_file.name}")
-    print(f"       Size: {metadata_size}")
+    # Note: track_masks.bin, track_regions.bin, and metadata.json 
+    # are obsolete in the new format.
+    # They are now embedded within the unified vector file.
     
     # Genre mapping
     genre_file = PathConfig.get_genre_mapping()
@@ -264,10 +303,10 @@ def _handle_system_status() -> str:
     print(f"   • Genre Mapping: {genre_file.name}")
     print(f"       Size: {genre_size}")
 
-    # Total disk usage
+    # Total disk usage (only active files)
     total_size = 0
     files_to_check = [
-        main_db, audio_db, vector_file, index_file, mask_file, metadata_file, genre_file
+        main_db, audio_db, vector_file, index_file, genre_file
     ]
     for file in files_to_check:
         if file.exists():
@@ -444,7 +483,7 @@ def _handle_performance_test() -> str:
     )
     search_time = time.time() - start_time
     
-    print(f"\n  ✅ Found {len(results)} similar tracks in {format_elapsed_time(search_time)}")
+    print(f"\n  ✅ Found {len(results)} similar tracks in {format_elapsed_time(search_time).strip()}")
     track_orchestrator.close()
     
     input("\n  Press Enter to continue...")

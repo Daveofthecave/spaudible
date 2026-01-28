@@ -3,6 +3,7 @@ from ui.cli.console_utils import print_header, print_menu, get_choice
 from pathlib import Path
 import json
 from config import PathConfig
+from core.utilities.setup_validator import validate_vector_cache
 
 def check_processing_status():
     """Check if processing is complete and valid."""
@@ -20,7 +21,7 @@ def check_processing_status():
         expected_tracks = 256_000_000
         actual_tracks = metadata.get('total_tracks', 0)
         
-        if actual_tracks < expected_tracks * 0.95:
+        if actual_tracks < expected_tracks:
             return False, f"Incomplete processing: {actual_tracks:,} tracks"
         
         return True, f"Processing complete: {actual_tracks:,} tracks"
@@ -64,6 +65,13 @@ def screen_processing_complete():
         print(f"    • Total size: {total_gb:.1f} GB")
         print(f"    • Created: {metadata.get('created_at', 'Unknown')}")
         
+        print("\n  🔍 Running final integrity validation...")
+        is_valid, validation_msg = validate_vector_cache(checksum_validation=True)
+        if is_valid:
+            print(f"  ✅ {validation_msg}")
+        else:
+            print(f"  ⚠️  {validation_msg}")
+        
         print("\n     Ready for similarity searching!")
         
         options = [
@@ -78,6 +86,7 @@ def screen_processing_complete():
         if choice == 1:
             return "main_menu"
         elif choice == 2:
+            # This is now redundant but keep for user-initiated check
             print("\n  🔍 Running quick integrity check...")
             expected_bytes = metadata.get('total_tracks', 0) * 128
             actual_bytes = vectors_path.stat().st_size if vectors_path.exists() else 0

@@ -1,18 +1,23 @@
 # core/similarity_engine/vector_math_gpu.py
+"""
+GPU-accelerated vector operations using PyTorch.
+Returns tensors (versus numpy arrays) for pipeline compatibility.
+"""
 import torch
 import numpy as np
 from .weight_layers import WeightLayers
 from typing import List
 
 class VectorOpsGPU:
-    """GPU-accelerated vector operations using PyTorch with unified mask and weight support."""
+    """GPU-accelerated vector operations using PyTorch."""
     
     VECTOR_DIMENSIONS = 32
     DTYPE = torch.float32
     
     def __init__(self, device="cuda"):
-        self.device_str = device
-        self.device = torch.device(device)
+        self.device = device
+        
+        # Load weights
         self.weight_layers = WeightLayers()
         self.baseline_weights = torch.tensor(
             self.weight_layers.baseline_weights, 
@@ -30,212 +35,213 @@ class VectorOpsGPU:
             device=self.device
         )
         self.user_weights = torch.ones(32, dtype=self.DTYPE, device=self.device)
+        self.genre_mask = torch.zeros(32, dtype=torch.bool, device=self.device)
+        self.genre_mask[19:32] = True
     
     def set_user_weights(self, weights: List[float]):
-        """Set user-defined weights at runtime."""
+        """Set user-defined weights."""
         if len(weights) != 32:
             raise ValueError(f"Expected 32 weights, got {len(weights)}")
         self.user_weights = torch.tensor(weights, dtype=self.DTYPE, device=self.device)
-
+    
     def reset_weights(self):
-        """Reset weights to baseline values."""
+        """Reset weights to baseline."""
         self.user_weights = torch.ones(32, dtype=self.DTYPE, device=self.device)
-
-    def masked_weighted_cosine_similarity(self, query: np.ndarray, vectors: torch.Tensor, masks: torch.Tensor) -> np.ndarray:
-        masks = masks.to(torch.int64)
-
-        # Convert query to PyTorch tensor on the same device as vectors
-        query_t = torch.tensor(query, dtype=torch.float32, device=vectors.device)
-        
-        # Ensure query has correct shape
+    
+    # Add cached bitmask to avoid recreation
+    @staticmethod
+    def _get_bitmask(device):
+        """Cache the bitmask tensor to avoid recreation."""
+        if not hasattr(VectorOpsGPU, '_bitmask_cache'):
+            VectorOpsGPU._bitmask_cache = torch.tensor(
+                [1 << i for i in range(32)], 
+                dtype=torch.int64, 
+                device=device
+            )
+        return VectorOpsGPU._bitmask_cache
+    
+    def masked_weighted_cosine_similarity(self, query: np.ndarray, vectors: torch.Tensor, 
+                                          masks: torch.Tensor) -> torch.Tensor:
+        """Compute masked cosine similarity with proper NaN handling."""
+        # Convert query once and expand once
+        query_t = torch.as_tensor(query, dtype=torch.float32, device=vectors.device)
         if query_t.ndim == 1:
-            query_t = query_t.unsqueeze(0).expand(vectors.shape[0], -1)
+            query_t = query_t.unsqueeze(0)
         
-        # Create valid mask for query
-        query_valid = (query_t != -1)
+        # Expand query to match batch size
+        batch_size = vectors.shape[0]
+        query_expanded = query_t.expand(batch_size, -1)
         
-        # Unpack masks to boolean tensors (using int64)
-        vector_valid = self._unpack_masks(masks.to(torch.int64))  # Convert to int64
-        
-        # Combine validity masks
+        # Validity masks
+        query_valid = (query_expanded != -1)
+        vector_valid = self._unpack_masks(masks)
         valid_mask = query_valid & vector_valid
         
-        # Compute genre flags
-        query_has_genre = torch.any(query_t[:, 19:32] != -1, dim=1)
-        vector_has_genre = torch.any(vectors[:, 19:32] != -1, dim=1)
+        # Check for genre presence
+        query_has_genre = (query_expanded[:, self.genre_mask] != -1).any(dim=1)
+        vector_has_genre = (vectors[:, self.genre_mask] != -1).any(dim=1)
         
-        # Compute adjustment factor
-        adj_factor = torch.where(
+        # Apply genre reduction
+        genre_adj = torch.where(
             query_has_genre & vector_has_genre,
-            torch.tensor(1.0, device=vectors.device),
+            torch.tensor(1.0, device=self.device),
             self.genre_reduction
-        )
+        ).unsqueeze(1)
         
         # Create weight matrix
         weights = self.baseline_weights * self.availability_boost * self.user_weights
         
         # Apply genre adjustment
-        genre_condition = torch.zeros_like(weights, dtype=torch.bool)
-        genre_condition[19:32] = True
-        weights = torch.where(
-            genre_condition & ~vector_has_genre.unsqueeze(1),
-            weights * adj_factor.unsqueeze(1),
-            weights
+        weights_expanded = weights.unsqueeze(0).expand(batch_size, -1)
+        weights_adj = torch.where(
+            self.genre_mask.unsqueeze(0) & ~vector_has_genre.unsqueeze(1),
+            weights_expanded * genre_adj,
+            weights_expanded
         )
-        
-        # Apply weights and mask invalid values
-        weighted_query = query_t * weights * valid_mask.float()
-        weighted_vectors = vectors * weights * valid_mask.float()
-        
-        # Compute cosine similarity
-        dot = torch.sum(weighted_query * weighted_vectors, dim=1)
-        norm_query = torch.norm(weighted_query, dim=1)
-        norm_vectors = torch.norm(weighted_vectors, dim=1)
-        
-        # Avoid division by zero
-        sim = dot / (norm_query * norm_vectors + 1e-9)
-        sim[torch.isnan(sim)] = 0
-        
-        # Synchronize GPU before returning
-        if self.device_str == 'cuda':
-            torch.cuda.synchronize()
-        
-        return sim.cpu().numpy()  # Convert to CPU numpy array
-
-    def masked_weighted_cosine_euclidean_similarity(self, query: np.ndarray, vectors: torch.Tensor, masks: torch.Tensor) -> np.ndarray:
-        """
-        Optimized GPU implementation of hybrid cosine-euclidean similarity.
-        Computes: hybrid_sim = cosine_sim * euclidean_sim
-        """
-        # Convert masks to int64 if needed
-        if masks.dtype != torch.int64:
-            masks = masks.to(torch.int64)
-        
-        # Convert query to tensor with matching device
-        query_t = torch.tensor(query, dtype=vectors.dtype, device=vectors.device)
-        
-        # Ensure query has correct shape
-        if query_t.ndim == 1:
-            query_t = query_t.unsqueeze(0).expand(vectors.shape[0], -1)
-        
-        # Create valid mask for query
-        query_valid = (query_t != -1)
-        
-        # Unpack masks to boolean tensors
-        vector_valid = self._unpack_masks(masks)
-        
-        # Combine validity masks
-        valid_mask = query_valid & vector_valid
-        
-        # Compute genre flags
-        query_has_genre = torch.any(query_t[:, 19:32] != -1, dim=1)
-        vector_has_genre = torch.any(vectors[:, 19:32] != -1, dim=1)
-        
-        # Compute adjustment factor
-        adj_factor = torch.where(
-            query_has_genre & vector_has_genre,
-            torch.tensor(1.0, device=vectors.device),
-            self.genre_reduction
-        )
-        
-        # Create weight matrix
-        weights = self.baseline_weights * self.availability_boost * self.user_weights
-        
-        # Apply genre adjustment
-        genre_condition = torch.zeros_like(weights, dtype=torch.bool)
-        genre_condition[19:32] = True
-        weights = torch.where(
-            genre_condition & ~vector_has_genre.unsqueeze(1),
-            weights * adj_factor.unsqueeze(1),
-            weights
-        )
-        
-        # Apply weights and mask invalid values
-        weighted_query = query_t * weights * valid_mask.float()
-        weighted_vectors = vectors * weights * valid_mask.float()
-        
-        # Compute cosine similarity
-        dot = torch.sum(weighted_query * weighted_vectors, dim=1)
-        norm_query = torch.norm(weighted_query, dim=1)
-        norm_vectors = torch.norm(weighted_vectors, dim=1)
-        cosine_sim = dot / (norm_query * norm_vectors + 1e-9)
-        cosine_sim = torch.nan_to_num(cosine_sim, nan=0.0)
-        
-        # Compute Euclidean distance
-        diff = weighted_query - weighted_vectors
-        sq_diff = diff ** 2
-        sum_sq = torch.sum(sq_diff, dim=1)
-        euclidean_dist = torch.sqrt(sum_sq)
-        
-        # Compute Euclidean similarity
-        euclidean_sim = 1.0 / (1.0 + euclidean_dist)
-        
-        # Combine into hybrid similarity
-        hybrid_sim = cosine_sim * euclidean_sim
-        
-        # Synchronize GPU before returning
-        if self.device_str == 'cuda':
-            torch.cuda.synchronize()
-        
-        return hybrid_sim.cpu().numpy()
-
-    def masked_euclidean_similarity(self, query: np.ndarray, vectors: torch.Tensor, masks: torch.Tensor) -> np.ndarray:
-        """GPU-accelerated Euclidean similarity with masking"""
-        # Convert query to PyTorch tensor on the same device as vectors
-        query_t = torch.tensor(query, dtype=self.DTYPE, device=vectors.device)
-        
-        # Ensure query has correct shape
-        if query_t.ndim == 1:
-            query_t = query_t.unsqueeze(0).expand(vectors.shape[0], -1)
-        
-        # Create valid mask for query
-        query_valid = (query_t != -1)
-        
-        # Unpack masks to boolean tensors
-        vector_valid = self._unpack_masks(masks)
-        
-        # Combine validity masks
-        valid_mask = query_valid & vector_valid
         
         # Apply weights
-        weighted_query = query_t * self.user_weights * valid_mask.float()
-        weighted_vectors = vectors * self.user_weights * valid_mask.float()
+        weighted_query = query_expanded * weights.unsqueeze(0)
+        weighted_vectors = vectors * weights_adj
         
-        # Compute differences only where valid
-        diff = torch.where(valid_mask, weighted_query - weighted_vectors, torch.zeros_like(query_t))
+        # Apply validity mask to zero out invalid dimensions
+        weighted_query = weighted_query * valid_mask.float()
+        weighted_vectors = weighted_vectors * valid_mask.float()
+        
+        # Compute dot product (now only valid dimensions contribute)
+        dot = torch.sum(weighted_query * weighted_vectors, dim=1)
+        
+        # Compute norms
+        norm_q = torch.norm(weighted_query, dim=1)
+        norm_v = torch.norm(weighted_vectors, dim=1)
+        
+        # Prevent division by zero and NaN
+        norm_product = norm_q * norm_v
+        valid_norms = norm_product > 1e-9
+        
+        sim = torch.where(
+            valid_norms,
+            dot / torch.clamp(norm_product, min=1e-9),
+            torch.tensor(0.0, device=self.device)
+        )
+        
+        # Handle any remaining NaNs
+        sim = torch.nan_to_num(sim, nan=0.0, posinf=1.0, neginf=0.0)
+        
+        return sim
+    
+    def masked_weighted_cosine_euclidean_similarity(self, query: np.ndarray, 
+                                                   vectors: torch.Tensor, 
+                                                   masks: torch.Tensor) -> torch.Tensor:
+        """Hybrid cosine-euclidean similarity."""
+        # Compute cosine part
+        cosine_sim = self.masked_weighted_cosine_similarity(query, vectors, masks)
+        
+        # Convert query once and expand once
+        query_t = torch.as_tensor(query, dtype=torch.float32, device=vectors.device)
+        if query_t.ndim == 1:
+            query_t = query_t.unsqueeze(0)
+        
+        batch_size = vectors.shape[0]
+        query_expanded = query_t.expand(batch_size, -1)
+        
+        # Validity masks
+        query_valid = (query_expanded != -1)
+        vector_valid = self._unpack_masks(masks)
+        valid_mask = query_valid & vector_valid
+        
+        # Compute weighted differences
+        weights = self.baseline_weights * self.availability_boost * self.user_weights
+        weighted_diff = (query_expanded - vectors) * weights.unsqueeze(0)
+        
+        # Apply validity mask to zero out invalid dimensions
+        weighted_diff = weighted_diff * valid_mask.float()
         
         # Compute Euclidean distance
-        squared = diff ** 2
-        sum_squared = torch.sum(squared, dim=1)
-        distances = torch.sqrt(sum_squared)
+        euclidean_dist = torch.norm(weighted_diff, dim=1)
         
         # Convert to similarity
-        similarities = 1.0 / (1.0 + distances)
+        euclidean_sim = 1.0 / (1.0 + euclidean_dist)
         
-        # Synchronize GPU before returning
-        if self.device_str == 'cuda':
-            torch.cuda.synchronize()
+        # Combine
+        hybrid_sim = cosine_sim * euclidean_sim
         
-        return similarities.cpu().numpy()
-
+        # Ensure no NaNs
+        hybrid_sim = torch.nan_to_num(hybrid_sim, nan=0.0, posinf=1.0, neginf=0.0)
+        
+        return hybrid_sim
+    
+    def masked_euclidean_similarity(self, query: np.ndarray, vectors: torch.Tensor, 
+                                  masks: torch.Tensor) -> torch.Tensor:
+        """Euclidean similarity with NaN protection."""
+        query_t = torch.as_tensor(query, dtype=torch.float32, device=vectors.device)
+        if query_t.ndim == 1:
+            query_t = query_t.unsqueeze(0)
+        
+        batch_size = vectors.shape[0]
+        query_expanded = query_t.expand(batch_size, -1)
+        
+        # Validity masks
+        query_valid = (query_expanded != -1)
+        vector_valid = self._unpack_masks(masks)
+        valid_mask = query_valid & vector_valid
+        
+        # Compute weighted differences (no genre adjustment for pure Euclidean)
+        weights = self.user_weights
+        weighted_diff = (query_expanded - vectors) * weights.unsqueeze(0)
+        
+        # Apply validity mask to zero out invalid dimensions
+        weighted_diff = weighted_diff * valid_mask.float()
+        
+        # Compute Euclidean distance
+        euclidean_dist = torch.norm(weighted_diff, dim=1)
+        
+        # Convert to similarity
+        sim = 1.0 / (1.0 + euclidean_dist)
+        
+        # Handle NaNs
+        sim = torch.nan_to_num(sim, nan=0.0, posinf=1.0, neginf=0.0)
+        
+        return sim
+    
+    def fused_similarity(self, query: np.ndarray, vectors: torch.Tensor, 
+                        masks: torch.Tensor, regions: torch.Tensor,
+                        query_region: int, region_strength: float, 
+                        algorithm: str = 'cosine-euclidean') -> torch.Tensor:
+        """Combined feature + region similarity."""
+        # Get base similarity
+        if algorithm == 'cosine':
+            feature_sim = self.masked_weighted_cosine_similarity(query, vectors, masks)
+        elif algorithm == 'euclidean':
+            feature_sim = self.masked_euclidean_similarity(query, vectors, masks)
+        else:  # cosine-euclidean
+            feature_sim = self.masked_weighted_cosine_euclidean_similarity(query, vectors, masks)
+        
+        # Region match penalty
+        if query_region >= 0 and region_strength > 0.0:
+            region_match = (regions == query_region).float()
+            region_penalty = torch.where(
+                region_match == 1,
+                torch.tensor(1.0, device=self.device),
+                torch.tensor(1.0 - region_strength, device=self.device)
+            )
+            return feature_sim * region_penalty
+        
+        return feature_sim
+    
+    # Memory-efficient mask unpacking with caching
     def _unpack_masks(self, masks: torch.Tensor) -> torch.Tensor:
         """
-        Unpack batch of masks into boolean tensors.
-        
-        Args:
-            masks: Tensor of uint32 masks (shape: [n])
-            
-        Returns:
-            Boolean tensor of shape [n, 32]
+        Unpack batch of int32 masks into boolean tensors of shape [n, 32].
+        Each bit in the int32 becomes a boolean True/False in the output.
         """
-        # Create bitmask tensor with int64 dtype
-        bitmask = torch.tensor([(1 << i) for i in range(32)], 
-                            dtype=torch.int64,
-                            device=masks.device)
+        # Use cached bitmask to avoid recreation
+        bitmask = self._get_bitmask(masks.device)
         
-        # Expand dimensions for broadcasting
-        masks_exp = masks.unsqueeze(-1)  # [n, 1]
-        bitmask_exp = bitmask.unsqueeze(0)  # [1, 32]
+        # Reshape for broadcasting and use memory-efficient bitwise operations
+        masks_reshaped = masks.view(-1, 1)  # Shape: [n, 1]
         
-        # Compute validity
-        return (masks_exp & bitmask_exp) != 0
+        # torch.bitwise_and produces int64 result, convert directly to bool
+        # This avoids storing a large int64 intermediate
+        result = torch.bitwise_and(masks_reshaped, bitmask).to(torch.bool)
+        
+        return result

@@ -1,82 +1,146 @@
 # core/similarity_engine/vector_io.py
-import numpy as np
-import os
-from pathlib import Path
 import mmap
+import torch
+import warnings
+import numpy as np
+from pathlib import Path
+from typing import Union
 
 class VectorReader:
-    """Optimized CPU vector reader with persistent memory mapping"""
+    """
+    Unified vector reader using CPU-based PyTorch with zero-copy memory mapping.
+    PyTorch's CPU backend has superior SIMD and multithreading vs NumPy 
+    for byte-manipulation workloads.
+    """
     
-    VECTOR_DIMENSIONS = 32
-    BYTES_PER_VECTOR = 128  # 32 * 4 bytes
-    BYTES_PER_MASK = 4      # 32-bit unsigned integer
-    DTYPE = np.float32
-
-    def __init__(self, vectors_path: str, masks_path: str):
-        self.vectors_path = vectors_path
-        self.masks_path = masks_path
+    VECTOR_RECORD_SIZE = 104
+    VECTOR_HEADER_SIZE = 16
+    
+    def __init__(self, vectors_path: Union[str, Path], device: str = "cpu"):
+        self.vectors_path = Path(vectors_path)
+        self.device = device
         
-        # Open files and create persistent memory maps
-        self.vectors_file = open(vectors_path, 'rb')
-        self.masks_file = open(masks_path, 'rb')
+        # Open and memory-map
+        self._file = open(self.vectors_path, 'rb')
+        self.file_size = self.vectors_path.stat().st_size
+        self.total_vectors = (self.file_size - self.VECTOR_HEADER_SIZE) // self.VECTOR_RECORD_SIZE
         
-        self.vector_file_size = os.path.getsize(vectors_path)
-        self.mask_file_size = os.path.getsize(masks_path)
-        self.total_vectors = self.vector_file_size // self.BYTES_PER_VECTOR
+        # Create memory map
+        self._mmap = mmap.mmap(self._file.fileno(), 0, access=mmap.ACCESS_READ)
         
-        # Create memory maps
-        self.vectors_mmap = mmap.mmap(
-            self.vectors_file.fileno(), 
-            self.vector_file_size, 
-            access=mmap.ACCESS_READ
-        )
+        # Create torch tensor view
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning) # We never write to this array
+            numpy_array = np.frombuffer(self._mmap, dtype=np.uint8, offset=self.VECTOR_HEADER_SIZE)
+            self._full_mmap_tensor = torch.from_numpy(numpy_array).view(-1, self.VECTOR_RECORD_SIZE)
         
-        self.masks_mmap = mmap.mmap(
-            self.masks_file.fileno(),
-            self.mask_file_size,
-            access=mmap.ACCESS_READ
-        )
+        # print(f"   Loaded {self.total_vectors:,} vectors")
+        # print(f"   Using {self.device} tensor operations")
         
-        # print(f"  📊 Memory-mapped vector file: {self.vector_file_size/(1024**3):.1f} GB")
-        # print(f"  📊 Memory-mapped mask file: {self.mask_file_size/(1024**3):.1f} GB")
+    def read_chunk(self, start_idx: int, num_vectors: int) -> torch.Tensor:
+        if start_idx >= self.total_vectors:
+            return torch.empty((0, 32), dtype=torch.float32, device=self.device)
+        
+        num_vectors = min(num_vectors, self.total_vectors - start_idx)
+        records = self._full_mmap_tensor[start_idx:start_idx + num_vectors]
+        
+        return self._unpack_vectors(records, num_vectors)
+    
+    def _unpack_vectors(self, records: torch.Tensor, num_vectors: int) -> torch.Tensor:
+        vectors = torch.full((num_vectors, 32), -1.0, dtype=torch.float32)
+        
+        # Binary dims (byte 0) - no alignment issues
+        binary_byte = records[:, 0]
+        vectors[:, 9] = (binary_byte & 1).float()
+        vectors[:, 11] = ((binary_byte >> 1) & 1).float()
+        vectors[:, 12] = ((binary_byte >> 2) & 1).float()
+        vectors[:, 13] = ((binary_byte >> 3) & 1).float()
+        vectors[:, 14] = ((binary_byte >> 4) & 1).float()
+        
+        # Scaled dims (bytes 1-44) - must clone for alignment
+        scaled_bytes = records[:, 1:45].clone().contiguous()
+        scaled = scaled_bytes.view(torch.int16).view(num_vectors, 22).float() * 0.0001
+        vectors[:, 0:7] = scaled[:, 0:7]
+        vectors[:, 8] = scaled[:, 7]
+        vectors[:, 16] = scaled[:, 8]
+        vectors[:, 19:32] = scaled[:, 9:22]
+        
+        # FP32 dims (bytes 45-64) - must clone for alignment
+        fp32_bytes = records[:, 45:65].clone().contiguous()
+        fp32 = fp32_bytes.view(torch.float32).view(num_vectors, 5)
+        vectors[:, 7] = fp32[:, 0]
+        vectors[:, 10] = fp32[:, 1]
+        vectors[:, 15] = fp32[:, 2]
+        vectors[:, 17] = fp32[:, 3]
+        vectors[:, 18] = fp32[:, 4]
+        
+        return vectors.to(self.device)
 
-    def read_chunk(self, start_idx: int, num_vectors: int) -> np.ndarray:
-        # Adjust num_vectors to not exceed file bounds
-        actual_num = min(num_vectors, self.total_vectors - start_idx)
-        if actual_num <= 0:
-            return np.empty((0, self.VECTOR_DIMENSIONS), dtype=self.DTYPE)
+    def read_masks(self, start_idx: int, num_vectors: int) -> torch.Tensor:
+        if start_idx >= self.total_vectors:
+            return torch.empty(0, dtype=torch.int32, device=self.device)
+        
+        records = self._full_mmap_tensor[start_idx:start_idx + num_vectors]
+        
+        # Clone to ensure 4-byte alignment for int32 view
+        mask_bytes = records[:, 65:69].clone().contiguous()
+        return mask_bytes.view(torch.int32).view(num_vectors).to(self.device)
+    
+    def read_regions(self, start_idx: int, num_vectors: int) -> torch.Tensor:
+        if start_idx >= self.total_vectors:
+            return torch.empty(0, dtype=torch.uint8, device=self.device)
+        
+        records = self._full_mmap_tensor[start_idx:start_idx + num_vectors]
+        
+        # Clone to be safe (though uint8 is less alignment-sensitive)
+        region_bytes = records[:, 69].clone().contiguous()
+        return region_bytes.view(torch.uint8).view(num_vectors).to(self.device)
+    
+    def get_isrcs_batch(self, indices: Union[list, torch.Tensor]) -> list:
+        """Extract ISRCs directly from vector file."""
+        if isinstance(indices, torch.Tensor):
+            indices = indices.cpu().numpy().tolist()
+        
+        results = []
+        for idx in indices:
+            # ISRC is at bytes 70-81 (12 bytes)
+            isrc_bytes = self._full_mmap_tensor[idx, 70:82]
+            isrc = isrc_bytes.contiguous().numpy().tobytes().decode('ascii', errors='ignore').rstrip('\0')
+            results.append(isrc)
+        
+        return results
 
-        offset = start_idx * self.BYTES_PER_VECTOR
-        return np.frombuffer(
-            self.vectors_mmap,
-            dtype=self.DTYPE,
-            count=actual_num * self.VECTOR_DIMENSIONS,
-            offset=offset
-        ).reshape(actual_num, self.VECTOR_DIMENSIONS)
-
-    def read_masks(self, start_idx: int, num_vectors: int) -> np.ndarray:
-        actual_num = min(num_vectors, self.total_vectors - start_idx)
-        if actual_num <= 0:
-            return np.empty(0, dtype=np.uint32)
-
-        offset = start_idx * self.BYTES_PER_MASK
-        return np.frombuffer(
-            self.masks_mmap,
-            dtype=np.uint32,
-            count=actual_num,
-            offset=offset
-        )
-
-    def __del__(self):
-        """Clean up resources"""
-        if hasattr(self, 'vectors_mmap'):
-            self.vectors_mmap.close()
-        if hasattr(self, 'masks_mmap'):
-            self.masks_mmap.close()
-        if hasattr(self, 'vectors_file'):
-            self.vectors_file.close()
-        if hasattr(self, 'masks_file'):
-            self.masks_file.close()
+    def get_track_ids_batch(self, indices: Union[list, torch.Tensor]) -> list:
+        """Extract track IDs directly from vector file."""
+        if isinstance(indices, torch.Tensor):
+            indices = indices.cpu().numpy().tolist()
+        
+        results = []
+        for idx in indices:
+            track_id_bytes = self._full_mmap_tensor[idx, 82:104]
+            track_id = track_id_bytes.contiguous().numpy().tobytes().decode('ascii', errors='ignore').rstrip('\0')
+            results.append(track_id)
+        
+        return results
 
     def get_total_vectors(self) -> int:
         return self.total_vectors
+    
+    def get_max_batch_size(self) -> int:
+        if self.device == "cpu":
+            return 500_000  # Conservative CPU limit
+        
+        if torch.cuda.is_available():
+            free_vram = torch.cuda.mem_get_info()[0]
+            safe_batch = int(free_vram * 0.75 / 256)
+            return min(safe_batch, 2_000_000)
+        
+        return 100_000
+    
+    def close(self):
+        if hasattr(self, '_full_mmap_tensor'):
+            del self._full_mmap_tensor
+        if hasattr(self, '_mmap'):
+            self._mmap.close()
+        if hasattr(self, '_file'):
+            self._file.close()

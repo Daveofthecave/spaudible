@@ -4,6 +4,8 @@ import json
 import shutil
 from ui.cli.console_utils import print_header, print_menu, get_choice
 from config import PathConfig
+from core.utilities.setup_validator import validate_vector_cache, is_setup_complete, rebuild_index
+from config import EXPECTED_VECTORS
 
 def check_databases():
     """Check if required database files exist."""
@@ -19,193 +21,205 @@ def check_databases():
     
     return missing
 
-def check_processing_complete():
-    """Check if processing is already complete."""
-    vectors_path = PathConfig.get_vector_file()
-    index_path = PathConfig.get_index_file()
-    metadata_path = PathConfig.VECTORS / "metadata.json"
-    
-    if not (vectors_path.exists() and index_path.exists() and metadata_path.exists()):
-        return False
-    
+def get_file_size(path):
+    """Safely get file size, returning 0 if file doesn't exist."""
     try:
-        with open(metadata_path, 'r') as f:
-            metadata = json.load(f)
-        
-        tracks = metadata.get('total_tracks', 0)
-        if tracks == 0:
-            tracks = metadata.get('total_tracks_processed', 0)
-        
-        return tracks >= 256_000_000 * 0.95
-    except:
-        return False
-
-def is_setup_complete():
-    """Check if all required files exist."""
-    return all(file.exists() for file in PathConfig.all_required_files())
+        return path.stat().st_size
+    except FileNotFoundError:
+        return 0
 
 def screen_database_check():
-    """Screen 1: Check for required database files."""
-    print_header("Spaudible - Database Check")
+    """Screen 1: Comprehensive database and vector cache validation."""
+    print_header("Spaudible - System Check")
 
-    if is_setup_complete():
-        return "main_menu"
-    
+    # Check databases exist
     missing = check_databases()
     
-    if not missing:
-        # All databases found - check if processing is complete
-        is_complete = check_processing_complete()
+    if missing:
+        print("\n  ❗ Required database files are missing.\n")
+        print("  To use Spaudible, you need to import these")
+        print("  Spotify databases into the data/databases directory:\n")
         
-        if is_complete:
-            print("  ✅ Spotify databases found!")
-            print("  ✅ Preprocessed track vectors found!\n")
-            
-            # Read metadata for display
-            metadata_path = PathConfig.VECTORS / "metadata.json"
-            try:
-                with open(metadata_path, 'r') as f:
-                    metadata = json.load(f)
-                
-                tracks = metadata.get('total_tracks', 0)
-                if tracks == 0:
-                    tracks = metadata.get('total_tracks_processed', 0)
-                
-                print(f"     • Tracks processed: {tracks:,}")
-                print(f"     • Date created: {metadata.get('created_at', 'Unknown')}\n")
-            except Exception as e:
-                print(f"\n  ⚠️  Could not read metadata: {e}")
-            
-            print("  Would you like to:")
-            
-            options = [
-                "Go to Main Menu",
-                "Re-run preprocessing",
-                "Check database files again",
-                "Exit"
-            ]
-            
-            print_menu(options)
-            choice = get_choice(len(options))
-            
-            if choice == 1:
-                return "main_menu"
-            elif choice == 2:
-                print("\n  ⚠️  This will delete existing processed files.")
-                confirm = input("  Are you sure? (yes/no): ").lower().strip()
-                if confirm == 'yes':
-                    vector_files = [
-                        PathConfig.get_vector_file(),
-                        PathConfig.get_index_file(),
-                        PathConfig.VECTORS / "metadata.json"
-                    ]
-                    for file_path in vector_files:
-                        if file_path.exists():
-                            file_path.unlink()
-                    return "preprocessing_prompt"
-                else:
-                    return "database_check"
-            elif choice == 3:
-                return "database_check"
+        total_size = 0
+        for filename, description in missing:
+            if "main" in description.lower():
+                size_info = "(~125 GB)"
+                total_size += 125
+            elif "audio" in description.lower():
+                size_info = "(~42 GB)"
+                total_size += 42
             else:
-                return "exit"
-        else:
-            # Databases exist but processing is not complete
-            print("\n  ✅ All required databases found!")
-            print("\n  The system detected:")
-            print("    • spotify_clean.sqlite3")
-            print("    • spotify_clean_audio_features.sqlite3")
+                size_info = ""
             
-            # Check if any processing files exist
-            vectors_exist = PathConfig.get_vector_file().exists()
-            metadata_exist = (PathConfig.VECTORS / "metadata.json").exists()
-            
-            if vectors_exist or metadata_exist:
-                print("\n  ⚠️  Partial or incomplete vector cache detected.")
-                print("  You can:")
-                
-                options = [
-                    "Start fresh (recommended)",
-                    "Check processing status",
-                ]
-                
-                print_menu(options)
-                choice = get_choice(len(options))
-                
-                if choice == 1:
-                    print("\n  ⚠️  This will delete existing processed files.")
-                    confirm = input("  Are you sure? (yes/no): ").lower().strip()
-                    if confirm == 'yes':
-                        vector_files = [
-                            PathConfig.get_vector_file(),
-                            PathConfig.get_index_file(),
-                            PathConfig.VECTORS / "metadata.json"
-                        ]
-                        for file_path in vector_files:
-                            if file_path.exists():
-                                file_path.unlink()
-                    return "preprocessing_prompt"
-                elif choice == 2:
-                    if metadata_exist:
-                        try:
-                            metadata_path = PathConfig.VECTORS / "metadata.json"
-                            with open(metadata_path, 'r') as f:
-                                metadata = json.load(f)
-                            
-                            tracks = metadata.get('total_tracks', 0)
-                            if tracks == 0:
-                                tracks = metadata.get('total_tracks_processed', 0)
-                            
-                            print(f"\n  📊 Current progress: {tracks:,} tracks")
-                            print(f"     This is {(tracks / 256_000_000 * 100):.1f}% complete")
-                        except Exception as e:
-                            print(f"\n  ❗ Could not read processing metadata: {e}")
-                    else:
-                        print("\n  ❗ No processing metadata found")
-                    input("\n  Press Enter to continue...")
-                    return "database_check"
-                else:
-                    return "database_check"
-            else:
-                return "preprocessing_prompt"
-    
-    # Some databases are missing
-    print("\n  ❗ Required database files are missing.\n")
-    print("  To use Spaudible, you need to import these")
-    print("  Spotify databases into the data/databases directory:\n")
-    
-    total_size = 0
-    for filename, description in missing:
-        if "main" in description.lower():
-            size_info = "(~125 GB)"
-            total_size += 125
-        elif "audio" in description.lower():
-            size_info = "(~42 GB)"
-            total_size += 42
-        else:
-            size_info = ""
+            print(f"    • {filename} {size_info} ({description})")
         
-        print(f"    • {filename} {size_info}")
-    
-    if total_size > 0:
-        print(f"\n  Total disk space required: ~{total_size} GB\n")
+        if total_size > 0:
+            print(f"\n  Total disk space required: ~{total_size} GB\n")
 
-    print("  You can download the files from")
-    print("  https://annas-archive.org/torrents/spotify")
-    print("  (see README.md for more info).\n")
+        print("  You can download the files from")
+        print("  https://annas-archive.li/torrents/spotify")
+        print("  (see README.md for more info).\n")
+        
+        print("  Once the files are in place, please press 1 to continue:")
+        
+        options = [
+            "Re-check for database files",
+            "Exit program"
+        ]
+        
+        print_menu(options)
+        choice = get_choice(len(options))
+        
+        if choice == 1:
+            return "database_check"
+        else:
+            return "exit"
     
-    print("  Once the files are in place, please press 1 to continue:")
+    # Validate vector cache
+    is_valid, message = validate_vector_cache()
     
-    options = [
-        "Re-check for database files",
-        "Exit program"
-    ]
+    if is_valid:
+        print("\n  ✅ Spotify databases found!")
+        print(f"  ✅ {message}\n")
+        
+        # Display basic file info safely
+        vectors_path = PathConfig.get_vector_file()
+        index_path = PathConfig.get_index_file()
+        
+        try:
+            vector_size = vectors_path.stat().st_size / (1024**3)
+            index_size = index_path.stat().st_size / (1024**3)
+            
+            print(f"     • Vector file: {vector_size:.1f} GB")
+            print(f"     • Index file: {index_size:.1f} GB")
+        except FileNotFoundError as e:
+            print(f"  ⚠️  File not found: {e}")
+            print("  This indicates files were deleted after validation")
+        
+        # Offer options
+        print("\n  Would you like to:")
+        options = [
+            "Go to Main Menu",
+            "Re-run preprocessing",
+            "Check again",
+            "Exit"
+        ]
+        
+        print_menu(options)
+        choice = get_choice(len(options))
+        
+        if choice == 1:
+            return "main_menu"
+        elif choice == 2:
+            print("\n  ⚠️  This will delete existing processed files.")
+            confirm = input("  Are you sure? (yes/no): ").lower().strip()
+            if confirm == 'yes':
+                vector_files = [
+                    PathConfig.get_vector_file(),
+                    PathConfig.get_index_file()
+                ]
+                for file_path in vector_files:
+                    if file_path.exists():
+                        file_path.unlink()
+                return "preprocessing_prompt"
+            else:
+                return "database_check"
+        elif choice == 3:
+            return "database_check"
+        else:
+            return "exit"
     
-    print_menu(options)
-    choice = get_choice(len(options))
-    
-    if choice == 1:
-        return "database_check"
     else:
-        print("\n  Goodbye! Place the database files in data/databases and restart.")
-        return "exit"
+        # Vector cache is invalid
+        print("\n  ❗ Vector cache validation failed:")
+        print(f"     {message}\n")
+        
+        # Check if vectors file exists
+        vectors_path = PathConfig.get_vector_file()
+        if vectors_path.exists():
+            try:
+                vector_size = vectors_path.stat().st_size
+                header_size = 16
+                record_size = 104
+                num_vectors = (vector_size - header_size) // record_size
+                
+                # Verify exact vector count
+                if num_vectors == EXPECTED_VECTORS:
+                    print(f"  ✅ Vector file complete with {EXPECTED_VECTORS:,} vectors")
+                    print("  You can rebuild the index file instead of reprocessing all vectors")
+                    
+                    options = [
+                        "Rebuild index file",
+                        "Re-run full preprocessing",
+                        "Check again",
+                        "Exit"
+                    ]
+                    
+                    print_menu(options)
+                    choice = get_choice(len(options))
+                    
+                    if choice == 1:
+                        success = rebuild_index()
+                        if success:
+                            print("\n  ✅ Index file successfully rebuilt!")
+                            print("  Press Enter to return to main menu...")
+                            input()
+                            return "main_menu"
+                        else:
+                            print("\n  ❗ Failed to rebuild index")
+                            print("  Press Enter to try again...")
+                            input()
+                            return "database_check"
+                    elif choice == 2:
+                        print("\n  ⚠️  This will delete existing processed files.")
+                        confirm = input("  Are you sure? (yes/no): ").lower().strip()
+                        if confirm == 'yes':
+                            vector_files = [
+                                PathConfig.get_vector_file(),
+                                PathConfig.get_index_file()
+                            ]
+                            for file_path in vector_files:
+                                if file_path.exists():
+                                    file_path.unlink()
+                            return "preprocessing_prompt"
+                        else:
+                            return "database_check"
+                    elif choice == 3:
+                        return "database_check"
+                    else:
+                        return "exit"
+                else:
+                    print(f"  ❗ Vector file has {num_vectors:,} vectors, expected {EXPECTED_VECTORS:,}")
+            except FileNotFoundError:
+                print("  ❗ Vector file not found")
+        else:
+            print("  ❗ Vector file not found")
+        
+        print("  You can:")
+        options = [
+            "Re-run preprocessing (recommended)",
+            "Check again",
+            "Exit"
+        ]
+        
+        print_menu(options)
+        choice = get_choice(len(options))
+        
+        if choice == 1:
+            print("\n  ⚠️  This will delete existing processed files.")
+            confirm = input("  Are you sure? (yes/no): ").lower().strip()
+            if confirm == 'yes':
+                vector_files = [
+                    PathConfig.get_vector_file(),
+                    PathConfig.get_index_file()
+                ]
+                for file_path in vector_files:
+                    if file_path.exists():
+                        file_path.unlink()
+                return "preprocessing_prompt"
+            else:
+                return "database_check"
+        elif choice == 2:
+            return "database_check"
+        else:
+            return "exit"

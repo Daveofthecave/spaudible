@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 from config import PathConfig
+from datetime import datetime
 
 class ConfigManager:
     ALGORITHM_CHOICES = {
@@ -11,6 +12,15 @@ class ConfigManager:
     }
     
     DEFAULT_WEIGHTS = [1.0] * 32
+    DEFAULT_SETTINGS = {
+        'weights': DEFAULT_WEIGHTS,
+        'similarity_algorithm': 'cosine-euclidean',
+        'force_cpu': False,
+        'force_gpu': False,
+        'deduplicate': True,
+        'dedupe_threshold': 0.92,
+        "region_strength": 1.0
+    }
     
     _instance = None
     
@@ -26,14 +36,15 @@ class ConfigManager:
             if self.config_path.exists():
                 with open(self.config_path, 'r') as f:
                     self.settings = json.load(f)
-            else:
-                self.settings = {}
                 
-            # Initialize weights if not present
-            if 'weights' not in self.settings:
-                self.settings['weights'] = self.DEFAULT_WEIGHTS
+                # Ensure new settings exist
+                for key, default in self.DEFAULT_SETTINGS.items():
+                    if key not in self.settings:
+                        self.settings[key] = default
+            else:
+                self.settings = self.DEFAULT_SETTINGS.copy()
         except:
-            self.settings = {'weights': self.DEFAULT_WEIGHTS}
+            self.settings = self.DEFAULT_SETTINGS.copy()
     
     def save(self):
         with open(self.config_path, 'w') as f:
@@ -84,6 +95,58 @@ class ConfigManager:
     def reset_weights(self):
         self.settings['weights'] = self.DEFAULT_WEIGHTS
         self.save()
+    
+    def get_deduplicate(self):
+        return self.get('deduplicate', True)
+    
+    def set_deduplicate(self, value):
+        self.set('deduplicate', bool(value))
+
+    def set_dedupe_threshold(self, value):
+        threshold = float(value)
+        if not 0.5 <= threshold <= 1.0:
+            raise ValueError("Deduplication threshold must be between 0.5 and 1.0")
+        self.set('dedupe_threshold', threshold)
+
+    def get_region_strength(self) -> float:
+        """Get current region filter strength."""
+        return self.get('region_strength', 1.0)
+    
+    def set_region_strength(self, value: float):
+        """Set region filter strength (0.0-1.0)."""
+        value = max(0.0, min(1.0, float(value)))
+        self.set('region_strength', value)
+
+    def get_optimal_chunk_size(self) -> int:
+        """Get stored optimal chunk size for this hardware (default 200k)."""
+        return self.get('optimal_chunk_size', 200_000)
+    
+    def set_optimal_chunk_size(self, size: int):
+        """Store optimal chunk size and timestamp."""
+        self.set('optimal_chunk_size', size)
+        self.set('chunk_size_last_updated', datetime.now().isoformat())
+
+    def get_benchmark_result(self):
+        """Get cached benchmark result if available and valid."""
+        result = self.get('benchmark_result', None)
+        if result is None:
+            return None
+        
+        # Validate structure
+        required_keys = ['recommended_device', 'cpu_speed', 'gpu_speed', 'optimal_chunk_size']
+        if not all(key in result for key in required_keys):
+            # print("  ⚠️  Cached benchmark result is corrupted, ignoring...")
+            return None
+        
+        return result
+
+    def set_benchmark_result(self, result: dict):
+        """Save benchmark result to config file for persistence."""
+        self.set('benchmark_result', result)
+
+    def clear_benchmark_result(self):
+        """Clear cached benchmark result (e.g., when toggling force modes)."""
+        self.set('benchmark_result', None)
 
 # Singleton access
 config_manager = ConfigManager()
