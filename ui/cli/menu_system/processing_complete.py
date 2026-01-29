@@ -2,31 +2,31 @@
 from ui.cli.console_utils import print_header, print_menu, get_choice
 from pathlib import Path
 import json
-from config import PathConfig
+from config import PathConfig, EXPECTED_VECTORS
 from core.utilities.setup_validator import validate_vector_cache
 
 def check_processing_status():
     """Check if processing is complete and valid."""
     vectors_path = PathConfig.get_vector_file()
     index_path = PathConfig.get_index_file()
-    metadata_path = PathConfig.VECTORS / "metadata.json"
     
-    if not (vectors_path.exists() and index_path.exists() and metadata_path.exists()):
-        return False, "Processing files not found"
+    # Check essential files exist
+    if not vectors_path.exists():
+        return False, "Vector file not found"
+    if not index_path.exists():
+        return False, "Index file not found"
     
-    try:
-        with open(metadata_path, 'r') as f:
-            metadata = json.load(f)
-        
-        expected_tracks = 256_000_000
-        actual_tracks = metadata.get('total_tracks', 0)
-        
-        if actual_tracks < expected_tracks:
-            return False, f"Incomplete processing: {actual_tracks:,} tracks"
-        
-        return True, f"Processing complete: {actual_tracks:,} tracks"
-    except Exception as e:
-        return False, f"Metadata error: {str(e)}"
+    # Calculate actual track count from file size
+    vectors_size = vectors_path.stat().st_size
+    header_size = 16
+    record_size = 104
+    actual_tracks = (vectors_size - header_size) // record_size
+    
+    # Verify the correct number of vectors are present
+    if actual_tracks != EXPECTED_VECTORS:
+        return False, f"Incomplete processing: got {actual_tracks:,} tracks; expected {EXPECTED_VECTORS}."
+    
+    return True, f"Processing complete: {actual_tracks:,} tracks"
 
 def get_file_size_gb(file_path):
     """Get file size in GB."""
@@ -43,13 +43,6 @@ def screen_processing_complete():
     if is_complete:
         print(f"\n ✅ {message}")
         
-        # Read metadata
-        metadata_path = PathConfig.VECTORS / "metadata.json"
-        metadata = {}
-        if metadata_path.exists():
-            with open(metadata_path, 'r') as f:
-                metadata = json.load(f)
-        
         # Calculate file sizes
         vectors_path = PathConfig.get_vector_file()
         index_path = PathConfig.get_index_file()
@@ -58,12 +51,18 @@ def screen_processing_complete():
         index_gb = get_file_size_gb(index_path)
         total_gb = vectors_gb + index_gb
         
+        # Calculate actual tracks from file size
+        vectors_size = vectors_path.stat().st_size
+        header_size = 16
+        record_size = 104
+        actual_tracks = (vectors_size - header_size) // record_size
+        
         print("\n 📊 Processing Statistics:")
-        print(f"    • Total tracks: {metadata.get('total_tracks', 0):,}")
+        print(f"    • Total tracks: {actual_tracks:,}")
         print(f"    • Vector cache: {vectors_gb:.1f} GB")
         print(f"    • Vector index: {index_gb:.1f} GB")
         print(f"    • Total size: {total_gb:.1f} GB")
-        print(f"    • Created: {metadata.get('created_at', 'Unknown')}")
+        print(f"    • Created: Unknown")  # metadata.json not created by engine
         
         print("\n  🔍 Running final integrity validation...")
         is_valid, validation_msg = validate_vector_cache(checksum_validation=True)
@@ -86,18 +85,15 @@ def screen_processing_complete():
         if choice == 1:
             return "main_menu"
         elif choice == 2:
-            # This is now redundant but keep for user-initiated check
+            # Validate by checking file size match
             print("\n  🔍 Running quick integrity check...")
-            expected_bytes = metadata.get('total_tracks', 0) * 128
-            actual_bytes = vectors_path.stat().st_size if vectors_path.exists() else 0
+            expected_bytes = actual_tracks * record_size + header_size
+            actual_bytes = vectors_path.stat().st_size
             
-            if expected_bytes > 0:
-                match_percent = (actual_bytes / expected_bytes) * 100
-                print(f"  Vector file integrity: {match_percent:.1f}% of expected size")
-                if match_percent < 95:
-                    print("  ⚠️  Vector file may be incomplete")
-                else:
-                    print("  ✅ Vector file appears complete")
+            if actual_bytes == expected_bytes:
+                print("  ✅ Vector file size matches expected")
+            else:
+                print(f"  ⚠️  Size mismatch: {actual_bytes:,} vs {expected_bytes:,}")
             
             input("\n  Press Enter to continue...")
             return "processing_complete"
@@ -118,15 +114,20 @@ def screen_processing_complete():
         choice = get_choice(len(options))
         
         if choice == 1:
-            import shutil
+            import os
             vector_files = [
                 PathConfig.get_vector_file(),
-                PathConfig.get_index_file(),
-                PathConfig.VECTORS / "metadata.json"
+                PathConfig.get_index_file()
             ]
             for file_path in vector_files:
                 if file_path.exists():
-                    file_path.unlink()
+                    os.remove(file_path)
+            
+            # Also clean up metadata.json if it exists from previous runs
+            metadata_path = PathConfig.VECTORS / "metadata.json"
+            if metadata_path.exists():
+                metadata_path.unlink()
+                
             return "preprocessing_prompt"
         elif choice == 2:
             return "database_check"
