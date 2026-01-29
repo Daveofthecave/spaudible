@@ -38,7 +38,7 @@ def screen_database_check():
     if missing:
         print("\n  ❗ Required database files are missing.\n")
         print("  To use Spaudible, you need to import these")
-        print("  Spotify databases into the data/databases directory:\n")
+        print("  Spotify databases into the data/databases/ directory:\n")
         
         total_size = 0
         for filename, description in missing:
@@ -57,7 +57,7 @@ def screen_database_check():
             print(f"\n  Total disk space required: ~{total_size} GB\n")
 
         print("  You can download the files from")
-        print("  https://annas-archive.li/torrents/spotify")
+        print("  [coming soon!]")
         print("  (see README.md for more info).\n")
         
         print("  Once the files are in place, please press 1 to continue:")

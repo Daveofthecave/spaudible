@@ -18,7 +18,7 @@ def screen_preprocessing_prompt():
     print("  convert them into an optimized numerical search index.\n")
 
     print("  This process takes about 1-3 hours on an NVMe SSD,")
-    print("  and requires about 41 GB of additional disk space.")
+    print("  and requires about 34 GB of additional disk space.")
     print("  Your computer can be used normally during this time.\n")
     
     print("  Would you like to start the setup process now?")
