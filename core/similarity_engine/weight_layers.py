@@ -11,28 +11,39 @@ class WeightLayers:
     def __init__(self):
         # Baseline weights for each dimension
         self.baseline_weights = np.array([
-            1.0,  # acousticness
-            1.0,  # instrumentalness
-            1.0,  # speechiness
-            1.0,  # valence
-            1.0,  # danceability
-            1.0,  # energy
-            1.0,  # liveness
+            1.25,  # acousticness
+            1.25,  # instrumentalness
+            1.25,  # speechiness
+            0.95,  # valence
+            1.25,  # danceability
+            1.15,  # energy
+            1.25,  # liveness
             1.0,  # loudness
-            1.0,  # key
+            0.28,  # key
             1.0,  # mode
-            1.0,  # tempo
+            1.05,  # tempo
             1.0,  # time_signature_4_4
             1.0,  # time_signature_3_4
             1.0,  # time_signature_5_4
             1.0,  # time_signature_other
-            1.0,  # duration
-            1.0,  # release_date
-            1.0,  # popularity
-            1.0,  # artist_followers
+            0.8,  # duration
+            1.8,  # release_date
+            0.6,  # popularity
+            0.8,  # artist_followers
             # Genre weights
-            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 
-            1.0, 1.0, 1.0, 1.0, 1.0, 1.0
+            1.0, 
+            1.0, 
+            1.0, 
+            1.0, 
+            1.0, 
+            1.0, 
+            1.0, 
+            1.0, 
+            1.0, 
+            1.0, 
+            1.0, 
+            1.0, 
+            1.0
         ], dtype=np.float32)
         
         # Availability boost factor for present attributes
