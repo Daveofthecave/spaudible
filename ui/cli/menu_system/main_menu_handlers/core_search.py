@@ -72,7 +72,7 @@ def handle_core_search() -> str:
 
 def _search_by_track_id(
     track_id: str,
-    top_k: int = 25,
+    top_k: Optional[int] = None,
     search_mode: str = "sequential",
     with_metadata: bool = True,
     deduplicate: Optional[bool] = None
@@ -80,6 +80,9 @@ def _search_by_track_id(
     """
     Core search function for track IDs.
     """
+    if top_k is None:
+        top_k = config_manager.get_top_k()
+
     # print(f"   Finding songs similar to track: {track_id}")
     print(f"   Using algorithm: {config_manager.get_algorithm_name()}")     
     
