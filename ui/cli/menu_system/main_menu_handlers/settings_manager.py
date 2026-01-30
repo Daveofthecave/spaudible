@@ -39,6 +39,7 @@ def handle_settings() -> str:
     algorithm_name = config_manager.get_algorithm_name()
     deduplicate = config_manager.get_deduplicate()
     region_strength = config_manager.get_region_strength()
+    top_k = config_manager.get_top_k()
 
     # Ensure mutual exclusivity
     if force_cpu and force_gpu:
@@ -49,48 +50,45 @@ def handle_settings() -> str:
     gpu_status = "ON" if force_gpu else "OFF"
     deduplicate_status = "ON" if deduplicate else "OFF"
     region_strength_str = f"{region_strength:.2f}"
+    top_k_str = f"{top_k}"
     
     print("\n  ⚙️  Configuration & Diagnostics")
     
     options = [
-        f"🐌 Force CPU Mode: {cpu_status}",
-        f"🐆 Force GPU Mode: {gpu_status}",
-        f"🧮 Select Similarity Algorithm: {algorithm_name}", 
-        f"🧦 Deduplicate Results: {deduplicate_status}",
-        f"🌎️ Region Filter Strength: {region_strength_str}",
-        "⚖️  Adjust Feature Weights",
-        "❔ Check System Status",
-        "📊 Performance Test",
-        "🔄 Re-run Setup",
-        "ℹ️  About Spaudible",
-        "⬅️  Back to Main Menu"
+        f" ⬅️  Back to Main Menu",
+        f" 🐌 Force CPU Mode: {cpu_status}",
+        f" 🐆 Force GPU Mode: {gpu_status}",
+        f" 🧮 Select Similarity Algorithm: {algorithm_name}", 
+        f" 🧦 Deduplicate Results: {deduplicate_status}",
+        f" 🌎️ Region Filter Strength: {region_strength_str}",
+        f" 🔢 Number of Results: {top_k_str}",
+        f" ⚖️  Adjust Feature Weights",
+        f" ❔ Check System Status",
+        f"📊 Performance Test",
+        f"🔄 Re-run Setup",
+        f"ℹ️  About Spaudible"
     ]
     
     print_menu(options)
     choice = get_choice(len(options))
     
-    if choice == 1:
-        return _force_cpu_mode()
-    elif choice == 2:
-        return _force_gpu_mode()
-    elif choice == 3:
-        return _select_algorithm()
-    elif choice == 4:
-        return _toggle_deduplicate()
-    elif choice == 5:
-        return _adjust_region_strength()
-    elif choice == 6:
-        return _adjust_feature_weights()
-    elif choice == 7:
-        return _handle_system_status()
-    elif choice == 8:
-        return _handle_performance_test()
-    elif choice == 9:
-        return _handle_rerun_setup()
-    elif choice == 10:
-        return _handle_about()
-    else:
-        return "main_menu"
+    # Route handlers (note shifted indices)
+    handlers = {
+        1: lambda: "main_menu",
+        2: _force_cpu_mode,
+        3: _force_gpu_mode,
+        4: _select_algorithm,
+        5: _toggle_deduplicate,
+        6: _adjust_region_strength,
+        7: _set_number_of_results,
+        8: _adjust_feature_weights,
+        9: _handle_system_status,
+        10: _handle_performance_test,
+        11: _handle_rerun_setup,
+        12: _handle_about
+    }
+    
+    return handlers.get(choice, lambda: "settings")()
 
 def _force_cpu_mode() -> str:
     """Toggle CPU mode setting"""
@@ -188,6 +186,34 @@ def _adjust_region_strength() -> str:
                 print("  ❌ Value must be between 0.0 and 1.0")
         except ValueError:
             print("  ❌ Please enter a valid number")
+
+def _set_number_of_results() -> str:
+    """Set the number of search results to return."""
+    print_header("Number of Results")
+    
+    current = config_manager.get_top_k()
+    print(f"\n  Current number of results: {current}")
+    print("  (Range: 1-1000000)\n")
+    
+    while True:
+        try:
+            new_value = input("  Enter new value (or press Enter to keep current): ").strip()
+            if not new_value:
+                print("  ⏭️  Keeping current value")
+                break
+            
+            new_value = int(new_value)
+            if 1 <= new_value <= 1_000_000:
+                config_manager.set_top_k(new_value)
+                print(f"\n  ✅ Number of results set to: {new_value}")
+                break
+            else:
+                print("  ❌ Value must be between 1 and 1000000")
+        except ValueError:
+            print("  ❌ Please enter a valid number")
+    
+    input("\n  Press Enter to continue...")
+    return "settings"
 
 def _adjust_feature_weights() -> str:
     """Adjust feature weights for similarity calculations."""

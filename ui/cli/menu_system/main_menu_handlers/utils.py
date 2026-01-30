@@ -212,11 +212,15 @@ def validate_vector(vector: List[float]) -> Tuple[bool, Optional[str]]:
 
 def get_similarity_color(similarity: float) -> str:
     """Get a color indicator for similarity score."""
-    if similarity >= 0.95:
+    if similarity >= 0.9997:
+        return "🔵"  # Blue - identical match
+    if similarity >= 0.85:
         return "🟢"  # Green - excellent match
-    elif similarity >= 0.85:
+    elif similarity >= 0.7:
         return "🟡"  # Yellow - good match
-    elif similarity >= 0.75:
+    elif similarity >= 0.65:
         return "🟠"  # Orange - decent match
-    else:
+    elif similarity >= 0.5:
         return "🔴"  # Red - poor match
+    else:
+        return "🟣"  # Purple - terrible match

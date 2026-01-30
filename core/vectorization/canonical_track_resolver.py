@@ -59,7 +59,7 @@ class TrackResolver:
         
         # Strategy 4: Return original
         return track_id, False, {"strategy": "exact_match", "reason": "No canonical version found"}
-
+    
     def _has_audio_features(self, track_id: str) -> bool:
         """Check if a track has valid audio features."""
         conn = sqlite3.connect(self.audio_db_path)
@@ -184,6 +184,42 @@ class TrackResolver:
             "genres": result[7].split(',') if result[7] else [],
             "max_followers": result[8]
         }
+
+    def resolve_isrc(self, isrc: str) -> Optional[str]:
+        """
+        Resolve ISRC to the most popular track ID.
+        Requires main database to be present.
+        
+        Args:
+            isrc: 12-character ISRC code (e.g., "USIR20400274")
+            
+        Returns:
+            Spotify track ID string or None if not found
+        """
+        if not isrc or len(isrc) != 12 or not isrc[:2].isalpha():
+            return None
+        
+        try:
+            conn = sqlite3.connect(self.main_db_path)
+            cursor = conn.cursor()
+            
+            # Query for tracks with this ISRC, ordered by popularity
+            cursor.execute("""
+                SELECT t.id, t.popularity
+                FROM tracks t
+                WHERE t.external_id_isrc = ?
+                ORDER BY t.popularity DESC
+                LIMIT 1
+            """, (isrc,))
+            
+            result = cursor.fetchone()
+            conn.close()
+            
+            return result[0] if result else None
+            
+        except sqlite3.Error as e:
+            print(f"  ❌ Database error resolving ISRC: {e}")
+            return None
 
 class CanonicalVectorBuilder:
     """Builds track vectors with canonical resolution."""

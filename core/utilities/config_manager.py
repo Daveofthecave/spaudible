@@ -11,7 +11,42 @@ class ConfigManager:
         'euclidean': 'Euclidean Similarity'
     }
     
-    DEFAULT_WEIGHTS = [1.0] * 32
+    DEFAULT_WEIGHTS = [
+                       1.25,  # acousticness
+                       1.25,  # instrumentalness
+                       1.25,  # speechiness
+                       0.95,  # valence
+                       1.25,  # danceability
+                       1.15,  # energy
+                       1.25,  # liveness
+                       1.0,   # loudness
+                       0.28,  # key
+                       1.0,   # mode
+                       1.05,  # tempo
+                       1.0,   # time_signature_4_4
+                       1.0,   # time_signature_3_4
+                       1.0,   # time_signature_5_4
+                       1.0,   # time_signature_other
+                       0.8,   # duration
+                       1.8,   # release_date
+                       0.6,   # popularity
+                       0.8,   # artist_followers
+                       # Genre weights
+                       1.0, 
+                       1.0, 
+                       1.0, 
+                       1.0, 
+                       1.0, 
+                       1.0, 
+                       1.0, 
+                       1.0, 
+                       1.0, 
+                       1.0, 
+                       1.0, 
+                       1.0, 
+                       1.0
+                      ]
+
     DEFAULT_SETTINGS = {
         'weights': DEFAULT_WEIGHTS,
         'similarity_algorithm': 'cosine-euclidean',
@@ -19,7 +54,8 @@ class ConfigManager:
         'force_gpu': False,
         'deduplicate': True,
         'dedupe_threshold': 0.92,
-        "region_strength": 1.0
+        "region_strength": 1.0,
+        'top_k': 25  # How many songs in the output songlist
     }
     
     _instance = None
@@ -147,6 +183,15 @@ class ConfigManager:
     def clear_benchmark_result(self):
         """Clear cached benchmark result (e.g., when toggling force modes)."""
         self.set('benchmark_result', None)
+
+    def get_top_k(self) -> int:
+        """Get number of results to return per search."""
+        return self.get('top_k', 25)
+
+    def set_top_k(self, value: int):
+        """Set number of results (1-1M)."""
+        value = max(1, min(1_000_000, int(value)))
+        self.set('top_k', value)
 
 # Singleton access
 config_manager = ConfigManager()

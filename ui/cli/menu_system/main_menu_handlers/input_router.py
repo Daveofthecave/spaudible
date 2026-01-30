@@ -22,8 +22,15 @@ def route_input(user_input: str):
     detected_type = InputType.UNKNOWN
     processed_data = None
 
+    # ISRC codes (12 characters: CC-XXX-YY-NNNNN or CCXXXYYNNNNN format)
+    # Accept both formatted and compact forms
+    compact_isrc = user_input.replace('-', '').upper()
+    if len(compact_isrc) == 12 and compact_isrc[:2].isalpha() and compact_isrc[2:].isalnum():
+        detected_type = InputType.ISRC_CODE
+        processed_data = compact_isrc
+    
     # Spotify track URLs
-    if "open.spotify.com/track/" in user_input.lower():
+    elif "open.spotify.com/track/" in user_input.lower():
         track_id = extract_spotify_track_id(user_input)
         if track_id:
             detected_type = InputType.SPOTIFY_TRACK
@@ -36,7 +43,7 @@ def route_input(user_input: str):
             detected_type = InputType.SPOTIFY_PLAYLIST
             processed_data = playlist_id
     
-    # Spotify track IDs
+    # Spotify track IDs (22 chars)
     elif len(user_input) == 22 and re.match(r'^[A-Za-z0-9_-]+$', user_input):
         detected_type = InputType.TRACK_ID
         processed_data = user_input
@@ -50,12 +57,7 @@ def route_input(user_input: str):
                 detected_type = InputType.FILE_PATH
                 processed_data = expanded_path
     
-    # ISRC codes
-    elif len(user_input) == 12 and user_input[:2].isalpha() and user_input[2:].isalnum():
-        detected_type = InputType.ISRC_CODE
-        processed_data = user_input
-    
-    # Text query
+    # Text queries (fallback)
     elif len(user_input) >= 2:
         detected_type = InputType.TEXT_QUERY
         processed_data = user_input
