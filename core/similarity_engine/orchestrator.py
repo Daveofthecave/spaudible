@@ -22,6 +22,8 @@ from core.utilities.gpu_utils import get_gpu_info
 from core.utilities.config_manager import config_manager
 from core.vectorization.canonical_track_resolver import build_canonical_vector
 
+M = 6 # Multiplier for top_k to pull k * M song results
+
 class SearchOrchestrator:
     """High-performance similarity search coordinator for unified vector format."""
     
@@ -343,7 +345,7 @@ class SearchOrchestrator:
             self._region_source,
             self.total_vectors,
             self.vector_ops,
-            top_k=top_k * 3,
+            top_k=top_k * M,
             max_vectors=max_vectors,
             show_progress=show_progress,
             query_region=query_region,
@@ -427,15 +429,15 @@ class SearchOrchestrator:
         Single-pass strict deduplication: Same signature = same song.
         """
         # Get ISRCs and track IDs
-        isrcs = self.vector_reader.get_isrcs_batch(indices[:top_k * 2])
-        track_ids = self.vector_reader.get_track_ids_batch(indices[:top_k * 2])
+        isrcs = self.vector_reader.get_isrcs_batch(indices[:top_k * M])
+        track_ids = self.vector_reader.get_track_ids_batch(indices[:top_k * M])
         
         # Fetch metadata batch
         metadata_list = self.metadata_manager.get_track_metadata_batch(track_ids)
         
         # Build track info with normalized signatures
         track_info = []
-        for i, idx in enumerate(indices[:top_k * 2]):
+        for i, idx in enumerate(indices[:top_k * M]):
             metadata = metadata_list[i]
             artist = metadata.get('artist_name', 'Unknown').lower()
             title = metadata.get('track_name', 'Unknown').lower()
