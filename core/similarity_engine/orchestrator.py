@@ -424,9 +424,7 @@ class SearchOrchestrator:
     def _advanced_deduplication(self, indices: List[int], similarities: List[float], 
                             top_k: int) -> Tuple[List[int], List[float]]:
         """
-        ISRC-based deduplication with two-pass filtering.
-        Pass 1: Strict deduplication (ISRC + metadata signature)
-        Pass 2: Fill remaining slots (ISRC only)
+        Single-pass strict deduplication: Same signature = same song.
         """
         # Get ISRCs and track IDs
         isrcs = self.vector_reader.get_isrcs_batch(indices[:top_k * 2])
@@ -435,17 +433,21 @@ class SearchOrchestrator:
         # Fetch metadata batch
         metadata_list = self.metadata_manager.get_track_metadata_batch(track_ids)
         
-        # Build track info with signatures
+        # Build track info with normalized signatures
         track_info = []
         for i, idx in enumerate(indices[:top_k * 2]):
             metadata = metadata_list[i]
             artist = metadata.get('artist_name', 'Unknown').lower()
             title = metadata.get('track_name', 'Unknown').lower()
             
-            # Extract core title (remove features, remixes, etc.)
+            # Extract and normalize core title
             core_title = title.split('(')[0].split('-')[0].split('[')[0].strip()
             
-            # Create robust signature
+            # Aggressive whitespace normalization
+            import re
+            core_title = re.sub(r'\s+', ' ', core_title).strip()
+            artist = re.sub(r'\s+', ' ', artist).strip()
+            
             signature = f"{artist}|{core_title}"
             
             track_info.append({
@@ -455,10 +457,10 @@ class SearchOrchestrator:
                 'signature': signature
             })
         
-        # Sort by similarity descending for deterministic processing
+        # Sort by similarity
         track_info.sort(key=lambda x: x['similarity'], reverse=True)
         
-        # Pass 1: Strict deduplication
+        # Single pass: Strict on both ISRC and signature
         seen_signatures = set()
         seen_isrcs = set()
         deduped_indices = []
@@ -468,12 +470,12 @@ class SearchOrchestrator:
             if len(deduped_indices) >= top_k:
                 break
             
-            # Skip exact ISRC matches (same recording)
-            if track['isrc'] and track['isrc'] in seen_isrcs:
+            # Skip if signature matches (same song)
+            if track['signature'] in seen_signatures:
                 continue
             
-            # Skip core song duplicates (different recordings, same song)
-            if track['signature'] in seen_signatures:
+            # Skip if ISRC matches (same recording)
+            if track['isrc'] and track['isrc'] in seen_isrcs:
                 continue
             
             deduped_indices.append(track['index'])
@@ -481,26 +483,8 @@ class SearchOrchestrator:
             seen_signatures.add(track['signature'])
             seen_isrcs.add(track['isrc'])
         
-        # Pass 2: Fill remaining slots if needed (only filter by ISRC)
-        if len(deduped_indices) < top_k:
-            for track in track_info:
-                if len(deduped_indices) >= top_k:
-                    break
-                
-                # Skip if already added
-                if track['index'] in deduped_indices:
-                    continue
-                
-                # Skip only ISRC duplicates (allow different song versions)
-                if track['isrc'] and track['isrc'] in seen_isrcs:
-                    continue
-                
-                deduped_indices.append(track['index'])
-                deduped_similarities.append(track['similarity'])
-                seen_isrcs.add(track['isrc'])
-        
         return deduped_indices[:top_k], deduped_similarities[:top_k]
-    
+
     def _validate_implementation_parity(self):
         """Ensure CPU and GPU produce identical results."""
         test_vector = np.random.rand(32).astype(np.float32)
