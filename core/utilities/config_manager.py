@@ -11,41 +11,7 @@ class ConfigManager:
         'euclidean': 'Euclidean Similarity'
     }
     
-    DEFAULT_WEIGHTS = [
-                       1.25,  # acousticness
-                       1.25,  # instrumentalness
-                       1.25,  # speechiness
-                       0.95,  # valence
-                       1.25,  # danceability
-                       1.15,  # energy
-                       1.25,  # liveness
-                       1.0,   # loudness
-                       0.28,  # key
-                       1.0,   # mode
-                       1.05,  # tempo
-                       1.0,   # time_signature_4_4
-                       1.0,   # time_signature_3_4
-                       1.0,   # time_signature_5_4
-                       1.0,   # time_signature_other
-                       0.8,   # duration
-                       1.8,   # release_date
-                       0.6,   # popularity
-                       0.8,   # artist_followers
-                       # Genre weights
-                       1.0, 
-                       1.0, 
-                       1.0, 
-                       1.0, 
-                       1.0, 
-                       1.0, 
-                       1.0, 
-                       1.0, 
-                       1.0, 
-                       1.0, 
-                       1.0, 
-                       1.0, 
-                       1.0
-                      ]
+    DEFAULT_WEIGHTS = [1.0] * 32
 
     DEFAULT_SETTINGS = {
         'weights': DEFAULT_WEIGHTS,
