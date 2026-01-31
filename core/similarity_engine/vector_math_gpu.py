@@ -7,20 +7,23 @@ import torch
 import numpy as np
 from .weight_layers import WeightLayers
 from typing import List
+from core.utilities.config_manager import config_manager
 
 class VectorOpsGPU:
     """GPU-accelerated vector operations using PyTorch."""
     
     VECTOR_DIMENSIONS = 32
     DTYPE = torch.float32
-    
+
     def __init__(self, device="cuda"):
         self.device = device
         
         # Load weights
         self.weight_layers = WeightLayers()
-        self.baseline_weights = torch.tensor(
-            self.weight_layers.baseline_weights, 
+        
+        # Load weights directly from ConfigManager
+        self.user_weights = torch.tensor(
+            config_manager.get_weights(), 
             dtype=self.DTYPE,
             device=self.device
         )
@@ -34,7 +37,7 @@ class VectorOpsGPU:
             dtype=self.DTYPE,
             device=self.device
         )
-        self.user_weights = torch.ones(32, dtype=self.DTYPE, device=self.device)
+        
         self.genre_mask = torch.zeros(32, dtype=torch.bool, device=self.device)
         self.genre_mask[19:32] = True
     
@@ -45,9 +48,13 @@ class VectorOpsGPU:
         self.user_weights = torch.tensor(weights, dtype=self.DTYPE, device=self.device)
     
     def reset_weights(self):
-        """Reset weights to baseline."""
-        self.user_weights = torch.ones(32, dtype=self.DTYPE, device=self.device)
-    
+        """Reset weights to baseline (from Config defaults)."""
+        self.user_weights = torch.tensor(
+            config_manager.DEFAULT_VECTOR_WEIGHTS, 
+            dtype=self.DTYPE, 
+            device=self.device
+        )
+
     # Add cached bitmask to avoid recreation
     @staticmethod
     def _get_bitmask(device):
@@ -88,8 +95,7 @@ class VectorOpsGPU:
             self.genre_reduction
         ).unsqueeze(1)
         
-        # Create weight matrix
-        weights = self.baseline_weights * self.availability_boost * self.user_weights
+        weights = self.user_weights * self.availability_boost
         
         # Apply genre adjustment
         weights_expanded = weights.unsqueeze(0).expand(batch_size, -1)
@@ -150,7 +156,7 @@ class VectorOpsGPU:
         valid_mask = query_valid & vector_valid
         
         # Compute weighted differences
-        weights = self.baseline_weights * self.availability_boost * self.user_weights
+        weights = self.user_weights * self.availability_boost
         weighted_diff = (query_expanded - vectors) * weights.unsqueeze(0)
         
         # Apply validity mask to zero out invalid dimensions

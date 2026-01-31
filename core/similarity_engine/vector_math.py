@@ -3,6 +3,7 @@ import numpy as np
 from numba import njit, prange
 from typing import List
 from .weight_layers import WeightLayers
+from core.utilities.config_manager import config_manager
 
 class VectorOps:
     """Optimized vector operations using Numba with mask support."""
@@ -13,12 +14,14 @@ class VectorOps:
     def __init__(self, algorithm='cosine-euclidean'):
         self.algorithm = algorithm
         self.weight_layers = WeightLayers()
-        self.baseline_weights = self.weight_layers.baseline_weights.astype(np.float32)
+        
+        # Load weights directly from ConfigManager
+        self.user_weights = np.array(config_manager.get_weights(), dtype=np.float32)
+        
         self.genre_reduction = np.float32(self.weight_layers.genre_reduction)
         self.availability_boost = np.float32(self.weight_layers.availability_boost)
         self.genre_mask = np.zeros(32, dtype=np.bool_)
         self.genre_mask[19:32] = True  # Dimensions 20-32
-        self.user_weights = np.ones(32, dtype=np.float32)
 
     def set_user_weights(self, weights: List[float]):
         """Set user-defined weights at runtime."""
@@ -27,8 +30,8 @@ class VectorOps:
         self.user_weights = np.array(weights, dtype=np.float32)
 
     def reset_weights(self):
-        """Reset weights to baseline values."""
-        self.user_weights = np.ones(32, dtype=np.float32)        
+        """Reset weights to baseline values (from Config defaults)."""
+        self.user_weights = np.array(config_manager.DEFAULT_VECTOR_WEIGHTS, dtype=np.float32)        
 
     def compute_similarity(self, query: np.ndarray, vectors, masks) -> np.ndarray:
         """Main entry point with mask support"""
@@ -52,7 +55,6 @@ class VectorOps:
             query.astype(np.float32),
             vectors.astype(np.float32),
             masks.astype(np.uint32),
-            self.baseline_weights,
             self.user_weights,
             self.genre_mask,
             self.availability_boost,
@@ -62,7 +64,7 @@ class VectorOps:
     @staticmethod
     @njit(parallel=True, fastmath=True, cache=True)
     def _numba_cosine_similarity(query: np.ndarray, vectors: np.ndarray, masks: np.ndarray, 
-                                 baseline_weights: np.ndarray, user_weights: np.ndarray,
+                                 user_weights: np.ndarray,
                                  genre_mask: np.ndarray, availability_boost: float, 
                                  genre_reduction: float) -> np.ndarray:
         n = vectors.shape[0]
@@ -98,7 +100,8 @@ class VectorOps:
                 if q_val == -1 or v_val == -1:
                     continue
                 
-                weight = baseline_weights[j] * availability_boost * user_weights[j]
+                weight = user_weights[j] * availability_boost
+                
                 if genre_mask[j] and not vector_has_genre:
                     weight *= adj_factor
                 
@@ -120,7 +123,6 @@ class VectorOps:
             query.astype(np.float32),
             vectors.astype(np.float32),
             masks.astype(np.uint32),
-            self.baseline_weights,
             self.user_weights,
             self.genre_mask,
             self.availability_boost,
@@ -133,7 +135,6 @@ class VectorOps:
         query: np.ndarray, 
         vectors: np.ndarray, 
         masks: np.ndarray,
-        baseline_weights: np.ndarray, 
         user_weights: np.ndarray,
         genre_mask: np.ndarray,
         availability_boost: float, 
@@ -173,8 +174,7 @@ class VectorOps:
                 if q_val == -1 or v_val == -1:
                     continue
                 
-                # Include user_weights in calculation
-                weight = baseline_weights[j] * availability_boost * user_weights[j]
+                weight = user_weights[j] * availability_boost
                 if genre_mask[j] and not vector_has_genre:
                     weight *= adj_factor
                 

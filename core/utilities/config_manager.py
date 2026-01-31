@@ -11,10 +11,44 @@ class ConfigManager:
         'euclidean': 'Euclidean Similarity'
     }
     
-    DEFAULT_WEIGHTS = [1.0] * 32
+    DEFAULT_VECTOR_WEIGHTS = [
+                              1.25,  # acousticness
+                              1.25,  # instrumentalness
+                              1.25,  # speechiness
+                              0.95,  # valence
+                              1.25,  # danceability
+                              1.15,  # energy
+                              1.25,  # liveness
+                              1.0,   # loudness
+                              0.28,  # key
+                              1.0,   # mode
+                              1.05,  # tempo
+                              1.0,   # time_signature_4_4
+                              1.0,   # time_signature_3_4
+                              1.0,   # time_signature_5_4
+                              1.0,   # time_signature_other
+                              0.8,   # duration
+                              1.8,   # release_date
+                              0.6,   # popularity
+                              0.8,   # artist_followers
+                              # Genre weights
+                              1.0, 
+                              1.0, 
+                              1.0, 
+                              1.0, 
+                              1.0, 
+                              1.0, 
+                              1.0, 
+                              1.0, 
+                              1.0, 
+                              1.0, 
+                              1.0, 
+                              1.0, 
+                              1.0
+                             ]
 
     DEFAULT_SETTINGS = {
-        'weights': DEFAULT_WEIGHTS,
+        'vector_weights': DEFAULT_VECTOR_WEIGHTS,
         'similarity_algorithm': 'cosine-euclidean',
         'force_cpu': False,
         'force_gpu': False,
@@ -39,6 +73,20 @@ class ConfigManager:
                 with open(self.config_path, 'r') as f:
                     self.settings = json.load(f)
                 
+                # Handle the transition from 'weights' to 'vector_weights'.
+                # If the old key 'weights' exists, we need to decide what to do.
+                # If 'weights' was the default [1.0]*32, we just use the new defaults.
+                # If 'weights' was custom, we might want to migrate it, but given the 
+                # semantic change (multipliers vs absolute weights), it's safer 
+                # to just drop the old key and use the new defaults to ensure correctness.
+                
+                if 'weights' in self.settings:
+                    # If the old key exists, we remove it so the new key takes over.
+                    # This prevents the old multiplier logic from interfering.
+                    del self.settings['weights']
+                    # We don't save here to avoid unnecessary writes, 
+                    # but it will be saved on next change.
+
                 # Ensure new settings exist
                 for key, default in self.DEFAULT_SETTINGS.items():
                     if key not in self.settings:
@@ -84,18 +132,20 @@ class ConfigManager:
         return self.ALGORITHM_CHOICES.get(algo, 'Unknown')
     
     def get_weights(self):
-        return self.settings.get('weights', self.DEFAULT_WEIGHTS)
+        return self.settings.get('vector_weights', self.DEFAULT_VECTOR_WEIGHTS)
     
     def set_weights(self, weights):
+        """Set vector weights directly."""
         if len(weights) != 32:
             raise ValueError("Weights must have exactly 32 values")
         if not all(isinstance(w, (int, float)) for w in weights):
             raise ValueError("All weights must be numbers")
-        self.settings['weights'] = weights
+        self.settings['vector_weights'] = weights
         self.save()
     
     def reset_weights(self):
-        self.settings['weights'] = self.DEFAULT_WEIGHTS
+        """Reset weights to baseline defaults."""
+        self.settings['vector_weights'] = self.DEFAULT_VECTOR_WEIGHTS.copy()
         self.save()
     
     def get_deduplicate(self):
