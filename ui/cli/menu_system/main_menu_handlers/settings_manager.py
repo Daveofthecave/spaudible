@@ -544,7 +544,7 @@ def _handle_about() -> str:
     """Display about information."""
     print_header("About Spaudible")
     
-    print("\n  Spaudible - Music Discovery Tool\n")
+    print("\n  Spaudible - Song Discovery Tool\n")
 
     print(f"  Version {VERSION}")
     print("  by Daveofthecave")
