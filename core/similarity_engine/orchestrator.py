@@ -491,17 +491,15 @@ class SearchOrchestrator:
         """Ensure CPU and GPU produce identical results."""
         test_vector = np.random.rand(32).astype(np.float32)
         test_vectors = np.random.rand(1000, 32).astype(np.float32)
-        # FIX: Use uint32 for masks since they're stored as unsigned in the file
+        # Use uint32 for masks since they're stored as unsigned in the file
         test_masks = np.random.randint(0, 2**32, size=1000, dtype=np.uint32)
         
         # CPU
-        cpu_ops = VectorOps(algorithm=self.algorithm)
-        cpu_results = cpu_ops.compute_similarity(test_vector, test_vectors, test_masks)
+        cpu_results = self.vector_ops.compute_similarity(test_vector, test_vectors, test_masks)
         
         # GPU
         if torch.cuda.is_available() and hasattr(self, 'gpu_ops') and self.gpu_ops is not None:
             gpu_tensor = torch.tensor(test_vectors, device='cuda')
-            # Convert to int32 for PyTorch (no uint32 in torch), but preserve bit pattern
             gpu_masks = torch.tensor(test_masks.astype(np.int32), device='cuda')
             
             if self.algorithm == 'cosine':

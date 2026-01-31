@@ -53,6 +53,7 @@ class VectorOps:
             vectors.astype(np.float32),
             masks.astype(np.uint32),
             self.baseline_weights,
+            self.user_weights,
             self.genre_mask,
             self.availability_boost,
             self.genre_reduction
@@ -61,8 +62,9 @@ class VectorOps:
     @staticmethod
     @njit(parallel=True, fastmath=True, cache=True)
     def _numba_cosine_similarity(query: np.ndarray, vectors: np.ndarray, masks: np.ndarray, 
-                               baseline_weights: np.ndarray, genre_mask: np.ndarray,
-                               availability_boost: float, genre_reduction: float) -> np.ndarray:
+                                 baseline_weights: np.ndarray, user_weights: np.ndarray,
+                                 genre_mask: np.ndarray, availability_boost: float, 
+                                 genre_reduction: float) -> np.ndarray:
         n = vectors.shape[0]
         similarities = np.empty(n, dtype=np.float32)
         query_has_genre = np.any(query[genre_mask] != -1)
@@ -96,7 +98,7 @@ class VectorOps:
                 if q_val == -1 or v_val == -1:
                     continue
                 
-                weight = baseline_weights[j] * availability_boost
+                weight = baseline_weights[j] * availability_boost * user_weights[j]
                 if genre_mask[j] and not vector_has_genre:
                     weight *= adj_factor
                 
@@ -196,12 +198,14 @@ class VectorOps:
         return self._numba_euclidean_similarity(
             query.astype(np.float32),
             vectors.astype(np.float32),
-            masks.astype(np.uint32)
+            masks.astype(np.uint32),
+            self.user_weights
         )
 
     @staticmethod
     @njit(parallel=True, fastmath=True)
-    def _numba_euclidean_similarity(query: np.ndarray, vectors: np.ndarray, masks: np.ndarray) -> np.ndarray:
+    def _numba_euclidean_similarity(query: np.ndarray, vectors: np.ndarray, masks: np.ndarray,
+                                    user_weights: np.ndarray) -> np.ndarray:
         n = vectors.shape[0]
         similarities = np.empty(n, dtype=np.float32)
         
@@ -222,7 +226,7 @@ class VectorOps:
                 if q_val == -1 or v_val == -1:
                     continue
                     
-                diff = q_val - v_val
+                diff = (q_val - v_val) * user_weights[j]
                 sq_diff += diff * diff
                 valid_dims += 1
             
