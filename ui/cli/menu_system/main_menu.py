@@ -7,9 +7,9 @@ def screen_main_menu():
     print_header("🎵 Spaudible - Song Discovery Tool")
     
     print()
-    print("  Spaudible discovers music similar to any Spotify")
-    print("  track you provide. Input a track ID or URL to")
-    print("  receive a playlist of acoustically similar songs")
+    print("  Spaudible discovers music similar to any Spotify track")
+    print("  you provide. Input a song name, track ID, URL, or ISRC")
+    print("  to receive a playlist of acoustically similar songs")
     print("  from a collection of 256 million tracks.\n")
 
     options = [

@@ -194,7 +194,7 @@ class SearchOrchestrator:
         Run CPU vs GPU benchmark and return best configuration.
         OPTIMIZED: Uses small test vectors and lets CPU adaptive resizer do its job.
         """
-        print("   Running auto-benchmark...")
+        print("\n   Running auto-benchmark...")
         results = {
             'cpu_speed': 0,
             'gpu_speed': 0,

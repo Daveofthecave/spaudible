@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional, Tuple, Any
 from ui.cli.console_utils import print_header, format_elapsed_time, clear_screen
 from .input_router import route_input
+from .text_search import interactive_text_search, simple_text_search_fallback
 from .utils import (
     check_preprocessed_files,
     get_metadata_db_path,
@@ -277,11 +278,29 @@ def _handle_audio_file(file_path: str) -> str:
     return "core_search"
 
 def _handle_text_search(query: str) -> str:
-    print(f"   Searching for: '{query}'")
-    print("   Text search coming soon!")
-    print("\n   This feature will require Spotify databases for artist/song lookup.")
-    input("\n   Press Enter to return to search...")
-    return "core_search"
+    """
+    Handle text-based search queries (e.g., "Keane Perfect Symmetry").
+    Uses interactive CLI with arrow-key navigation.
+    """
+    print_header("Text Search")
+    print(f"\n  Searching for: '{query}'")
+    
+    # Check preprocessed files
+    files_exist, error_msg = check_preprocessed_files()
+    if not files_exist:
+        print(f"\n  ❌ {error_msg}")
+        input("\n  Press Enter to return...")
+        return "core_search"
+    
+    # Use interactive search
+    track_id = interactive_text_search(query)
+    
+    if track_id:
+        # User selected a track, now find similar songs
+        return _search_by_track_id(track_id)
+    else:
+        # User cancelled
+        return "core_search"
 
 def _handle_spotify_playlist(playlist_id: str) -> str:
     print(f"   Analyzing playlist: {playlist_id}")
