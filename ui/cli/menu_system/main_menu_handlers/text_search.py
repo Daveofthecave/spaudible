@@ -10,12 +10,12 @@ from prompt_toolkit.layout import Layout, HSplit, Window, FormattedTextControl
 from prompt_toolkit.layout.controls import BufferControl
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style
+from prompt_toolkit.keys import Keys
 from core.utilities.text_search_utils import search_tracks_by_permutations, parse_query_permutations, SearchResult
 
 def interactive_text_search(initial_query: str = "") -> Optional[str]:
     """
     Interactive text search with arrow-key navigation and query editing.
-    Fixed for prompt_toolkit compatibility.
     """
     from prompt_toolkit.application import Application
     from prompt_toolkit.buffer import Buffer
@@ -29,19 +29,19 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
     selected_idx = 0
     query = initial_query
     
-    # === FIX #1: Track last searched query and cache results ===
-    last_searched_query = ""  # Track what we last searched for
+    # Track query state
+    last_searched_query = ""  # Last query that was actually searched
     cached_results = None     # Cache results to avoid re-searching
     
     # Create query buffer for editing
     query_buffer = Buffer(
-        multiline=False,
-        accept_handler=lambda buf: perform_search_if_changed()
+        multiline=False
     )
     
-    # Set initial text if provided
+    # Set initial text and cursor position
     if initial_query:
         query_buffer.text = initial_query
+        query_buffer.cursor_position = len(initial_query)  # Cursor at end
     
     # UI components
     query_window = Window(
@@ -68,8 +68,7 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
     # Key bindings
     kb = KeyBindings()
     
-    # === FIX #2: Only search when query actually changes ===
-    def perform_search_if_changed():
+    def perform_search():
         """Execute search and update results display"""
         nonlocal results, selected_idx, query, last_searched_query, cached_results
         
@@ -78,7 +77,7 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
             results_window.content.text = "Enter a search query above..."
             return
         
-        # If query hasn't changed and we have cached results, reuse them
+        # Only search if query actually changed
         if query == last_searched_query and cached_results is not None:
             results = cached_results
             update_results_display()
@@ -132,45 +131,87 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         status += " | ↑↓ Navigate | Enter=Select | Ctrl+C=Cancel | Backspace=Edit"
         status_window.content.text = status
     
+    # FIX: Navigation in results list (global, auto-switches focus)
     @kb.add('up')
     def move_up(event):
-        """Navigate up in results list"""
+        """Navigate up in results list (auto-switches from query field)"""
         nonlocal selected_idx
         if results:
+            # If in query window, switch to results first
+            if event.app.layout.current_window == query_window:
+                event.app.layout.focus(results_window)
+            # Then navigate up
             selected_idx = max(0, selected_idx - 1)
             update_results_display()
     
     @kb.add('down')
     def move_down(event):
-        """Navigate down in results list"""
+        """Navigate down in results list (auto-switches from query field)"""
         nonlocal selected_idx
         if results:
+            # If in query window, switch to results first
+            if event.app.layout.current_window == query_window:
+                event.app.layout.focus(results_window)
+            # Then navigate down
             selected_idx = min(len(results) - 1, selected_idx + 1)
             update_results_display()
     
-    # === FIX #3: Smart Enter handler that checks if query changed ===
-    @kb.add('enter')
-    def handle_enter(event):
-        """Handle Enter key with proper focus logic"""
-        # If we're in the query field
-        if event.app.layout.current_window == query_window:
-            # Only search if query changed
-            current_query = query_buffer.text.strip()
-            if current_query != last_searched_query:
-                perform_search_if_changed()
-            
-            # Move focus to results (this happens on first Enter)
-            event.app.layout.focus(results_window)
-        else:
-            # We're in results field: select the track
-            if results and selected_idx < len(results):
-                event.app.exit(result=results[selected_idx].track_id)
+    # FIX: Cursor movement in query field (always works, switches focus)
+    @kb.add('left')
+    def move_left(event):
+        """Move cursor left in query field (switches focus if needed)"""
+        event.app.layout.focus(query_window)
+        query_buffer.cursor_position = max(0, query_buffer.cursor_position - 1)
     
+    @kb.add('right')
+    def move_right(event):
+        """Move cursor right in query field (switches focus if needed)"""
+        event.app.layout.focus(query_window)
+        query_buffer.cursor_position = min(len(query_buffer.text), query_buffer.cursor_position + 1)
+    
+    # Backspace handling
     @kb.add('backspace')
     def handle_backspace(event):
-        """Switch focus to query field for editing"""
-        event.app.layout.focus(query_window)
+        """Handle backspace in query field"""
+        if event.app.layout.current_window == query_window:
+            if query_buffer.cursor_position > 0:
+                query_buffer.delete_before_cursor()
+        else:
+            # Switch focus to query field
+            event.app.layout.focus(query_window)
     
+    # Delete handling
+    @kb.add('delete')
+    def handle_delete(event):
+        """Handle delete in query field"""
+        if event.app.layout.current_window == query_window:
+            query_buffer.delete()
+    
+    # Enter key handling
+    @kb.add('enter')
+    def handle_enter(event):
+        """Handle Enter key - context-aware behavior"""
+        current_query = query_buffer.text.strip()
+        
+        # If we're in the query field
+        if event.app.layout.current_window == query_window:
+            # Always perform search when in query field
+            perform_search()
+            # Move focus to results after search
+            event.app.layout.focus(results_window)
+        else:
+            # We're in results field
+            # Check if query was modified since last search
+            if current_query != last_searched_query:
+                # Query changed - re-run search instead of selecting
+                perform_search()
+                event.app.layout.focus(results_window)
+            else:
+                # Query unchanged - select track
+                if results and selected_idx < len(results):
+                    event.app.exit(result=results[selected_idx].track_id)
+    
+    # Cancel keys
     @kb.add('c-c')
     def handle_cancel(event):
         """Cancel search and return to main menu"""
@@ -181,9 +222,19 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         """Escape key also cancels"""
         event.app.exit(result=None)
     
+    # FIX: Catch-all for printable characters - route to query field
+    @kb.add(Keys.Any)
+    def handle_typing(event):
+        """Any printable character switches to query field and inserts character"""
+        # Switch focus to query field
+        event.app.layout.focus(query_window)
+        
+        # Insert the character into the buffer at cursor position
+        query_buffer.insert_text(event.data, overwrite=False)
+    
     # Initial search if query provided
     if query:
-        perform_search_if_changed()
+        perform_search()
     
     # Create layout
     layout = Layout(
