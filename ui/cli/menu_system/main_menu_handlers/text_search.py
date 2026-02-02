@@ -9,8 +9,6 @@ from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.layout import Layout, HSplit, Window, FormattedTextControl
 from prompt_toolkit.layout.controls import BufferControl
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.widgets import SearchToolbar
-from prompt_toolkit.formatted_text import HTML, merge_formatted_text
 from prompt_toolkit.styles import Style
 from core.utilities.text_search_utils import search_tracks_by_permutations, parse_query_permutations, SearchResult
 
@@ -31,10 +29,14 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
     selected_idx = 0
     query = initial_query
     
+    # === FIX #1: Track last searched query and cache results ===
+    last_searched_query = ""  # Track what we last searched for
+    cached_results = None     # Cache results to avoid re-searching
+    
     # Create query buffer for editing
     query_buffer = Buffer(
         multiline=False,
-        accept_handler=lambda buf: perform_search()
+        accept_handler=lambda buf: perform_search_if_changed()
     )
     
     # Set initial text if provided
@@ -66,19 +68,30 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
     # Key bindings
     kb = KeyBindings()
     
-    def perform_search():
+    # === FIX #2: Only search when query actually changes ===
+    def perform_search_if_changed():
         """Execute search and update results display"""
-        nonlocal results, selected_idx, query
+        nonlocal results, selected_idx, query, last_searched_query, cached_results
         
         query = query_buffer.text.strip()
         if not query:
             results_window.content.text = "Enter a search query above..."
             return
         
+        # If query hasn't changed and we have cached results, reuse them
+        if query == last_searched_query and cached_results is not None:
+            results = cached_results
+            update_results_display()
+            return
+        
+        # New query - perform actual search
+        last_searched_query = query
+        
         try:
             # Parse permutations and search
             permutations = parse_query_permutations(query)
             results = search_tracks_by_permutations(permutations, limit=50)
+            cached_results = results  # Cache for potential reuse
             selected_idx = 0
             
             if not results:
@@ -88,6 +101,7 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         except Exception as e:
             results_window.content.text = f"Search error: {str(e)}"
             results = []
+            cached_results = None
     
     def update_results_display():
         """Update the results list with current selection"""
@@ -134,15 +148,21 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
             selected_idx = min(len(results) - 1, selected_idx + 1)
             update_results_display()
     
+    # === FIX #3: Smart Enter handler that checks if query changed ===
     @kb.add('enter')
     def handle_enter(event):
-        """Handle Enter key based on context"""
-        # If query field is focused, perform search
+        """Handle Enter key with proper focus logic"""
+        # If we're in the query field
         if event.app.layout.current_window == query_window:
-            perform_search()
+            # Only search if query changed
+            current_query = query_buffer.text.strip()
+            if current_query != last_searched_query:
+                perform_search_if_changed()
+            
+            # Move focus to results (this happens on first Enter)
             event.app.layout.focus(results_window)
         else:
-            # Results field is focused: select track
+            # We're in results field: select the track
             if results and selected_idx < len(results):
                 event.app.exit(result=results[selected_idx].track_id)
     
@@ -163,7 +183,7 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
     
     # Initial search if query provided
     if query:
-        perform_search()
+        perform_search_if_changed()
     
     # Create layout
     layout = Layout(
