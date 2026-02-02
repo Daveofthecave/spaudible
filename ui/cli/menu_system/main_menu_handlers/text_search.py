@@ -3,7 +3,6 @@
 Interactive text search interface for Spaudible.
 Provides arrow-key navigation, query editing, and track selection.
 """
-
 from typing import Optional, List
 from prompt_toolkit import Application
 from prompt_toolkit.buffer import Buffer
@@ -20,6 +19,12 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
     Interactive text search with arrow-key navigation and query editing.
     Fixed for prompt_toolkit compatibility.
     """
+    from prompt_toolkit.application import Application
+    from prompt_toolkit.buffer import Buffer
+    from prompt_toolkit.layout import Layout, HSplit, Window
+    from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.styles import Style
     
     # State management
     results: List[SearchResult] = []
@@ -36,10 +41,27 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
     if initial_query:
         query_buffer.text = initial_query
     
-    # UI Components
-    query_control = BufferControl(buffer=query_buffer)
-    results_control = FormattedTextControl(text="")
-    status_control = FormattedTextControl(text="")
+    # UI components
+    query_window = Window(
+        height=1,
+        content=BufferControl(buffer=query_buffer),
+        style="class:query-field",
+        cursorline=True
+    )
+    
+    results_window = Window(
+        height=20,
+        content=FormattedTextControl(text=""),
+        style="class:results-list",
+        cursorline=False,
+        always_hide_cursor=True
+    )
+    
+    status_window = Window(
+        height=1,
+        content=FormattedTextControl(text=""),
+        style="class:status-bar"
+    )
     
     # Key bindings
     kb = KeyBindings()
@@ -50,7 +72,7 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         
         query = query_buffer.text.strip()
         if not query:
-            results_control.text = "Enter a search query above..."
+            results_window.content.text = "Enter a search query above..."
             return
         
         try:
@@ -60,17 +82,17 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
             selected_idx = 0
             
             if not results:
-                results_control.text = f"No results found for '{query}'"
+                results_window.content.text = f"No results found for '{query}'"
             else:
                 update_results_display()
         except Exception as e:
-            results_control.text = f"Search error: {str(e)}"
+            results_window.content.text = f"Search error: {str(e)}"
             results = []
     
     def update_results_display():
         """Update the results list with current selection"""
         if not results:
-            results_control.text = "No results"
+            results_window.content.text = "No results"
             return
         
         lines = []
@@ -84,7 +106,7 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         if len(results) > 20:
             lines.append(f"  ... and {len(results) - 20} more")
         
-        results_control.text = "\n".join(lines)
+        results_window.content.text = "\n".join(lines)
     
     def update_status_bar():
         """Update status bar text"""
@@ -94,7 +116,7 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
             status = f"Query: {query} | {len(results)} results"
         
         status += " | ↑↓ Navigate | Enter=Select | Ctrl+C=Cancel | Backspace=Edit"
-        status_control.text = status
+        status_window.content.text = status
     
     @kb.add('up')
     def move_up(event):
@@ -116,9 +138,9 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
     def handle_enter(event):
         """Handle Enter key based on context"""
         # If query field is focused, perform search
-        if event.app.layout.current_window.content == query_control:
+        if event.app.layout.current_window == query_window:
             perform_search()
-            event.app.layout.focus(results_control.window)
+            event.app.layout.focus(results_window)
         else:
             # Results field is focused: select track
             if results and selected_idx < len(results):
@@ -127,7 +149,7 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
     @kb.add('backspace')
     def handle_backspace(event):
         """Switch focus to query field for editing"""
-        event.app.layout.focus(query_control.window)
+        event.app.layout.focus(query_window)
     
     @kb.add('c-c')
     def handle_cancel(event):
@@ -146,37 +168,21 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
     # Create layout
     layout = Layout(
         HSplit([
-            # Query field
+            # Query label
             Window(
                 height=1,
                 content=FormattedTextControl(text="Search query:"),
                 style="class:query-label"
             ),
-            Window(
-                height=1,
-                content=query_control,
-                style="class:query-field",
-                cursorline=True
-            ),
-            # Results list
+            query_window,
+            # Results label
             Window(
                 height=1,
                 content=FormattedTextControl(text="Results:"),
                 style="class:results-label"
             ),
-            Window(
-                height=20,
-                content=results_control,
-                style="class:results-list",
-                cursorline=False,
-                always_hide_cursor=True
-            ),
-            # Status bar
-            Window(
-                height=1,
-                content=status_control,
-                style="class:status-bar"
-            )
+            results_window,
+            status_window
         ])
     )
     
@@ -200,9 +206,9 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
     
     # Set initial focus
     if query and results:
-        app.layout.focus(results_control.window)
+        app.layout.focus(results_window)
     else:
-        app.layout.focus(query_control.window)
+        app.layout.focus(query_window)
     
     # Run the event loop
     result = app.run()
