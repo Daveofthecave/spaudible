@@ -1,12 +1,11 @@
 # core/utilities/text_search_utils.py
 """
 Text-based search utilities for Spaudible.
-Provides fast search using SQLite FTS5 virtual table.
-Creates FTS5 index once for sub-second text search.
+Provides permutation-aware search using existing SQLite indexes.
+Creates optimized case-insensitive indexes for fast text search.
 """
 import re
 import shutil
-import time
 from dataclasses import dataclass
 from typing import List, Dict, Tuple, Optional, Any
 from pathlib import Path
@@ -41,147 +40,95 @@ class SearchResult:
     
     def extract_year(self) -> Optional[str]:
         """Extract year from release_date if available."""
+        # This would be fetched from the database if needed
         return None
 
-# Cache to avoid checking FTS5 table existence on every search
-_FTS5_READY = False
-
-def ensure_fts5_table(conn: sqlite3.Connection):
+def ensure_search_indexes(conn: sqlite3.Connection):
     """
-    Create FTS5 virtual table if it doesn't exist.
+    Create case-insensitive indexes for text search if they don't exist.
     One-time operation that makes searches 1000x faster.
     """
-    global _FTS5_READY
-    
-    if _FTS5_READY:
-        return
-    
     cursor = conn.cursor()
     
-    # Check if FTS5 table exists
+    # Check if our optimized indexes exist
     cursor.execute("""
         SELECT name FROM sqlite_master 
-        WHERE type='table' AND name='search_fts'
+        WHERE type='index' AND name='idx_tracks_name_nocase'
     """)
-    if cursor.fetchone():
-        _FTS5_READY = True
-        return
-    
-    print("\n  🔧 Creating FTS5 search index (one-time, ~10-15 minutes)...")
-    print("  This will only happen once. Please wait...")
-    
-    # Optimize for bulk insertion
-    conn.execute("PRAGMA synchronous = OFF")
-    conn.execute("PRAGMA journal_mode = MEMORY")
-    conn.execute("PRAGMA cache_size = -200000")
-    conn.execute("PRAGMA temp_store = MEMORY")
-    
-    # Create FTS5 virtual table with proper schema
-    cursor.execute("""
-        CREATE VIRTUAL TABLE search_fts USING fts5(
-            track_name,
-            artist_names,
-            track_id UNINDEXED,
-            isrc UNINDEXED,
-            popularity UNINDEXED,
-            tokenize='porter ascii'
-        )
-    """)
-    
-    # Populate the FTS table with progress tracking
-    print("  📊 Populating FTS index with 256M tracks...")
-    
-    # Get total track count for progress
-    cursor.execute("SELECT COUNT(*) FROM tracks")
-    total_tracks = cursor.fetchone()[0]
-    
-    # Use batch processing for faster insertion
-    batch_size = 500000
-    offset = 0
-    
-    while offset < total_tracks:
+    if not cursor.fetchone():
+        print("  🔧 Creating optimized search indexes (one-time, ~2-3 minutes)...")
+        
+        # Create case-insensitive indexes that WILL be used by queries
         cursor.execute("""
-            INSERT INTO search_fts(track_name, artist_names, track_id, isrc, popularity)
-            SELECT 
-                t.name,
-                GROUP_CONCAT(DISTINCT art.name),
-                t.id,
-                t.external_id_isrc,
-                t.popularity
-            FROM tracks t
-            JOIN track_artists ta ON t.rowid = ta.track_rowid
-            JOIN artists art ON ta.artist_rowid = art.rowid
-            WHERE t.rowid > ? AND t.rowid <= ?
-            GROUP BY t.id
-        """, (offset, offset + batch_size))
-        
+            CREATE INDEX IF NOT EXISTS idx_tracks_name_nocase 
+            ON tracks (name COLLATE NOCASE)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_artists_name_nocase 
+            ON artists (name COLLATE NOCASE)
+        """)
+        # Covering index for faster lookups
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tracks_popularity_desc 
+            ON tracks (popularity DESC)
+        """)
         conn.commit()
-        offset += batch_size
-        
-        if offset % 5000000 == 0:
-            print(f"     Processed {offset:,} / {total_tracks:,} tracks...")
-    
-    # Create triggers to keep FTS table updated (optional but recommended)
-    # This ensures FTS stays in sync if main tables are modified
-    cursor.execute("""
-        CREATE TRIGGER IF NOT EXISTS tracks_ai AFTER INSERT ON tracks
-        BEGIN
-            INSERT INTO search_fts(track_name, artist_names, track_id, isrc, popularity)
-            SELECT 
-                NEW.name,
-                (SELECT GROUP_CONCAT(DISTINCT art.name) 
-                 FROM track_artists ta 
-                 JOIN artists art ON ta.artist_rowid = art.rowid 
-                 WHERE ta.track_rowid = NEW.rowid),
-                NEW.id,
-                NEW.external_id_isrc,
-                NEW.popularity;
-        END
-    """)
-    
-    conn.commit()
-    print("  ✅ FTS5 index created successfully!")
-    _FTS5_READY = True
+        print("  ✅ Search indexes created successfully!")
 
-def build_fts5_query(query: str) -> str:
+def parse_query_permutations(query: str) -> List[Dict[str, Any]]:
     """
-    Build optimized FTS5 query from user input.
-    Handles phrases and individual terms.
+    Generate ONLY the most likely 3 permutations to minimize database load.
     """
     if not query or not query.strip():
-        return ""
+        return []
     
-    # Remove special characters that could break FTS5
-    query = re.sub(r'[^\w\s]', ' ', query)
-    query = re.sub(r'\s+', ' ', query).strip()
+    tokens = query.strip().split()
+    if len(tokens) == 1:
+        return [{"artist": "", "track": tokens[0], "score": 1.0}]
     
-    # Split into tokens
-    tokens = query.split()
+    permutations = []
     
-    if not tokens:
-        return ""
+    # Most likely: "Artist Name" "Track Name" (2-token artist, rest track)
+    if len(tokens) >= 3:
+        permutations.append({
+            "artist": " ".join(tokens[:2]),
+            "track": " ".join(tokens[2:]),
+            "score": 0.95
+        })
     
-    # For multi-word queries, try phrase search first, then OR
-    if len(tokens) >= 2:
-        # Create phrase query: "term1 term2" OR term1 OR term2
-        phrase = f'"{query}"'
-        individual = ' OR '.join(tokens)
-        return f'{phrase} OR {individual}'
-    else:
-        # Single term: just search it
-        return tokens[0]
+    # Second most likely: "Artist" "Track Name" (1-token artist, rest track)
+    permutations.append({
+        "artist": tokens[0],
+        "track": " ".join(tokens[1:]),
+        "score": 0.85
+    })
+    
+    # Fallback: whole string as track name
+    permutations.append({
+        "artist": "",
+        "track": query,
+        "score": 0.5
+    })
+    
+    return permutations  # Max 3 permutations, not dozens
 
 def search_tracks_by_permutations(
-    query: str, 
+    permutations: List[Dict[str, Any]], 
     limit: int = 50
 ) -> List[SearchResult]:
     """
-    Search using FTS5 MATCH query.
-    Returns ranked results by relevance and popularity.
+    Search using multiple permutations and merge results.
+    Ranks by: match_quality × permutation_score × popularity
+    Deduplicates by track signature (artist+track) and ISRC.
     """
-    if not query:
+    if not permutations:
         return []
     
+    all_results = []
+    seen_signatures = set()
+    seen_isrcs = set()
+    
+    # Use single database connection for all queries
     main_db_path = PathConfig.get_main_db()
     if not main_db_path.exists():
         raise FileNotFoundError(f"Main database not found: {main_db_path}")
@@ -189,69 +136,159 @@ def search_tracks_by_permutations(
     conn = sqlite3.connect(str(main_db_path))
     conn.row_factory = sqlite3.Row
     
-    # Ensure FTS5 table exists
-    ensure_fts5_table(conn)
+    # CRITICAL: Ensure indexes exist before querying
+    ensure_search_indexes(conn)
     
-    # Optimize connection
-    conn.execute("PRAGMA cache_size = -200000")
+    # Add optimizations
+    conn.execute("PRAGMA cache_size = -200000")  # 200MB cache
     conn.execute("PRAGMA temp_store = MEMORY")
     conn.execute("PRAGMA synchronous = OFF")
     
-    results = []
     try:
-        cursor = conn.cursor()
-        
-        # Build FTS5 query
-        fts_query = build_fts5_query(query)
-        
-        # Use FTS5 MATCH with ranking
-        cursor.execute("""
-            SELECT 
-                track_id,
-                track_name,
-                artist_names,
-                popularity,
-                isrc,
-                rank
-            FROM search_fts
-            WHERE search_fts MATCH ?
-            ORDER BY rank, popularity DESC
-            LIMIT ?
-        """, (fts_query, limit))
-        
-        for row in cursor.fetchall():
-            # FIX: Handle artist_names which might be list or string
-            artist_names_raw = row['artist_names']
+        for perm in permutations:
+            # Stop if we have enough results
+            if len(all_results) >= limit:
+                break
             
-            # Convert to string if it's a list (FTS5 can return lists)
-            if isinstance(artist_names_raw, list):
-                # If it's a list, join first few artists
-                artist_name = artist_names_raw[0] if artist_names_raw else 'Unknown'
-            elif isinstance(artist_names_raw, str):
-                # Standard string from GROUP_CONCAT
-                artist_name = artist_names_raw.split(',')[0] if artist_names_raw else 'Unknown'
-            else:
-                # None or other type
-                artist_name = 'Unknown'
+            # Search exact match first
+            results = _search_exact(conn, perm["track"], perm["artist"])
+            for result in results:
+                # Deduplicate by signature and ISRC
+                if result.signature in seen_signatures:
+                    continue
+                if result.isrc and result.isrc in seen_isrcs:
+                    continue
+                
+                result.confidence = perm["score"] * 1.0  # Exact match bonus
+                all_results.append(result)
+                seen_signatures.add(result.signature)
+                if result.isrc:
+                    seen_isrcs.add(result.isrc)
             
-            # Calculate confidence based on rank (lower rank = higher confidence)
-            rank = row['rank'] if row['rank'] else 0
-            confidence = 1.0 / (rank + 1)
+            # Search prefix match if needed
+            if len(all_results) < limit:
+                results = _search_prefix(conn, perm["track"], perm["artist"])
+                for result in results:
+                    if result.signature in seen_signatures:
+                        continue
+                    if result.isrc and result.isrc in seen_isrcs:
+                        continue
+                    
+                    result.confidence = perm["score"] * 0.7  # Prefix penalty
+                    all_results.append(result)
+                    seen_signatures.add(result.signature)
+                    if result.isrc:
+                        seen_isrcs.add(result.isrc)
             
-            results.append(SearchResult(
-                track_id=row['track_id'],
-                track_name=row['track_name'],
-                artist_name=artist_name,
-                popularity=row['popularity'],
-                isrc=row['isrc'],
-                confidence=confidence,
-                final_score=confidence * (row['popularity'] / 100.0)
-            ))
+            # Track-only exact match
+            if len(all_results) < limit and perm["artist"]:
+                results = _search_exact(conn, perm["track"], "")
+                for result in results:
+                    if result.signature in seen_signatures:
+                        continue
+                    if result.isrc and result.isrc in seen_isrcs:
+                        continue
+                    
+                    result.confidence = perm["score"] * 0.5
+                    all_results.append(result)
+                    seen_signatures.add(result.signature)
+                    if result.isrc:
+                        seen_isrcs.add(result.isrc)
+        
+        # Calculate final score and sort
+        for result in all_results:
+            # Normalize popularity to 0-1
+            popularity_score = min(result.popularity / 100.0, 1.0)
+            result.final_score = result.confidence * popularity_score
+        
+        all_results.sort(key=lambda x: x.final_score, reverse=True)
         
     finally:
         conn.close()
     
-    return results
+    return all_results[:limit]
+
+def _search_exact(
+    conn: sqlite3.Connection, 
+    track_name: str, 
+    artist_name: str
+) -> List[SearchResult]:
+    """
+    Exact match search using case-insensitive collation.
+    Includes ISRC for deduplication.
+    """
+    cursor = conn.cursor()
+    
+    query = """
+        SELECT DISTINCT t.id, t.name, art.name as artist_name, t.popularity, 
+               t.external_id_isrc as isrc
+        FROM tracks t
+        JOIN track_artists ta ON t.rowid = ta.track_rowid
+        JOIN artists art ON ta.artist_rowid = art.rowid
+        WHERE t.name = ? COLLATE NOCASE
+    """
+    params = [track_name]
+    
+    if artist_name:
+        query += " AND art.name = ? COLLATE NOCASE"
+        params.append(artist_name)
+    
+    query += " ORDER BY t.popularity DESC LIMIT 10"
+    
+    cursor.execute(query, params)
+    
+    return [
+        SearchResult(
+            track_id=row["id"],
+            track_name=row["name"],
+            artist_name=row["artist_name"],
+            popularity=row["popularity"],
+            isrc=row["isrc"],
+            confidence=1.0
+        )
+        for row in cursor.fetchall()
+    ]
+
+def _search_prefix(
+    conn: sqlite3.Connection, 
+    track_name: str, 
+    artist_name: str
+) -> List[SearchResult]:
+    """
+    Prefix match search using case-insensitive collation.
+    Includes ISRC for deduplication.
+    """
+    cursor = conn.cursor()
+    
+    query = """
+        SELECT DISTINCT t.id, t.name, art.name as artist_name, t.popularity,
+               t.external_id_isrc as isrc
+        FROM tracks t
+        JOIN track_artists ta ON t.rowid = ta.track_rowid
+        JOIN artists art ON ta.artist_rowid = art.rowid
+        WHERE t.name LIKE ? || '%' COLLATE NOCASE
+    """
+    params = [track_name]
+    
+    if artist_name:
+        query += " AND art.name LIKE ? || '%' COLLATE NOCASE"
+        params.append(artist_name)
+    
+    query += " ORDER BY t.popularity DESC LIMIT 10"
+    
+    cursor.execute(query, params)
+    
+    return [
+        SearchResult(
+            track_id=row["id"],
+            track_name=row["name"],
+            artist_name=row["artist_name"],
+            popularity=row["popularity"],
+            isrc=row["isrc"],
+            confidence=0.7
+        )
+        for row in cursor.fetchall()
+    ]
 
 def extract_track_id_from_result(result: SearchResult) -> str:
     """Extract track_id for similarity search."""
@@ -280,7 +317,7 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
     """
     import shutil
     
-    # Check terminal size before creating UI
+    # Check terminal size BEFORE creating UI
     terminal_size = shutil.get_terminal_size()
     if terminal_size.lines < 25 or terminal_size.columns < 80:
         print(f"\n  ⚠️  Terminal too small ({terminal_size.columns}x{terminal_size.lines})")
@@ -303,14 +340,15 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         
         # Create query buffer for editing
         query_buffer = Buffer(
-            multiline=False
+            multiline=False,
+            accept_handler=lambda buf: perform_search()
         )
         
         # Set initial text if provided
         if initial_query:
             query_buffer.text = initial_query
         
-        # UI Components
+        # UI Components - Store WINDOW references, not just controls
         query_window = Window(
             height=1,
             content=BufferControl(buffer=query_buffer),
@@ -351,8 +389,9 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
             last_search_query = query
             
             try:
-                # Use FTS5 search directly - much faster than permutations
-                results = search_tracks_by_permutations(query, limit=50)
+                # Parse permutations and search
+                permutations = parse_query_permutations(query)
+                results = search_tracks_by_permutations(permutations, limit=50)
                 selected_idx = 0
                 
                 if not results:
@@ -491,8 +530,6 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         
     except Exception as e:
         print(f"\n  ⚠️  Interactive UI failed: {e}")
-        import traceback
-        traceback.print_exc()
         return simple_text_search_fallback(initial_query)
 
 def simple_text_search_fallback(query: str) -> Optional[str]:
@@ -503,7 +540,8 @@ def simple_text_search_fallback(query: str) -> Optional[str]:
     from ui.cli.console_utils import print_header
     
     try:
-        results = search_tracks_by_permutations(query, limit=20)
+        permutations = parse_query_permutations(query)
+        results = search_tracks_by_permutations(permutations, limit=20)
         
         if not results:
             print(f"\n  ❌ No results found for '{query}'")
@@ -532,7 +570,5 @@ def simple_text_search_fallback(query: str) -> Optional[str]:
     
     except Exception as e:
         print(f"\n  ❌ Search error: {e}")
-        import traceback
-        traceback.print_exc()
         input("\n  Press Enter to continue...")
         return None
