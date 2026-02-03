@@ -1,7 +1,7 @@
 # core/utilities/text_search_utils.py
 """
 Text-based search utilities for Spaudible.
-Provides permutation-aware search using existing SQLite indexes.
+Provides fast semantic search using inverted index.
 Creates optimized case-insensitive indexes for fast text search.
 """
 import re
@@ -10,7 +10,14 @@ from dataclasses import dataclass
 from typing import List, Dict, Tuple, Optional, Any
 from pathlib import Path
 import sqlite3
-from config import PathConfig
+from config import (
+    PathConfig,
+    VECTOR_HEADER_SIZE, 
+    VECTOR_RECORD_SIZE, 
+    TRACK_ID_OFFSET_IN_RECORD,
+    ISRC_OFFSET_IN_RECORD
+)
+from core.preprocessing.querying.query_index_searcher import QueryIndexSearcher
 
 @dataclass
 class SearchResult:
@@ -42,38 +49,6 @@ class SearchResult:
         """Extract year from release_date if available."""
         # This would be fetched from the database if needed
         return None
-
-def ensure_search_indexes(conn: sqlite3.Connection):
-    """
-    Create case-insensitive indexes for text search if they don't exist.
-    One-time operation that makes searches 1000x faster.
-    """
-    cursor = conn.cursor()
-    
-    # Check if our optimized indexes exist
-    cursor.execute("""
-        SELECT name FROM sqlite_master 
-        WHERE type='index' AND name='idx_tracks_name_nocase'
-    """)
-    if not cursor.fetchone():
-        print("  🔧 Creating optimized search indexes (one-time, ~2-3 minutes)...")
-        
-        # Create case-insensitive indexes that WILL be used by queries
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_tracks_name_nocase 
-            ON tracks (name COLLATE NOCASE)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_artists_name_nocase 
-            ON artists (name COLLATE NOCASE)
-        """)
-        # Covering index for faster lookups
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_tracks_popularity_desc 
-            ON tracks (popularity DESC)
-        """)
-        conn.commit()
-        print("  ✅ Search indexes created successfully!")
 
 def parse_query_permutations(query: str) -> List[Dict[str, Any]]:
     """
@@ -120,7 +95,71 @@ def search_tracks_by_permutations(
     Search using multiple permutations and merge results.
     Ranks by: match_quality × permutation_score × popularity
     Deduplicates by track signature (artist+track) and ISRC.
+    
+    FAST PATH: Uses inverted index if available.
+    SLOW PATH: Falls back to SQLite permutation search.
     """
+    # FAST PATH: Use inverted index if available
+    if QueryIndexSearcher.is_available():
+        try:
+            # Use first permutation's track query as search string
+            query_str = permutations[0]["track"] if permutations else ""
+            if permutations and permutations[0]["artist"]:
+                query_str = f"{permutations[0]['artist']} {query_str}".strip()
+            
+            searcher = QueryIndexSearcher()
+            vector_indices = searcher.search(query_str, limit=limit)
+            searcher.close()
+            
+            if not vector_indices:
+                return []
+            
+            # Convert vector indices to SearchResults
+            results = []
+            main_db = PathConfig.get_main_db()
+            conn = sqlite3.connect(main_db)
+            conn.row_factory = sqlite3.Row
+            
+            try:
+                for vector_idx in vector_indices:
+                    # Get track metadata from vector index
+                    track_id = _get_track_id_from_vector_idx(vector_idx)
+                    if not track_id:
+                        continue
+                    
+                    # Fetch metadata from SQLite
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT t.name, art.name as artist_name, t.popularity,
+                                t.external_id_isrc as isrc
+                        FROM tracks t
+                        JOIN track_artists ta ON t.rowid = ta.track_rowid
+                        JOIN artists art ON ta.artist_rowid = art.rowid
+                        WHERE t.id = ?
+                        LIMIT 1
+                    """, (track_id,))
+                    row = cursor.fetchone()
+                    
+                    if row:
+                        results.append(SearchResult(
+                            track_id=track_id,
+                            track_name=row["name"],
+                            artist_name=row["artist_name"],
+                            popularity=row["popularity"],
+                            isrc=row["isrc"],
+                            confidence=1.0
+                        ))
+            finally:
+                conn.close()
+            
+            return results
+            
+        except Exception as e:
+            print(f"  ⚠️  Query index search failed: {e}")
+            print("  Falling back to slow SQL search...")
+            # Continue to slow path below
+    
+    # Slow path: original SQLite permutation search (TODO: remove)
     if not permutations:
         return []
     
@@ -135,9 +174,6 @@ def search_tracks_by_permutations(
     
     conn = sqlite3.connect(str(main_db_path))
     conn.row_factory = sqlite3.Row
-    
-    # CRITICAL: Ensure indexes exist before querying
-    ensure_search_indexes(conn)
     
     # Add optimizations
     conn.execute("PRAGMA cache_size = -200000")  # 200MB cache
@@ -208,11 +244,28 @@ def search_tracks_by_permutations(
     
     return all_results[:limit]
 
+def _get_track_id_from_vector_idx(vector_idx: int) -> Optional[str]:
+    """Extract track ID from vector file using direct offset"""
+    try:
+        vectors_path = PathConfig.get_vector_file()
+        with open(vectors_path, "rb") as f:
+            # Calculate offset: header + (vector_idx * record_size) + track_id_offset
+            offset = (
+                VECTOR_HEADER_SIZE + 
+                (vector_idx * VECTOR_RECORD_SIZE) + 
+                TRACK_ID_OFFSET_IN_RECORD
+            )
+            f.seek(offset)
+            track_id_bytes = f.read(22)
+            return track_id_bytes.decode('ascii', 'ignore').rstrip('\0')
+    except Exception:
+        return None
+
 def _search_exact(
     conn: sqlite3.Connection, 
     track_name: str, 
     artist_name: str
-) -> List[SearchResult]:
+    ) -> List[SearchResult]:
     """
     Exact match search using case-insensitive collation.
     Includes ISRC for deduplication.
@@ -221,7 +274,7 @@ def _search_exact(
     
     query = """
         SELECT DISTINCT t.id, t.name, art.name as artist_name, t.popularity, 
-               t.external_id_isrc as isrc
+                t.external_id_isrc as isrc
         FROM tracks t
         JOIN track_artists ta ON t.rowid = ta.track_rowid
         JOIN artists art ON ta.artist_rowid = art.rowid
@@ -253,7 +306,7 @@ def _search_prefix(
     conn: sqlite3.Connection, 
     track_name: str, 
     artist_name: str
-) -> List[SearchResult]:
+    ) -> List[SearchResult]:
     """
     Prefix match search using case-insensitive collation.
     Includes ISRC for deduplication.
@@ -262,7 +315,7 @@ def _search_prefix(
     
     query = """
         SELECT DISTINCT t.id, t.name, art.name as artist_name, t.popularity,
-               t.external_id_isrc as isrc
+                t.external_id_isrc as isrc
         FROM tracks t
         JOIN track_artists ta ON t.rowid = ta.track_rowid
         JOIN artists art ON ta.artist_rowid = art.rowid

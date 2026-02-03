@@ -7,6 +7,9 @@ from config import PathConfig
 from core.utilities.setup_validator import validate_vector_cache, is_setup_complete, rebuild_index
 from config import EXPECTED_VECTORS
 
+# Import query index builder
+from core.preprocessing.querying.build_query_index import build_query_index
+
 def check_databases():
     """Check if required database files exist."""
     databases = [
@@ -21,12 +24,43 @@ def check_databases():
     
     return missing
 
+# Check query index
+def check_query_index():
+    """Check if query index files exist and are valid"""
+    marisa_path = PathConfig.get_query_marisa_file()
+    postings_path = PathConfig.get_query_postings_file()
+    
+    if not marisa_path.exists() or not postings_path.exists():
+        return False, "Query index not found"
+    
+    # Check file sizes are reasonable
+    marisa_size = marisa_path.stat().st_size
+    postings_size = postings_path.stat().st_size
+    
+    if marisa_size < 10_000_000:  # Should be ~1-2GB
+        return False, "MARISA trie too small"
+    if postings_size < 500_000_000:  # Should be ~2-4GB
+        return False, "Postings file too small"
+    
+    return True, f"Query index ready ({marisa_size / (1024**3):.1f} GB + {postings_size / (1024**3):.1f} GB)"
+
 def get_file_size(path):
     """Safely get file size, returning 0 if file doesn't exist."""
     try:
         return path.stat().st_size
     except FileNotFoundError:
         return 0
+
+# Get query index size for display
+def get_query_index_size():
+    """Get total size of query index files."""
+    marisa_path = PathConfig.get_query_marisa_file()
+    postings_path = PathConfig.get_query_postings_file()
+    
+    if not marisa_path.exists() or not postings_path.exists():
+        return 0
+    
+    return marisa_path.stat().st_size + postings_path.stat().st_size
 
 def screen_database_check():
     """Screen 1: Comprehensive database and vector cache validation."""
@@ -96,17 +130,33 @@ def screen_database_check():
             print(f"  ⚠️  File not found: {e}")
             print("  This indicates files were deleted after validation")
         
-        # Offer options
-        print("\n  Would you like to:")
-        options = [
-            "Go to Main Menu",
-            "Re-run preprocessing",
-            "Check again",
-            "Exit"
-        ]
+        # Check query index
+        print("\n  🔍 Checking query index...")
+        query_ok, query_msg = check_query_index()
         
-        print_menu(options)
-        choice = get_choice(len(options))
+        if query_ok:
+            print(f"  ✅ {query_msg}")
+            query_options = [
+                "Go to Main Menu",
+                "Re-run preprocessing",
+                "Rebuild query index",
+                "Check again",
+                "Exit"
+            ]
+        else:
+            print(f"  ⚠️  {query_msg}")
+            print("  The query index enables fast text search (3-4 GB, ~3-5 hour build)")
+            query_options = [
+                "Go to Main Menu",
+                "Re-run preprocessing",
+                "Build query index",
+                "Check again",
+                "Exit"
+            ]
+        
+        print("\n  Would you like to:")
+        print_menu(query_options)
+        choice = get_choice(len(query_options))
         
         if choice == 1:
             return "main_menu"
@@ -125,6 +175,20 @@ def screen_database_check():
             else:
                 return "database_check"
         elif choice == 3:
+            # Build or rebuild query index
+            print("\n  🔧 Building query index...")
+            print("  This will take approximately 2 hours and use 3-4 GB of disk space.")
+            confirm = input("  Proceed? (yes/no): ").lower().strip()
+            if confirm == 'yes':
+                try:
+                    build_query_index()
+                    print("\n  ✅ Query index built successfully!")
+                    input("\n  Press Enter to continue...")
+                except Exception as e:
+                    print(f"\n  ❌ Query index build failed: {e}")
+                    input("\n  Press Enter to continue...")
+            return "database_check"
+        elif choice == 4:
             return "database_check"
         else:
             return "exit"
@@ -187,7 +251,7 @@ def screen_database_check():
                     elif choice == 3:
                         return "database_check"
                     else:
-                        return "exit"
+                            return "exit"
                 else:
                     print(f"  ❗ Vector file has {num_vectors:,} vectors, expected {EXPECTED_VECTORS:,}")
             except FileNotFoundError:

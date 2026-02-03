@@ -47,6 +47,21 @@ class PathConfig:
         return cls.GENRE_MAPPING
 
     @classmethod
+    def get_query_index_dir(cls):
+        """Directory for query index files"""
+        return cls.VECTORS / "query_index"
+
+    @classmethod
+    def get_query_marisa_file(cls):
+        """MARISA trie file for token lookup"""
+        return cls.get_query_index_dir() / "marisa_trie.bin"
+
+    @classmethod
+    def get_query_postings_file(cls):
+        """Inverted index postings file"""
+        return cls.get_query_index_dir() / "inverted_index.bin"
+
+    @classmethod
     def all_required_files(cls):
         """Return all required files for setup completion"""
         return [
