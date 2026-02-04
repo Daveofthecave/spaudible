@@ -92,157 +92,94 @@ def search_tracks_by_permutations(
     limit: int = 50
 ) -> List[SearchResult]:
     """
-    Search using multiple permutations and merge results.
-    Ranks by: match_quality × permutation_score × popularity
-    Deduplicates by track signature (artist+track) and ISRC.
-    
-    FAST PATH: Uses inverted index if available.
-    SLOW PATH: Falls back to SQLite permutation search.
+    Search using query index.
+    Raises exception if index is unavailable or search fails.
     """
-    # FAST PATH: Use inverted index if available
-    if QueryIndexSearcher.is_available():
-        try:
-            # Use first permutation's track query as search string
-            query_str = permutations[0]["track"] if permutations else ""
-            if permutations and permutations[0]["artist"]:
-                query_str = f"{permutations[0]['artist']} {query_str}".strip()
-            
-            searcher = QueryIndexSearcher()
-            vector_indices = searcher.search(query_str, limit=limit)
-            searcher.close()
-            
-            if not vector_indices:
-                return []
-            
-            # Convert vector indices to SearchResults
-            results = []
-            main_db = PathConfig.get_main_db()
-            conn = sqlite3.connect(main_db)
-            conn.row_factory = sqlite3.Row
-            
-            try:
-                for vector_idx in vector_indices:
-                    # Get track metadata from vector index
-                    track_id = _get_track_id_from_vector_idx(vector_idx)
-                    if not track_id:
-                        continue
-                    
-                    # Fetch metadata from SQLite
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        SELECT t.name, art.name as artist_name, t.popularity,
-                                t.external_id_isrc as isrc
-                        FROM tracks t
-                        JOIN track_artists ta ON t.rowid = ta.track_rowid
-                        JOIN artists art ON ta.artist_rowid = art.rowid
-                        WHERE t.id = ?
-                        LIMIT 1
-                    """, (track_id,))
-                    row = cursor.fetchone()
-                    
-                    if row:
-                        results.append(SearchResult(
-                            track_id=track_id,
-                            track_name=row["name"],
-                            artist_name=row["artist_name"],
-                            popularity=row["popularity"],
-                            isrc=row["isrc"],
-                            confidence=1.0
-                        ))
-            finally:
-                conn.close()
-            
-            return results
-            
-        except Exception as e:
-            print(f"  ⚠️  Query index search failed: {e}")
-            print("  Falling back to slow SQL search...")
-            # Continue to slow path below
-    
-    # Slow path: original SQLite permutation search (TODO: remove)
     if not permutations:
         return []
     
-    all_results = []
-    seen_signatures = set()
-    seen_isrcs = set()
+    # Check if query index exists
+    if not QueryIndexSearcher.is_available():
+        raise RuntimeError(
+            "Query index not found. Please run: python core/preprocessing/querying/build_query_index.py"
+        )
     
-    # Use single database connection for all queries
-    main_db_path = PathConfig.get_main_db()
-    if not main_db_path.exists():
-        raise FileNotFoundError(f"Main database not found: {main_db_path}")
+    # Build query string from first permutation only
+    # This avoids the complexity of merging multiple permutation results
+    first_perm = permutations[0]
+    query_parts = []
     
-    conn = sqlite3.connect(str(main_db_path))
+    if first_perm.get("artist"):
+        query_parts.append(first_perm["artist"])
+    
+    if first_perm.get("track"):
+        query_parts.append(first_perm["track"])
+    
+    query_str = " ".join(query_parts).strip()
+    
+    if not query_str:
+        return []
+    
+    # Execute search using query index
+    searcher = QueryIndexSearcher()
+    try:
+        vector_indices = searcher.search(query_str, limit=limit)
+    except Exception as e:
+        # Wrap the error with more context
+        raise RuntimeError(f"Query index search failed: {e}") from e
+    finally:
+        searcher.close()
+    
+    if not vector_indices:
+        return []
+    
+    # Convert vector indices to SearchResults
+    results = []
+    main_db = PathConfig.get_main_db()
+    conn = sqlite3.connect(main_db)
     conn.row_factory = sqlite3.Row
     
-    # Add optimizations
-    conn.execute("PRAGMA cache_size = -200000")  # 200MB cache
-    conn.execute("PRAGMA temp_store = MEMORY")
-    conn.execute("PRAGMA synchronous = OFF")
-    
     try:
-        for perm in permutations:
-            # Stop if we have enough results
-            if len(all_results) >= limit:
-                break
+        for vector_idx in vector_indices:
+            # Get track metadata from vector index
+            track_id = _get_track_id_from_vector_idx(vector_idx)
+            if not track_id:
+                continue
             
-            # Search exact match first
-            results = _search_exact(conn, perm["track"], perm["artist"])
-            for result in results:
-                # Deduplicate by signature and ISRC
-                if result.signature in seen_signatures:
-                    continue
-                if result.isrc and result.isrc in seen_isrcs:
-                    continue
-                
-                result.confidence = perm["score"] * 1.0  # Exact match bonus
-                all_results.append(result)
-                seen_signatures.add(result.signature)
-                if result.isrc:
-                    seen_isrcs.add(result.isrc)
+            # Fetch metadata from SQLite
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT t.name, art.name as artist_name, t.popularity,
+                       t.external_id_isrc as isrc
+                FROM tracks t
+                JOIN track_artists ta ON t.rowid = ta.track_rowid
+                JOIN artists art ON ta.artist_rowid = art.rowid
+                WHERE t.id = ?
+                LIMIT 1
+            """, (track_id,))
+            row = cursor.fetchone()
             
-            # Search prefix match if needed
-            if len(all_results) < limit:
-                results = _search_prefix(conn, perm["track"], perm["artist"])
-                for result in results:
-                    if result.signature in seen_signatures:
-                        continue
-                    if result.isrc and result.isrc in seen_isrcs:
-                        continue
-                    
-                    result.confidence = perm["score"] * 0.7  # Prefix penalty
-                    all_results.append(result)
-                    seen_signatures.add(result.signature)
-                    if result.isrc:
-                        seen_isrcs.add(result.isrc)
-            
-            # Track-only exact match
-            if len(all_results) < limit and perm["artist"]:
-                results = _search_exact(conn, perm["track"], "")
-                for result in results:
-                    if result.signature in seen_signatures:
-                        continue
-                    if result.isrc and result.isrc in seen_isrcs:
-                        continue
-                    
-                    result.confidence = perm["score"] * 0.5
-                    all_results.append(result)
-                    seen_signatures.add(result.signature)
-                    if result.isrc:
-                        seen_isrcs.add(result.isrc)
-        
-        # Calculate final score and sort
-        for result in all_results:
-            # Normalize popularity to 0-1
-            popularity_score = min(result.popularity / 100.0, 1.0)
-            result.final_score = result.confidence * popularity_score
-        
-        all_results.sort(key=lambda x: x.final_score, reverse=True)
-        
+            if row:
+                results.append(SearchResult(
+                    track_id=track_id,
+                    track_name=row["name"],
+                    artist_name=row["artist_name"],
+                    popularity=row["popularity"],
+                    isrc=row["isrc"],
+                    confidence=1.0  # Single query, so full confidence
+                ))
     finally:
         conn.close()
     
-    return all_results[:limit]
+    # Calculate final score and sort by popularity-weighted confidence
+    for result in results:
+        # Normalize popularity to 0-1 and use as multiplier
+        popularity_score = min(result.popularity / 100.0, 1.0)
+        result.final_score = result.confidence * popularity_score
+    
+    # Sort by final score (descending) and return top 'limit' results
+    results.sort(key=lambda x: x.final_score, reverse=True)
+    return results[:limit]
 
 def _get_track_id_from_vector_idx(vector_idx: int) -> Optional[str]:
     """Extract track ID from vector file using direct offset"""

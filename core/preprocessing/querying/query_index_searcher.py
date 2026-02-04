@@ -70,7 +70,7 @@ class QueryIndexSearcher:
             return []
         
         indices = []
-        current_pos = self.postings_offset + offset
+        current_pos = offset
         prev = 0
         
         for _ in range(length):
@@ -80,7 +80,7 @@ class QueryIndexSearcher:
             indices.append(prev)
         
         return indices
-    
+
     def _get_token_info(self, token: str) -> Optional[tuple[int, int]]:
         """Get (postings_offset, postings_length) for token"""
         if token not in self.trie:
@@ -134,6 +134,40 @@ class QueryIndexSearcher:
         
         # Convert to sorted list and return top N
         return sorted(list(result))[:limit]
+
+    def validate_index(self, test_token: str = "rock") -> bool:
+        """
+        Validate that a common token can be found and its postings read correctly.
+        Returns True if valid, raises exception with details if not.
+        """
+        if test_token not in self.trie:
+            raise ValueError(f"Test token '{test_token}' not found in trie")
+        
+        # Get token info
+        info = self._get_token_info(test_token)
+        if not info:
+            raise ValueError(f"Could not retrieve token info for '{test_token}'")
+        
+        offset, length = info
+        
+        # Verify offset is within file bounds
+        if offset >= len(self._mmap):
+            raise ValueError(
+                f"Token '{test_token}' offset {offset} exceeds file size {len(self._mmap)}"
+            )
+        
+        # Verify we can read the posting list
+        try:
+            indices = self._read_posting_list(offset, length)
+            if len(indices) != length:
+                raise ValueError(
+                    f"Expected {length} postings, got {len(indices)}"
+                )
+            return True
+        except Exception as e:
+            raise ValueError(
+                f"Failed to read postings for token '{test_token}': {e}"
+            )
     
     def close(self):
         """Clean up resources"""
