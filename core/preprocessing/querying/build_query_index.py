@@ -4,6 +4,7 @@ Song Query Index Builder
 ===================
 Streaming builder for semantic search index.
 Uses external merge sort to avoid memory explosion.
+Attempted to fix Phase 3 interleaving bug + added Phase 3 resume capability
 """
 import sqlite3
 import struct
@@ -181,8 +182,6 @@ def stream_token_pairs() -> Iterator[Tuple[str, int]]:
         del cursor
         del conn
         gc.collect()
-        
-        # print(f"    ✓ Batch complete. Memory: {get_memory_usage()}")
     
     elapsed = time.time() - start_time
     print(f"  ✓ Streaming complete: {processed:,} tracks, {total_pairs:,} pairs")
@@ -342,70 +341,95 @@ def external_merge_sort(temp_dir: Path, unsorted_path: Path) -> Path:
 def build_inverted_index(sorted_path: Path, output_dir: Path) -> Tuple[int, int]:
     """
     Phase 3: Build inverted index from sorted token pairs.
+    Fixed interleaving bug - now writes token table first, then postings.
     Returns (token_count, posting_bytes_written)
     """
     print("\n" + "=" * 65)
     print("  Phase 3: Building inverted index")
     print("=" * 65)
     
-    marisa_path = output_dir / "marisa_trie.bin"
     postings_path = output_dir / "inverted_index.bin"
+    offsets_path = output_dir / "temp" / "postings_offsets.tmp"
     
-    # Use generator for tokens to avoid memory leak
-    token_generator = _token_generator(sorted_path)
+    # Pass 1: Count tokens and write placeholder token table
+    print("  Pass 1: Writing token table with placeholder offsets...")
+    token_count = 0
     
-    print("  Building posting lists...")
-    print(f"  Token table entry size: {TOKEN_TABLE_ENTRY_SIZE} bytes")
-    print(f"  Each token gets: 64B token + 4B df + 8B offset + 4B length")
-    start_time = time.time()
-    
-    with open(postings_path, "wb") as postings_f:
+    with open(postings_path, "wb") as f:
         # Write header placeholder (32 bytes)
-        postings_f.write(b"\0" * 32)
+        f.write(b"\0" * 32)
         
         token_table_offset = 32
-        postings_offset = token_table_offset
         
-        token_count = 0
-        total_posting_bytes = 0
-        
-        for token, indices in token_generator:
-            # Write token table entry and posting list
-            _write_token_entry(postings_f, token, indices,
-                              token_table_offset, postings_offset, token_count)
-            
-            postings_offset = postings_f.tell()
+        # Write placeholder token entries
+        for token, indices in _token_generator(sorted_path):
+            _write_token_entry(f, token, indices, token_table_offset, 0, token_count)
             token_count += 1
-            total_posting_bytes += len(indices) * 1.5  # Estimated varint size
             
-            # Progress every 100K tokens
             if token_count % 100_000 == 0:
-                elapsed = time.time() - start_time
-                rate = token_count / elapsed
-                eta_seconds = (token_count * 1.5) / rate if rate > 0 else 0  # Rough estimate
-                eta_str = f"{eta_seconds/3600:.1f}h" if eta_seconds > 3600 else f"{eta_seconds/60:.0f}m"
-                
-                print(f"    ⏳ Processed {token_count:,} tokens ({rate:.0f} tokens/sec)")
-                print(f"       Postings size: {total_posting_bytes / (1024**3):.2f} GB | ETA: {eta_str}")
-                gc.collect()
+                print(f"    Processed {token_count:,} tokens...")
+        
+        # Calculate where postings section starts
+        postings_section_start = f.tell()
         
         # Write final header
-        postings_f.seek(0)
-        header = struct.pack(
-            "<7sBQQQ",
-            b"SPAUIDX",
-            1,
-            token_count,
-            token_table_offset,
-            postings_offset
-        )
-        postings_f.write(header)
+        f.seek(0)
+        header = struct.pack("<7sBQQQ", b"SPAUIDX", 1, token_count, token_table_offset, postings_section_start)
+        f.write(header)
     
-    elapsed = time.time() - start_time
-    print(f"  ✓ Inverted index built in {elapsed:.1f}s")
-    print(f"  ✓ Unique tokens: {token_count:,}")
-    print(f"  ✓ Postings file size: {postings_path.stat().st_size / (1024**3):.2f} GB")
-    print(f"  ✓ Average postings per token: {total_posting_bytes / token_count:.1f}")
+    print(f"  ✓ Token count: {token_count:,}")
+    print(f"  ✓ Postings section starts at: {postings_section_start:,}")
+    
+    # Pass 2: Write postings and store offsets on disk
+    print("  Pass 2: Writing postings and storing offsets...")
+    
+    with open(postings_path, "r+b") as f:
+        # Seek to postings section
+        f.seek(postings_section_start)
+        
+        with open(offsets_path, "wb") as offsets_f:
+            token_idx = 0
+            
+            for token, indices in _token_generator(sorted_path):
+                # Current position is where postings start
+                current_offset = f.tell()
+                
+                # Write offset to temp file (8 bytes per offset)
+                offsets_f.write(struct.pack("<Q", current_offset))
+                
+                # Write postings
+                write_delta_encoded_list(f, sorted(indices))
+                
+                token_idx += 1
+                if token_idx % 100_000 == 0:
+                    print(f"    Written {token_idx:,} postings...")
+    
+    print(f"  ✓ Offsets stored in: {offsets_path}")
+    
+    # Pass 3: Update token table entries with correct offsets
+    print("  Pass 3: Updating token table offsets...")
+    
+    with open(postings_path, "r+b") as f:
+        with open(offsets_path, "rb") as offsets_f:
+            for token_idx in range(token_count):
+                # Read the offset (8 bytes)
+                offset_bytes = offsets_f.read(8)
+                if len(offset_bytes) < 8:
+                    break
+                correct_offset = struct.unpack("<Q", offset_bytes)[0]
+                
+                # Calculate entry position and seek to offset field
+                entry_offset = token_table_offset + token_idx * TOKEN_TABLE_ENTRY_SIZE
+                f.seek(entry_offset + 68)  # Skip token (64B) + df (4B)
+                
+                # Write correct offset
+                f.write(struct.pack("<Q", correct_offset))
+                
+                if token_idx % 100_000 == 0:
+                    print(f"    Updated {token_idx:,} offsets...")
+    
+    # Clean up temp offsets file
+    offsets_path.unlink()
     
     return token_count, postings_path.stat().st_size
 
@@ -482,6 +506,7 @@ def build_query_index():
         # Check for resume capability
         unsorted_path = temp_dir / "token_pairs_unsorted.bin"
         sorted_path = temp_dir / "token_pairs_sorted.bin"
+        postings_path = output_dir / "inverted_index.bin"
         
         # Phase 1: Write unsorted pairs (if needed)
         if unsorted_path.exists():
@@ -501,9 +526,37 @@ def build_query_index():
             print("\n  🔃 Phase 2: Performing external merge sort...")
             sorted_path = external_merge_sort(temp_dir, unsorted_path)
         
-        # Phase 3: Build inverted index
-        print("\n  📊 Phase 3: Building inverted index from sorted pairs...")
-        token_count, postings_size = build_inverted_index(sorted_path, output_dir)
+        # Phase 3: Build inverted index (with resume capability)
+        if postings_path.exists():
+            print(f"\n  🔍 Found existing inverted index: {postings_path}")
+            print(f"  ✓ Size: {postings_path.stat().st_size / (1024**3):.2f} GB")
+            
+            # Ask user if they want to rebuild
+            print("\n  ⚠️  WARNING: Existing inverted index may be corrupted (from old buggy version)!")
+            print("  Do you want to rebuild Phase 3?")
+            print("  [1] Yes (recommended)")
+            print("  [2] No, skip to Phase 4")
+            print("  [3] Cancel")
+            
+            choice = input("\n  Choice (1-3): ").strip()
+            
+            if choice == '1':
+                print("  🔨 Rebuilding Phase 3...")
+                postings_path.unlink()  # Delete corrupt file
+                token_count, postings_size = build_inverted_index(sorted_path, output_dir)
+            elif choice == '2':
+                print("  ⏭️  Skipping Phase 3 (using existing index)")
+                # Need to get token count for stats
+                with open(postings_path, 'rb') as f:
+                    header = f.read(32)
+                    magic, version, token_count, token_table_offset, postings_offset = struct.unpack("<7sBQQQ", header)
+                postings_size = postings_path.stat().st_size
+            else:
+                print("  ❌ Build cancelled by user")
+                return
+        else:
+            print("\n  📊 Phase 3: Building inverted index from sorted pairs...")
+            token_count, postings_size = build_inverted_index(sorted_path, output_dir)
         
         # Phase 4: Build MARISA trie
         print("\n  🌳 Phase 4: Building MARISA trie from tokens...")
@@ -541,7 +594,7 @@ def build_query_index():
 
 def _write_token_entry(f, token: str, indices: List[int], 
                       token_table_offset: int, postings_offset: int, token_idx: int):
-    """Write token table entry and posting list"""
+    """Write token table entry (does NOT write postings)"""
     # Calculate entry position
     entry_offset = token_table_offset + token_idx * TOKEN_TABLE_ENTRY_SIZE
     
@@ -553,16 +606,11 @@ def _write_token_entry(f, token: str, indices: List[int],
     # Document frequency (4 bytes)
     f.write(struct.pack("<I", len(indices)))
     
-    # Postings offset (8 bytes) - seek to +68
-    f.seek(entry_offset + 68)  # Skip token (64B) + doc freq (4B)
+    # Postings offset (8 bytes)
     f.write(struct.pack("<Q", postings_offset))
     
     # Postings length (4 bytes)
     f.write(struct.pack("<I", len(indices)))
-    
-    # Write posting list at end of file (delta-encoded)
-    f.seek(postings_offset)
-    write_delta_encoded_list(f, sorted(indices))
 
 if __name__ == "__main__":
     build_query_index()
