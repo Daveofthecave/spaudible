@@ -149,26 +149,23 @@ class QueryIndexSearcher:
         """Get intersection of posting lists for a set of tokens."""
         if not tokens:
             return None
-
+        
         posting_lists = []
         for token in tokens:
             info = self._get_token_info(token)
-            if info:
-                offset, length = info
-                indices = self._read_posting_list(offset, length)
-                posting_lists.append(set(indices))
-
-        if not posting_lists:
-            return None
-
-        # Intersect tokens within the same field (AND logic)
+            if not info:
+                return set()  # If any token missing, this partition fails
+            offset, length = info
+            indices = self._read_posting_list(offset, length)
+            posting_lists.append(set(indices))
+        
+        # Intersect (AND logic)
         posting_lists.sort(key=len)
         result = posting_lists[0]
         for lst in posting_lists[1:]:
             result.intersection_update(lst)
             if not result:
-                return set()
-
+                break
         return result
 
     def validate_index(self, test_token: str = "rock") -> bool:
