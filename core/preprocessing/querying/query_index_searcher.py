@@ -1,6 +1,6 @@
 # core/preprocessing/querying/query_index_searcher.py
 """ 
-Query Index Searcher
+Low-Level Query Index Searcher
 ====================
 Fast text search using MARISA RecordTrie + memory-mapped inverted index.
 Fixed: Now uses RecordTrie with embedded indices to ensure alignment with token table.

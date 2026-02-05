@@ -1,8 +1,8 @@
 # core/utilities/text_search_utils.py
 """
-Text-based search utilities for Spaudible.
-Provides fast semantic search using inverted index.
-Creates optimized case-insensitive indexes for fast text search.
+Text-based search utilities for Spaudible. 
+Provides fast semantic search using an inverted index
+with a MARISA trie.
 """
 import re
 import shutil
