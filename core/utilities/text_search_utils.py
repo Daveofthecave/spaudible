@@ -92,48 +92,50 @@ def search_tracks_by_permutations(
     limit: int = 50
 ) -> List[SearchResult]:
     """
-    Search using query index.
-    Raises exception if index is unavailable or search fails.
+    Search using query index with field-aware tokenization.
+    Tries permutations in order until results are found.
     """
     if not permutations:
         return []
     
-    # Check if query index exists
     if not QueryIndexSearcher.is_available():
         raise RuntimeError(
             "Query index not found. Please run: python core/preprocessing/querying/build_query_index.py"
         )
     
-    # Build query string from first permutation only
-    # This avoids the complexity of merging multiple permutation results
-    first_perm = permutations[0]
-    query_parts = []
+    # Try each permutation in order (highest score first)
+    for perm in permutations:
+        track_query = perm.get("track", "")
+        artist_query = perm.get("artist", "")
+        
+        if not track_query and not artist_query:
+            continue
+        
+        # Search using field-aware query
+        searcher = QueryIndexSearcher()
+        try:
+            vector_indices = searcher.search(
+                query=track_query,
+                artist_query=artist_query,
+                album_query="",  # Album not used in permutations
+                limit=limit
+            )
+        finally:
+            searcher.close()
+        
+        if vector_indices:
+            # Process and return results
+            results = _process_vector_indices(vector_indices, perm["score"])
+            if results:
+                return results
     
-    if first_perm.get("artist"):
-        query_parts.append(first_perm["artist"])
-    
-    if first_perm.get("track"):
-        query_parts.append(first_perm["track"])
-    
-    query_str = " ".join(query_parts).strip()
-    
-    if not query_str:
-        return []
-    
-    # Execute search using query index
-    searcher = QueryIndexSearcher()
-    try:
-        vector_indices = searcher.search(query_str, limit=limit)
-    except Exception as e:
-        # Wrap the error with more context
-        raise RuntimeError(f"Query index search failed: {e}") from e
-    finally:
-        searcher.close()
-    
+    return []
+
+def _process_vector_indices(vector_indices: List[int], confidence: float) -> List[SearchResult]:
+    """Convert vector indices to SearchResults with metadata."""
     if not vector_indices:
         return []
     
-    # Convert vector indices to SearchResults
     results = []
     main_db = PathConfig.get_main_db()
     conn = sqlite3.connect(main_db)
@@ -141,12 +143,10 @@ def search_tracks_by_permutations(
     
     try:
         for vector_idx in vector_indices:
-            # Get track metadata from vector index
             track_id = _get_track_id_from_vector_idx(vector_idx)
             if not track_id:
                 continue
             
-            # Fetch metadata from SQLite
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT t.name, art.name as artist_name, t.popularity,
@@ -166,20 +166,18 @@ def search_tracks_by_permutations(
                     artist_name=row["artist_name"],
                     popularity=row["popularity"],
                     isrc=row["isrc"],
-                    confidence=1.0  # Single query, so full confidence
+                    confidence=confidence
                 ))
     finally:
         conn.close()
     
-    # Calculate final score and sort by popularity-weighted confidence
+    # Score and sort
     for result in results:
-        # Normalize popularity to 0-1 and use as multiplier
         popularity_score = min(result.popularity / 100.0, 1.0)
         result.final_score = result.confidence * popularity_score
     
-    # Sort by final score (descending) and return top 'limit' results
     results.sort(key=lambda x: x.final_score, reverse=True)
-    return results[:limit]
+    return results
 
 def _get_track_id_from_vector_idx(vector_idx: int) -> Optional[str]:
     """Extract track ID from vector file using direct offset"""
@@ -296,7 +294,7 @@ def format_search_results(results: List[SearchResult]) -> str:
     return "\n".join(lines)
 
 # =============================================================================
-# Interactive UI with prompt_toolkit (Fixed & Optimized)
+# Interactive UI with prompt_toolkit
 # =============================================================================
 
 def interactive_text_search(initial_query: str = "") -> Optional[str]:

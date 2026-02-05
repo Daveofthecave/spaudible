@@ -37,8 +37,7 @@ def get_memory_usage() -> str:
 
 def signal_handler(sig, frame):
     """Handle Ctrl+C gracefully"""
-    print("\n\n  🛑 Received interrupt signal. Cleaning up...")
-    gc.collect()
+    print("\n\n⚠️  Received interrupt signal. Cleaning up...")
     sys.exit(0)
 
 signal.signal(signal.SIGINT, signal_handler)
@@ -114,8 +113,10 @@ def stream_token_pairs() -> Iterator[Tuple[str, int]]:
     total_pairs = 0
     start_time = time.time()
     
-    print(f"  Memory usage: {get_memory_usage()}")
-    print(f"  Streaming token pairs from {total_tracks:,} tracks...")
+    print(f"  📊 Initial memory: {get_memory_usage()}")
+    print(f"  📊 Total tracks in database: {total_tracks:,}")
+    print(f"  📊 Estimated token pairs: ~{total_tracks * 9.4:,} (avg 9.4 tokens/track)")
+    print(f"  📊 Processing in batches of 500K tracks...")
     
     # Process in batches of 500K tracks
     batch_size = 500_000
@@ -167,8 +168,12 @@ def stream_token_pairs() -> Iterator[Tuple[str, int]]:
                 elapsed = time.time() - start_time
                 rate = processed / elapsed
                 avg_tokens = total_pairs / processed
-                print(f"    Processed {processed:,} tracks ({rate:.0f} tracks/sec) | "
-                      f"{total_pairs:,} pairs | Avg tokens/track: {avg_tokens:.1f} | Memory: {get_memory_usage()}")
+                eta_seconds = (total_tracks - processed) / rate if rate > 0 else 0
+                eta_str = f"{eta_seconds/3600:.1f}h" if eta_seconds > 3600 else f"{eta_seconds/60:.0f}m"
+                
+                print(f"    ⏳ Processed {processed:,}/{total_tracks:,} tracks ({rate:.0f}/sec)")
+                print(f"       Token pairs: {total_pairs:,} (avg: {avg_tokens:.1f}/track)")
+                print(f"       Memory: {get_memory_usage()} | ETA: {eta_str}")
         
         # Explicit cleanup to avoid memory leaks
         cursor.close()
@@ -177,7 +182,7 @@ def stream_token_pairs() -> Iterator[Tuple[str, int]]:
         del conn
         gc.collect()
         
-        print(f"    Batch complete. Memory: {get_memory_usage()}")
+        # print(f"    ✓ Batch complete. Memory: {get_memory_usage()}")
     
     elapsed = time.time() - start_time
     print(f"  ✓ Streaming complete: {processed:,} tracks, {total_pairs:,} pairs")
@@ -228,6 +233,7 @@ def external_sort_token_pairs(temp_dir: Path) -> Path:
     print(f"  ✓ File size: {file_size / (1024**3):.2f} GB")
     print(f"  ✓ Write rate: {pair_count/elapsed:.0f} pairs/sec")
     print(f"  ✓ Memory after write: {get_memory_usage()}")
+    print(f"  ✓ File location: {temp_unsorted}")
     
     return temp_unsorted
 
@@ -247,6 +253,8 @@ def external_merge_sort(temp_dir: Path, unsorted_path: Path) -> Path:
     chunk_idx = 0
     
     print("  Splitting into sorted chunks...")
+    print(f"  Chunk size: {chunk_size:,} pairs per chunk")
+    
     while True:
         batch = []
         for _ in range(chunk_size):
@@ -273,12 +281,12 @@ def external_merge_sort(temp_dir: Path, unsorted_path: Path) -> Path:
         gc.collect()
     
     unsorted_file.close()
+    print(f"  ✓ Created {len(chunk_files)} sorted chunks")
     
     # Phase 2b: Merge chunks
-    print("  Merging sorted chunks...")
+    print("  Merging sorted chunks with heap sort...")
     sorted_path = temp_dir / "token_pairs_sorted.bin"
     with open(sorted_path, "wb") as out_f:
-        # Open all chunk files
         files = [open(f, "rb") for f in chunk_files]
         entries = []
         
@@ -321,11 +329,13 @@ def external_merge_sort(temp_dir: Path, unsorted_path: Path) -> Path:
         for f in files:
             f.close()
         
-        # Cleanup chunk files
+        # Cleanup chunk files (but keep sorted file)
+        print(f"  ✓ Cleaning up {len(chunk_files)} chunk files...")
         for f in chunk_files:
             f.unlink()
     
-    print(f"  ✓ Sorted file: {sorted_path.stat().st_size / (1024**3):.2f} GB")
+    print(f"  ✓ Merged into sorted file: {sorted_path}")
+    print(f"  ✓ File size: {sorted_path.stat().st_size / (1024**3):.2f} GB")
     print(f"  ✓ Total pairs: {total_pairs:,}")
     return sorted_path
 
@@ -345,10 +355,12 @@ def build_inverted_index(sorted_path: Path, output_dir: Path) -> Tuple[int, int]
     token_generator = _token_generator(sorted_path)
     
     print("  Building posting lists...")
+    print(f"  Token table entry size: {TOKEN_TABLE_ENTRY_SIZE} bytes")
+    print(f"  Each token gets: 64B token + 4B df + 8B offset + 4B length")
     start_time = time.time()
     
     with open(postings_path, "wb") as postings_f:
-        # Write header placeholder
+        # Write header placeholder (32 bytes)
         postings_f.write(b"\0" * 32)
         
         token_table_offset = 32
@@ -358,7 +370,7 @@ def build_inverted_index(sorted_path: Path, output_dir: Path) -> Tuple[int, int]
         total_posting_bytes = 0
         
         for token, indices in token_generator:
-            # Write token table entry
+            # Write token table entry and posting list
             _write_token_entry(postings_f, token, indices,
                               token_table_offset, postings_offset, token_count)
             
@@ -368,9 +380,13 @@ def build_inverted_index(sorted_path: Path, output_dir: Path) -> Tuple[int, int]
             
             # Progress every 100K tokens
             if token_count % 100_000 == 0:
-                print(f"    Processed {token_count:,} tokens | "
-                      f"Memory: {get_memory_usage()} | "
-                      f"Postings: {total_posting_bytes / (1024**3):.2f} GB")
+                elapsed = time.time() - start_time
+                rate = token_count / elapsed
+                eta_seconds = (token_count * 1.5) / rate if rate > 0 else 0  # Rough estimate
+                eta_str = f"{eta_seconds/3600:.1f}h" if eta_seconds > 3600 else f"{eta_seconds/60:.0f}m"
+                
+                print(f"    ⏳ Processed {token_count:,} tokens ({rate:.0f} tokens/sec)")
+                print(f"       Postings size: {total_posting_bytes / (1024**3):.2f} GB | ETA: {eta_str}")
                 gc.collect()
         
         # Write final header
@@ -389,6 +405,7 @@ def build_inverted_index(sorted_path: Path, output_dir: Path) -> Tuple[int, int]
     print(f"  ✓ Inverted index built in {elapsed:.1f}s")
     print(f"  ✓ Unique tokens: {token_count:,}")
     print(f"  ✓ Postings file size: {postings_path.stat().st_size / (1024**3):.2f} GB")
+    print(f"  ✓ Average postings per token: {total_posting_bytes / token_count:.1f}")
     
     return token_count, postings_path.stat().st_size
 
@@ -429,7 +446,10 @@ def build_marisa_trie(tokens: Iterator[str], output_path: Path) -> None:
     start_time = time.time()
     
     # Build trie from iterator (streaming)
+    print("  Converting tokens to trie structure...")
     trie = marisa_trie.Trie(tokens)
+    
+    print("  Saving trie to disk...")
     trie.save(str(output_path))
     
     elapsed = time.time() - start_time
@@ -440,10 +460,12 @@ def build_marisa_trie(tokens: Iterator[str], output_path: Path) -> None:
 def build_query_index():
     """Main entry point with full phase structure and resumability"""
     print("\n" + "=" * 65)
-    print("  Building Query Index")
+    print("  🔨 Building Query Index")
     print("=" * 65)
     print(f"  Start time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  Initial memory: {get_memory_usage()}")
+    print("  \n⚠️  This process will take 3-6 hours and use 6-8 GB of disk space")
+    print("  ⚠️  Temporary files will be kept in data/vectors/query_index/temp/ for debugging")
     
     overall_start = time.time()
     
@@ -453,31 +475,38 @@ def build_query_index():
     temp_dir = output_dir / "temp"
     temp_dir.mkdir(exist_ok=True)
     
+    print(f"  Output directory: {output_dir}")
+    print(f"  Temp directory: {temp_dir}")
+    
     try:
-        # Check for resume
+        # Check for resume capability
         unsorted_path = temp_dir / "token_pairs_unsorted.bin"
         sorted_path = temp_dir / "token_pairs_sorted.bin"
         
-        if unsorted_path.exists() and not sorted_path.exists():
-            print(f"  🔍 Resuming from existing unsorted file: {unsorted_path}")
-            print(f"  ✓ File size: {unsorted_path.stat().st_size / (1024**3):.2f} GB")
-        elif unsorted_path.exists() and sorted_path.exists():
-            print(f"  🔍 Resuming from existing sorted file: {sorted_path}")
-            print(f"  ✓ File size: {sorted_path.stat().st_size / (1024**3):.2f} GB")
+        # Phase 1: Write unsorted pairs (if needed)
+        if unsorted_path.exists():
+            print(f"\n  🔍 Found existing unsorted file: {unsorted_path}")
+            print(f"  ✓ Size: {unsorted_path.stat().st_size / (1024**3):.2f} GB")
+            print(f"  ⏭️  Skipping Phase 1 (token extraction)")
         else:
-            # Phase 1: Write unsorted pairs
+            print("\n  📥 Phase 1: Extracting and writing unsorted token pairs...")
             unsorted_path = external_sort_token_pairs(temp_dir)
         
-        # Phase 2: Sort if needed
-        if not sorted_path.exists():
-            sorted_path = external_merge_sort(temp_dir, unsorted_path)
+        # Phase 2: Sort (if needed)
+        if sorted_path.exists():
+            print(f"\n  🔍 Found existing sorted file: {sorted_path}")
+            print(f"  ✓ Size: {sorted_path.stat().st_size / (1024**3):.2f} GB")
+            print(f"  ⏭️  Skipping Phase 2 (external merge sort)")
         else:
-            print(f"  ⏭️  Skipping sort, using existing sorted file")
+            print("\n  🔃 Phase 2: Performing external merge sort...")
+            sorted_path = external_merge_sort(temp_dir, unsorted_path)
         
         # Phase 3: Build inverted index
+        print("\n  📊 Phase 3: Building inverted index from sorted pairs...")
         token_count, postings_size = build_inverted_index(sorted_path, output_dir)
         
-        # Phase 4: Build MARISA trie (streaming)
+        # Phase 4: Build MARISA trie
+        print("\n  🌳 Phase 4: Building MARISA trie from tokens...")
         token_iterator = (token for token, _ in _token_generator(sorted_path))
         marisa_path = output_dir / "marisa_trie.bin"
         build_marisa_trie(token_iterator, marisa_path)
@@ -496,12 +525,19 @@ def build_query_index():
         print(f"  • MARISA trie: {marisa_path.stat().st_size / (1024**3):.2f} GB")
         print(f"  • Postings file: {postings_size / (1024**3):.2f} GB")
         print(f"  • Total size: {(marisa_path.stat().st_size + postings_size) / (1024**3):.2f} GB")
+        print(f"\n  📁 Temporary files kept at: {temp_dir}")
+        print("  (Delete manually if you need to reclaim disk space)")
         
+    except Exception as e:
+        print(f"\n  ❌ Build failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
     finally:
-        # Clean up temp directory (keep unsorted for resume)
-        if sorted_path.exists():
-            sorted_path.unlink()
-        gc.collect()
+        # Only cleanup temp directory if explicitly requested (not by default)
+        # This preserves temp files for debugging
+        print("\n  🧹 Cleanup: Temp files preserved for debugging")
+        print(f"  To clean up manually, delete: {temp_dir}")
 
 def _write_token_entry(f, token: str, indices: List[int], 
                       token_table_offset: int, postings_offset: int, token_idx: int):
@@ -517,7 +553,8 @@ def _write_token_entry(f, token: str, indices: List[int],
     # Document frequency (4 bytes)
     f.write(struct.pack("<I", len(indices)))
     
-    # Postings offset (8 bytes)
+    # Postings offset (8 bytes) - seek to +68
+    f.seek(entry_offset + 68)  # Skip token (64B) + doc freq (4B)
     f.write(struct.pack("<Q", postings_offset))
     
     # Postings length (4 bytes)

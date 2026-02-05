@@ -9,22 +9,44 @@ from typing import List
 
 def normalize_token(text: str) -> str:
     """
-    Normalize text for tokenization.
-    - Lowercase
-    - Keep apostrophes within words (rock'n'roll)
-    - Replace other punctuation with spaces
+    Normalize text for tokenization with full Unicode support.
+    
+    This function prepares text for tokenization by:
+    - Converting to lowercase (including Unicode characters like "Å" → "å")
+    - Preserving apostrophes within words (e.g., "rock'n'roll")
+    - Preserving Unicode letters from all languages (e.g., "Håkan", "Björk", "Édith", "周杰伦")
+    - Replacing all punctuation/special characters with spaces
+    - Collapsing multiple spaces into single spaces
+    
+    Args:
+        text: Input text string to normalize
+        
+    Returns:
+        Normalized text string ready for tokenization
+        
+    Examples:
+        normalize_token("Håkan Hellström") ->
+        'håkan hellström'
+
+        normalize_token("Rock'n'Roll") ->
+        "rock'n'roll"
+
+        normalize_token("Oops!...I Did It Again") ->
+        'oops i did it again'
+
+        normalize_token("Café 1989") ->
+        'café 1989'
     """
     if not text:
         return ""
     
-    # Lowercase
     text = text.lower()
+    # re.UNICODE flag ensures Unicode-aware matching (default in Python 3 but explicit is safer)
+    text = re.sub(r"[^\w']+", " ", text, flags=re.UNICODE)
     
-    # Replace non-apostrophe punctuation with spaces
-    # Keep apostrophes that are inside words
-    text = re.sub(r"[^a-z0-9']+", " ", text)
-    
-    # Collapse multiple spaces
+    # Collapse multiple consecutive spaces into single spaces
+    # This handles cases where multiple punctuation marks were removed
+    # Example: "Track  -  Remix" → "track - remix" → "track remix"
     text = re.sub(r"\s+", " ", text)
     
     return text.strip()

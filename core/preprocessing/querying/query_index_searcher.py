@@ -98,33 +98,39 @@ class QueryIndexSearcher:
         
         return postings_offset, postings_length
     
-    def search(self, query: str, limit: int = 50) -> List[int]:
+    def search(self, query: str, limit: int = 50, 
+            artist_query: str = "", album_query: str = "") -> List[int]:
         """
-        Search for tracks matching query.
-        Returns list of vector indices, sorted by relevance.
+        Field-aware search supporting track, artist, and album queries.
+        Uses AND logic across fields (track AND artist AND album).
         """
-        # Tokenize query with all field prefixes
-        tokens = tokenize(query, field_prefix="")  # Track tokens
-        tokens += tokenize(query, field_prefix="a_")  # Artist tokens
-        tokens += tokenize(query, field_prefix="al_")  # Album tokens
-        
-        # Remove duplicates while preserving order
-        seen = set()
-        unique_tokens = [t for t in tokens if not (t in seen or seen.add(t))]
-        
-        # Get posting lists for each token
         posting_lists = []
-        for token in unique_tokens:
-            info = self._get_token_info(token)
-            if info:
-                offset, length = info
-                indices = self._read_posting_list(offset, length)
-                posting_lists.append(set(indices))
+        
+        # Track tokens (no prefix)
+        if query:
+            track_tokens = tokenize(query, field_prefix="")
+            track_postings = self._get_postings_for_tokens(track_tokens)
+            if track_postings:
+                posting_lists.append(track_postings)
+        
+        # Artist tokens (with a_ prefix)
+        if artist_query:
+            artist_tokens = tokenize(artist_query, field_prefix="a_")
+            artist_postings = self._get_postings_for_tokens(artist_tokens)
+            if artist_postings:
+                posting_lists.append(artist_postings)
+        
+        # Album tokens (with al_ prefix)
+        if album_query:
+            album_tokens = tokenize(album_query, field_prefix="al_")
+            album_postings = self._get_postings_for_tokens(album_tokens)
+            if album_postings:
+                posting_lists.append(album_postings)
         
         if not posting_lists:
             return []
         
-        # Intersect all lists (start with smallest for efficiency)
+        # Intersect across fields (AND logic)
         posting_lists.sort(key=len)
         result = posting_lists[0]
         for lst in posting_lists[1:]:
@@ -132,8 +138,33 @@ class QueryIndexSearcher:
             if not result:
                 break
         
-        # Convert to sorted list and return top N
         return sorted(list(result))[:limit]
+
+    def _get_postings_for_tokens(self, tokens: List[str]) -> Optional[set]:
+        """Get intersection of posting lists for a set of tokens."""
+        if not tokens:
+            return None
+        
+        posting_lists = []
+        for token in tokens:
+            info = self._get_token_info(token)
+            if info:
+                offset, length = info
+                indices = self._read_posting_list(offset, length)
+                posting_lists.append(set(indices))
+        
+        if not posting_lists:
+            return None
+        
+        # Intersect tokens within the same field (AND logic)
+        posting_lists.sort(key=len)
+        result = posting_lists[0]
+        for lst in posting_lists[1:]:
+            result.intersection_update(lst)
+            if not result:
+                return set()
+        
+        return result
 
     def validate_index(self, test_token: str = "rock") -> bool:
         """
