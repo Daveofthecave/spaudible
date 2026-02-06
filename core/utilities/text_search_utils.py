@@ -121,12 +121,13 @@ class FlexibleSearcher:
     
     def search(self, tokens: List[str], 
         max_df: int = 1_000_000) -> Dict[int, Dict[str, List[str]]]:
-        """Find tracks containing ALL tokens in ANY field.
+        """
+        Find tracks containing ALL tokens in ANY field.
         Returns: {vector_idx: {'track': [tokens], 'artist': [tokens], 'album': [tokens]}}
         """
         if not tokens:
             return {}
-
+        
         # Filter out high-occurrence stopwords
         filtered_tokens = []
         for tok in tokens:
@@ -138,29 +139,39 @@ class FlexibleSearcher:
         if not filtered_tokens:
             # All tokens were stopwords, use them anyway but warn
             filtered_tokens = tokens
-            print(f"DEBUG: Searching for tokens: {filtered_tokens}")
+        
+        print(f"DEBUG: Searching for tokens: {filtered_tokens}")
         
         # For each token, find tracks where it appears in any field
-        token_candidates = {} # token -> {idx: [fields]}
+        token_candidates = {}  # token -> {idx: [fields]}
+        
         for token in filtered_tokens:
             candidates = defaultdict(list)
+            
             # Check track field (no prefix)
             self._add_postings(token, candidates, 'track')
             # Check artist field (a_ prefix)
             self._add_postings(f"a_{token}", candidates, 'artist')
             # Check album field (al_ prefix)
             self._add_postings(f"al_{token}", candidates, 'album')
+            
             token_candidates[token] = dict(candidates)
         
         # Find intersection: tracks that have ALL tokens in at least one field
         if not token_candidates:
             return {}
-        # Use sorted list intersection for memory efficiency
-        # Posting lists are already sorted, so we use merge-join (O(n)) instead of hash sets
-        sorted_lists = [list(token_candidates[t].keys()) for t in filtered_tokens]
+        
+        # Sort the candidate indices since they come from multiple field lookups
+        # (track, artist, album postings aren't sorted relative to each other)
+        sorted_lists = [sorted(token_candidates[t].keys()) for t in filtered_tokens]
         all_candidates = self._intersect_sorted_lists(sorted_lists)
+        
         if not all_candidates:
-            print(f"DEBUG: No candidates after filtering for token '{filtered_tokens[-1]}'")
+            # Debug which specific token caused the empty intersection
+            for token in filtered_tokens:
+                if not token_candidates[token]:
+                    print(f"DEBUG: Token '{token}' has no candidates in any field")
+                    break
             return {}
         
         print(f"DEBUG: Found {len(all_candidates)} candidates with all tokens")
@@ -175,7 +186,7 @@ class FlexibleSearcher:
                     result[idx][field].append(token)
         
         return result
-    
+
     def _intersect_sorted_lists(self, lists: List[List[int]]) -> Set[int]:
         """Intersect multiple sorted lists using two-pointer merge algorithm.
         
