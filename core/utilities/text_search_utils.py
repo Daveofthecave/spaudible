@@ -212,7 +212,7 @@ class UnifiedScorer:
             # Ideal case: some tokens in track, some in artist
             field_score = 0.3
         
-        # 3. Exact phrase matching (huge bonus)
+        # 3. Exact phrase matching (significant bonus)
         query_str = " ".join(self.query_tokens)
         track_lower = result.track_name.lower()
         artist_lower = result.artist_name.lower()
@@ -225,13 +225,27 @@ class UnifiedScorer:
         elif " ".join(self.query_tokens[-2:]) in track_lower:  # Last 2 words
             phrase_bonus = 0.8
         
-        # 4. Quality (cover penalty)
+        # 4. Quality (cover/tribute/remix penalty)
         quality_mult = self.cover_penalty.calculate(result)
         
-        # 5. Popularity (log scale, 1.0 to 1.3)
-        pop_boost = 1.0 + (math.log10(result.popularity + 1) / 6.0)
+        # 5. Popularity (less fields occupied => greater popularity weight)
+        num_fields = sum([
+            bool(result.tokens_matched_in_field('track')),
+            bool(result.tokens_matched_in_field('artist')),
+            bool(result.tokens_matched_in_field('album'))
+        ])
+        # Determine how many fields have tokens
+        if num_fields == 1:
+            # Track, Artist, or Album ONLY (eg. "Mr. Brightside") → Heavy boost
+            pop_boost = 1.0 + 3.0 * (result.popularity / 100.0)      # 1.0-4.0x
+        elif num_fields == 2:
+            # Track+Artist or Track+Album → Moderate boost
+            pop_boost = 1.0 + 1.0 * (result.popularity / 100.0)      # 1.0-2.0x
+        else: # num_fields == 3
+            # Track+Artist+Album → Minimal boost
+            pop_boost = 1.0 + 0.3 * (result.popularity / 100.0)      # 1.0-1.3x
         
-        # Combine
+        # Combine individual scores into final score
         # Coverage is quadratic: 100% coverage = 1.0, 90% = 0.81, 80% = 0.64
         coverage_component = coverage ** 2
         
