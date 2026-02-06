@@ -31,14 +31,20 @@ class SearchResult:
     track_id: str
     track_name: str
     artist_name: str
-    popularity: int
+    album_name: str = ""
+    album_release_year: Optional[str] = None
+    popularity: int = 0
     isrc: Optional[str] = None
     confidence: float = 0.0
     matched_tokens: Dict[str, List[str]] = field(default_factory=dict)  # field -> tokens
     
     @property
     def display_text(self) -> str:
-        return f"{self.track_name} - {self.artist_name}"
+        # Format: "Paradise - Coldplay - Mylo Xyloto (2011)"
+        artist_str = ', '.join(a.strip() for a in self.artist_name.split(','))
+        album_str = f" - {self.album_name}" if len(self.album_name) > 0 else ""
+        year_str = f" ({self.album_release_year})" if self.album_release_year else ""
+        return f"{self.track_name} - {artist_str}{album_str}{year_str}"
     
     @property
     def is_cover(self) -> bool:
@@ -325,6 +331,8 @@ def search_tracks_flexible(query: str, limit: int = 50) -> List[SearchResult]:
                 track_id=track_id,
                 track_name=meta.get('track_name', 'Unknown'),
                 artist_name=meta.get('artist_name', 'Unknown'),
+                album_name=meta.get('album_name', ''),
+                album_release_year=meta.get('album_release_year'),
                 popularity=meta.get('popularity', 0),
                 isrc=meta.get('isrc'),
                 matched_tokens=matched
@@ -363,14 +371,14 @@ def _fetch_metadata_batch(track_ids: List[str]) -> Dict[str, Dict]:
     
     try:
         results = {}
-        # Process in chunks of 900 (under SQLite limit)
+        # Process in chunks of 900 (below SQLite limit)
         for i in range(0, len(track_ids), 900):
             chunk = track_ids[i:i+900]
             placeholders = ','.join(['?'] * len(chunk))
             cursor = conn.cursor()
             cursor.execute(f"""
-                SELECT t.id, t.name, t.popularity, t.external_id_isrc as isrc,
-                       alb.name as album_name,
+                SELECT t.id, t.name, t.popularity, t.external_id_isrc as isrc, 
+                       alb.name as album_name, alb.release_date,
                        GROUP_CONCAT(DISTINCT art.name) as artist_names
                 FROM tracks t
                 JOIN track_artists ta ON t.rowid = ta.track_rowid
@@ -379,12 +387,20 @@ def _fetch_metadata_batch(track_ids: List[str]) -> Dict[str, Dict]:
                 WHERE t.id IN ({placeholders})
                 GROUP BY t.id
             """, chunk)
-            
+
             for row in cursor.fetchall():
+                # Extract year from release_date (YYYY format)
+                year = None
+                if row['release_date'] and len(str(row['release_date'])) >= 4:
+                    year_str = str(row['release_date'])[:4]
+                    if year_str.isdigit():
+                        year = year_str
+                
                 results[row['id']] = {
                     'track_name': row['name'],
                     'artist_name': row['artist_names'],
                     'album_name': row['album_name'],
+                    'album_release_year': year,
                     'popularity': row['popularity'],
                     'isrc': row['isrc']
                 }
