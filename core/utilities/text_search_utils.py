@@ -18,12 +18,13 @@ from config import (
     VECTOR_HEADER_SIZE,
     VECTOR_RECORD_SIZE,
     TRACK_ID_OFFSET_IN_RECORD,
-    ISRC_OFFSET_IN_RECORD
+    ISRC_OFFSET_IN_RECORD,
+    EXPECTED_VECTORS
     )
 from core.preprocessing.querying.query_index_searcher import QueryIndexSearcher
 from core.preprocessing.querying.query_tokenizer import tokenize
 
-TOTAL_TRACKS = 256_039_007  # From config.EXPECTED_VECTORS
+TOTAL_TRACKS = EXPECTED_VECTORS
 
 @dataclass
 class SearchResult:
@@ -55,7 +56,6 @@ class SearchResult:
         """Extract year from release_date if available."""
         # This would be fetched from the database if needed
         return None
-
 
 class VectorMetadataCache:
     """Fast metadata extraction from track_vectors.bin without SQLite"""
@@ -99,7 +99,6 @@ class VectorMetadataCache:
             self._mmap.close()
         if hasattr(self, '_file'):
             self._file.close()
-
 
 class BM25Scorer:
     """BM25 scoring with field weights and coordination"""
@@ -192,7 +191,6 @@ class BM25Scorer:
         
         return score
 
-
 def generate_field_partitions(tokens: List[str], 
     max_field_len: int = 5) -> List[Tuple[List[str], List[str], List[str]]]:
     """
@@ -211,7 +209,7 @@ def generate_field_partitions(tokens: List[str],
             seen.add(key)
             partitions.append((track, artist, album))
     
-    # Strategy 1: Artist first (from start), then Album, then Track
+    # Strategy 1: Artist first, then Album, then Track
     for a_len in range(0, min(max_field_len, n) + 1):
         for al_len in range(0, min(max_field_len, n - a_len) + 1):
             t_len = n - a_len - al_len
@@ -222,7 +220,7 @@ def generate_field_partitions(tokens: List[str],
             track = tokens[a_len+al_len:]
             add_partition(track, artist, album)
     
-    # Strategy 2: Album first (from start), then Artist, then Track
+    # Strategy 2: Album first, then Artist, then Track
     for al_len in range(0, min(max_field_len, n) + 1):
         for a_len in range(0, min(max_field_len, n - al_len) + 1):
             t_len = n - al_len - a_len
@@ -233,7 +231,7 @@ def generate_field_partitions(tokens: List[str],
             track = tokens[al_len+a_len:]
             add_partition(track, artist, album)
     
-    # Strategy 3: Track first (from start), then Artist, then Album
+    # Strategy 3: Track first, then Artist, then Album
     for t_len in range(0, min(max_field_len, n) + 1):
         for a_len in range(0, min(max_field_len, n - t_len) + 1):
             al_len = n - t_len - a_len
@@ -244,7 +242,7 @@ def generate_field_partitions(tokens: List[str],
             album = tokens[t_len+a_len:]
             add_partition(track, artist, album)
     
-    # Strategy 4: Artist from END (e.g., "Echo Black Rebel Motorcycle Club")
+    # Strategy 4: Artist from end (e.g., "Echo Black Rebel Motorcycle Club")
     for a_len in range(1, min(max_field_len, n) + 1):
         artist = tokens[-a_len:]
         remaining = tokens[:-a_len]
@@ -256,7 +254,7 @@ def generate_field_partitions(tokens: List[str],
                 continue
             add_partition(track, artist, album)
     
-    # Strategy 5: Album from END
+    # Strategy 5: Album from end
     for al_len in range(1, min(max_field_len, n) + 1):
         album = tokens[-al_len:]
         remaining = tokens[:-al_len]
@@ -271,7 +269,6 @@ def generate_field_partitions(tokens: List[str],
         print(p)
 
     return partitions
-
 
 def calculate_token_rarity(token: str, searcher: QueryIndexSearcher) -> float:
     """Calculate rarity score for a token (higher = rarer)."""
@@ -482,7 +479,6 @@ def _process_candidates_bm25(
     
     return results
 
-
 def _fetch_metadata_batch(track_ids: List[str]) -> Dict[str, Dict]:
     """Fetch metadata for multiple tracks efficiently in one query."""
     if not track_ids:
@@ -569,7 +565,6 @@ def _search_exact(
         for row in cursor.fetchall()
     ]
 
-
 def _search_prefix(
     conn: sqlite3.Connection, track_name: str, artist_name: str
 ) -> List[SearchResult]:
@@ -601,11 +596,9 @@ def _search_prefix(
         for row in cursor.fetchall()
     ]
 
-
 def extract_track_id_from_result(result: SearchResult) -> str:
     """Extract track_id for similarity search."""
     return result.track_id
-
 
 def format_search_results(results: List[SearchResult]) -> str:
     """Format results for display in CLI."""
@@ -616,7 +609,6 @@ def format_search_results(results: List[SearchResult]) -> str:
     for idx, result in enumerate(results[:20], 1):
         lines.append(f"{idx:2d}. {result.display_text}")
     return "\n".join(lines)
-
 
 # =============================================================================
 # Interactive UI with prompt_toolkit
@@ -661,7 +653,7 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         if initial_query:
             query_buffer.text = initial_query
         
-        # UI Components - Store WINDOW references, not just controls
+        # UI components
         query_window = Window(
             height=1,
             content=BufferControl(buffer=query_buffer),
