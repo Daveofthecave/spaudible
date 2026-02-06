@@ -67,13 +67,31 @@ class VectorMetadataCache:
         self._mmap = mmap.mmap(self._file.fileno(), 0, access=mmap.ACCESS_READ)
     
     def get_popularity(self, vector_idx: int) -> float:
+        """
+        Extract popularity from vector cache. 
+        Dimension 18 is stored at fp32_dims[4] (offset 45 + 16).
+        Reverse the sqrt normalization: stored = sqrt(pop/100), so pop = (stored^2) * 100
+        """
         record_offset = VECTOR_HEADER_SIZE + (vector_idx * VECTOR_RECORD_SIZE)
-        popularity_offset = record_offset + 45 + (3 * 4)
+        popularity_offset = record_offset + 45 + (3 * 4) # popularity = 4th 4-byte fp32
+        
         self._mmap.seek(popularity_offset)
         pop_float = struct.unpack('<f', self._mmap.read(4))[0]
-        if pop_float < 0:
+        
+        if pop_float < 0 or pop_float > 1.0:  # -1 sentinel or invalid
             return 0.0
+        # Reverse sqrt normalization to get 0-100 scale
         return (pop_float ** 2) * 100.0
+    
+    def get_track_id(self, vector_idx: int) -> Optional[str]:
+        """Fast track ID extraction using existing mmap (no file reopening)."""
+        try:
+            offset = (VECTOR_HEADER_SIZE + (vector_idx * VECTOR_RECORD_SIZE) + TRACK_ID_OFFSET_IN_RECORD)
+            self._mmap.seek(offset)
+            track_id_bytes = self._mmap.read(22)
+            return track_id_bytes.decode('ascii', 'ignore').rstrip('\0')
+        except Exception:
+            return None
     
     def close(self):
         if hasattr(self, '_mmap'):
@@ -278,7 +296,10 @@ class CoverPenalty:
         return 0.1  # Heavy penalty for karaoke/tribute
 
 def search_tracks_flexible(query: str, limit: int = 50) -> List[SearchResult]:
-    """Main search entry point."""
+    """
+    Main search entry point with popularity pre-filtering.
+    Reduces SQL metadata lookups from 300k+ candidates to top 200 by popularity.
+    """
     if not query or not query.strip():
         return []
     
@@ -299,28 +320,48 @@ def search_tracks_flexible(query: str, limit: int = 50) -> List[SearchResult]:
     scorer = UnifiedScorer(raw_tokens)
     
     try:
-        # Search: Find tracks with all tokens in any field
+        # Phase 1: Find all candidates with matching tokens
         candidates = flex_searcher.search(raw_tokens, max_df=1_000_000)
-        
         if not candidates:
-            print("DEBUG: No candidates found with strict AND. Trying OR...")
-            # Fallback: Find tracks with any token (for suggestions)
-            # This part omitted for brevity, but could implement relaxed search
+            print("DEBUG: No candidates found")
+            return []
         
-        # Fetch metadata for candidates
         vector_indices = list(candidates.keys())
-        track_ids = []
+        print(f"DEBUG: {len(vector_indices):,} raw candidates from inverted index")
+        
+        # Phase 2: Pre-filter by popularity using fast vector cache
+        print(f"DEBUG: Ranking candidates by popularity...")
+        
+        indexed_pops = []
         for idx in vector_indices:
-            track_id = _get_track_id_from_vector_idx(idx)
+            pop = vector_cache.get_popularity(idx)
+            indexed_pops.append((idx, pop))
+        
+        # Sort by popularity descending and take top N
+        # 200 gives us plenty of headroom for the final limit (50) while being fast
+        PRE_FILTER_LIMIT = 200
+        indexed_pops.sort(key=lambda x: x[1], reverse=True)
+        top_candidates = indexed_pops[:PRE_FILTER_LIMIT]
+        
+        print(f"DEBUG: Selected top {len(top_candidates)} candidates by popularity for metadata lookup")
+        
+        # Phase 3: Get track IDs only for the top candidates (fast mmap, no SQL yet)
+        track_id_pairs = []  # (vector_idx, track_id, popularity)
+        for idx, pop in top_candidates:
+            track_id = vector_cache.get_track_id(idx)
             if track_id:
-                track_ids.append((idx, track_id))
+                track_id_pairs.append((idx, track_id, pop))
         
-        # Batch fetch metadata
-        metadata_map = _fetch_metadata_batch([tid for _, tid in track_ids])
+        if not track_id_pairs:
+            return []
         
-        # Build results
+        # Phase 4: Batch fetch metadata only for the top 200
+        track_ids = [tid for _, tid, _ in track_id_pairs]
+        metadata_map = _fetch_metadata_batch(track_ids)
+        
+        # Phase 5: Build SearchResult objects and score
         results = []
-        for idx, track_id in track_ids:
+        for idx, track_id, pop in track_id_pairs:
             if track_id not in metadata_map:
                 continue
             
@@ -341,10 +382,10 @@ def search_tracks_flexible(query: str, limit: int = 50) -> List[SearchResult]:
             result.confidence = scorer.score(result)
             results.append(result)
         
-        # Sort by score
+        # Phase 6: Sort by score
         results.sort(key=lambda x: x.confidence, reverse=True)
         
-        # Deduplicate by signature
+        # Phase 7: Deduplicate by signature
         seen = set()
         unique_results = []
         for r in results:
@@ -354,6 +395,7 @@ def search_tracks_flexible(query: str, limit: int = 50) -> List[SearchResult]:
                 if len(unique_results) >= limit:
                     break
         
+        print(f"DEBUG: Returning {len(unique_results)} final results")
         return unique_results
         
     finally:
