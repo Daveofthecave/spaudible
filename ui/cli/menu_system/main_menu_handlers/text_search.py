@@ -162,47 +162,53 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         event.app.layout.focus(query_window)
         query_buffer.cursor_position = min(len(query_buffer.text), query_buffer.cursor_position + 1)
 
-    # Backspace handling
+    # Home key - move to beginning of query line
+    @kb.add('home')
+    def move_home(event):
+        """Move cursor to beginning of line, regardless of current focus"""
+        event.app.layout.focus(query_window)
+        query_buffer.cursor_position = 0
+
+    # End key - move to end of query line  
+    @kb.add('end')
+    def move_end(event):
+        """Move cursor to end of line, regardless of current focus"""
+        event.app.layout.focus(query_window)
+        query_buffer.cursor_position = len(query_buffer.text)
+
+    # Backspace handling works from anywhere
     @kb.add('backspace')
     def handle_backspace(event):
-        """Handle backspace in query field"""
-        if event.app.layout.current_window == query_window:
-            if query_buffer.cursor_position > 0:
-                query_buffer.delete_before_cursor()
-        else:
-            # Switch focus to query field
-            event.app.layout.focus(query_window)
+        """Delete character before cursor, regardless of current focus"""
+        # Always switch focus to query field first
+        event.app.layout.focus(query_window)
+        # Then delete if possible
+        if query_buffer.cursor_position > 0:
+            query_buffer.delete_before_cursor()
 
-    # Delete handling
+    # Delete key handling works from anywhere
     @kb.add('delete')
     def handle_delete(event):
-        """Handle delete in query field"""
-        if event.app.layout.current_window == query_window:
-            query_buffer.delete()
+        """Delete character at cursor, regardless of current focus"""
+        # Always switch focus to query field first
+        event.app.layout.focus(query_window)
+        # Then delete character at cursor (if any)
+        query_buffer.delete()
 
-    # Enter key handling
+    # Enter key handling - one press selects if results exist and query unchanged
     @kb.add('enter')
     def handle_enter(event):
-        """Handle Enter key - context-aware behavior"""
+        """Handle Enter key - selects track if results exist, else searches"""
         current_query = query_buffer.text.strip()
 
-        # If we're in the query field
-        if event.app.layout.current_window == query_window:
-            # Always perform search when in query field
-            perform_search()
-            # Move focus to results after search
-            event.app.layout.focus(results_window)
+        # If results exist for this exact query, select immediately (regardless of focus)
+        if results and current_query == last_searched_query and selected_idx < len(results):
+            event.app.exit(result=results[selected_idx].track_id)
         else:
-            # We're in results field
-            # Check if query was modified since last search
-            if current_query != last_searched_query:
-                # Query changed - re-run search instead of selecting
-                perform_search()
-                event.app.layout.focus(results_window)
-            else:
-                # Query unchanged - select track
-                if results and selected_idx < len(results):
-                    event.app.exit(result=results[selected_idx].track_id)
+            # No results yet, or query changed - perform search
+            perform_search()
+            # Ensure focus moves to results after search
+            event.app.layout.focus(results_window)
 
     # Cancel keys
     @kb.add('c-c')
@@ -215,7 +221,7 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         """Escape key also cancels"""
         event.app.exit(result=None)
 
-    # FIX: Catch-all for printable characters - route to query field
+    # Catch-all for printable characters - route to query field
     @kb.add(Keys.Any)
     def handle_typing(event):
         """Any printable character switches to query field and inserts character"""
@@ -228,26 +234,31 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
     if query:
         perform_search()
 
-    # Create layout
-    layout = Layout(
-        HSplit([
-            # Query label
-            Window(
-                height=1,
-                content=FormattedTextControl(text="Search query:"),
-                style="class:query-label"
-            ),
-            query_window,
-            # Results label
-            Window(
-                height=1,
-                content=FormattedTextControl(text="Results:"),
-                style="class:results-label"
-            ),
-            results_window,
-            status_window
-        ])
-    )
+    # Create layout container
+    container = HSplit([
+        # Query label
+        Window(
+            height=1,
+            content=FormattedTextControl(text="Search query:"),
+            style="class:query-label"
+        ),
+        query_window,
+        # Results label
+        Window(
+            height=1,
+            content=FormattedTextControl(text="Results:"),
+            style="class:results-label"
+        ),
+        results_window,
+        status_window
+    ])
+
+    # Determine which element should have initial focus
+    # If we have results, focus results window; otherwise focus query input
+    initial_focus = results_window if results else query_window
+
+    # Create layout with explicit initial focus
+    layout = Layout(container, focused_element=initial_focus)
 
     # Styling
     style = Style.from_dict({
@@ -266,12 +277,6 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         full_screen=False,
         mouse_support=False
     )
-
-    # Set initial focus
-    if query and results:
-        app.layout.focus(results_window)
-    else:
-        app.layout.focus(query_window)
 
     # Run the event loop
     result = app.run()
