@@ -181,36 +181,26 @@ class QueryIndexSearcher:
         posting_lists = []
         rarest_token = None
         rarest_df = float('inf')
-        rarest_postings = None
         
         for token in tokens:
             info = self._get_token_info(token)
             if not info:
-                return set()  # If any token missing, this partition fails
+                continue  # Skip missing tokens instead of failing
             
             offset, length = info
             
-            # Track the rarest token for fallback
+            # Track rarest for fallback
             if length < rarest_df:
                 rarest_df = length
-                rarest_token = token
-                # Don't read yet, just store info
+                rarest_token = (offset, length)
             
-            # Skip stopwords (high frequency tokens)
             if max_df and length > max_df:
                 continue
             
-            # Load posting list for this token
             indices = self._read_posting_list(offset, length)
             posting_lists.append(set(indices))
         
-        # If all tokens were stopwords, use the rarest one
-        if not posting_lists and rarest_token:
-            offset, length = self._get_token_info(rarest_token)
-            indices = self._read_posting_list(offset, length)
-            return set(indices)
-        
-        # If still no posting lists (shouldn't happen unless empty input), return None
+        # If all tokens were missing, return None
         if not posting_lists:
             return None
         

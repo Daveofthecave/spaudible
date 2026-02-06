@@ -267,6 +267,9 @@ def generate_field_partitions(tokens: List[str],
                 continue
             add_partition(track, artist, album)
 
+    for p in partitions:
+        print(p)
+
     return partitions
 
 
@@ -281,37 +284,31 @@ def calculate_token_rarity(token: str, searcher: QueryIndexSearcher) -> float:
 
 
 def search_tracks_flexible(query: str, limit: int = 50) -> List[SearchResult]:
-    """
-    Main flexible search entry point.
-    Tries all field assignments and scores results by text similarity 
-    to handle any order of song/artist/album.
-    """
+    """Main flexible search entry point."""
     if not query or not query.strip():
         return []
     
     if not QueryIndexSearcher.is_available():
-        raise RuntimeError(
-            "Query index not found. Please run this command in (venv): \
-                python3 -m core.preprocessing.querying.build_query_index"
-        )
-    
-    # Get raw tokens (without field prefixes)
+        raise RuntimeError("Query index not found.")
+
     raw_tokens = tokenize(query, "")
     if not raw_tokens:
         return []
+    
+    print(f"DEBUG: Query tokens: {raw_tokens}")  # DEBUG
     
     searcher = QueryIndexSearcher()
     vector_cache = VectorMetadataCache()
     
     try:
-        # Generate partitions but limit to most likely 4 to reduce candidate set
         all_partitions = generate_field_partitions(raw_tokens)
-        # Prioritize: Track+Artist, Artist+Track, Track only, Artist only
+        
+        # Prioritize partitions with artist + track
         priority_partitions = []
         for p in all_partitions:
             track, artist, album = p
             if track and artist and not album:
-                priority_partitions.insert(0, p)  # Highest priority
+                priority_partitions.insert(0, p)
             elif artist and track and not album:
                 priority_partitions.insert(1, p)
             elif track and not artist and not album:
@@ -319,18 +316,18 @@ def search_tracks_flexible(query: str, limit: int = 50) -> List[SearchResult]:
             elif artist and not track and not album:
                 priority_partitions.insert(3, p)
         
-        # Take only first 4 unique partitions
+        # Take unique partitions
         seen = set()
         partitions = []
-        for p in priority_partitions[:10]:  # Check first 10 for variety
+        for p in priority_partitions[:10]:
             key = (tuple(p[0]), tuple(p[1]), tuple(p[2]))
             if key not in seen:
                 seen.add(key)
                 partitions.append(p)
+                print(f"DEBUG: Using partition: {p}")  # DEBUG
             if len(partitions) >= 4:
                 break
         
-        # Aggregate scores across all partitions
         candidate_data = defaultdict(lambda: {
             'max_coverage': 0.0,
             'total_rarity': 0.0,
@@ -342,52 +339,64 @@ def search_tracks_flexible(query: str, limit: int = 50) -> List[SearchResult]:
         MAX_DF = 1_000_000
         
         for track_toks, artist_toks, album_toks in partitions:
-            # Skip empty partitions
             if not track_toks and not artist_toks and not album_toks:
                 continue
             
-            # Calculate coverage (what fraction of query tokens this partition uses)
+            # Check coverage
+            partition_tokens = set(track_toks + artist_toks + album_toks)
+            if not partition_tokens.issuperset(set(raw_tokens)):
+                print(f"DEBUG: Skipping partition {track_toks}/{artist_toks}/{album_toks} - missing tokens")  # DEBUG
+                continue
+            
             matched_count = len(track_toks) + len(artist_toks) + len(album_toks)
             coverage = matched_count / len(raw_tokens)
             
-            # Calculate rarity score (sum of inverse document frequencies)
+            # Calculate rarity
             rarity = 0.0
             for t in track_toks + artist_toks + album_toks:
                 rarity += calculate_token_rarity(t, searcher)
             
-            # Query the inverted index with stopword filtering
+            print(f"DEBUG: Searching track={track_toks}, artist={artist_toks}, album={album_toks}")  # DEBUG
+            
+            # Search
             indices = searcher.search(
                 query=" ".join(track_toks),
                 artist_query=" ".join(artist_toks),
                 album_query=" ".join(album_toks),
-                limit=limit * 3,  # Get extras for re-ranking
-                max_df=MAX_DF  # Skip "the", "a", "and", etc.
+                limit=limit * 20,  # Increased
+                max_df=None  # DISABLED max_df filtering for debugging
             )
+            
+            print(f"DEBUG: Found {len(indices)} results for this partition")  # DEBUG
             
             if not indices:
                 continue
             
-            # Update candidate scores
+            # Show first few results for debugging
+            for idx in indices[:3]:
+                track_id = _get_track_id_from_vector_idx(idx)
+                print(f"DEBUG:   Result: {track_id}")  # DEBUG
+            
             for idx in indices:
                 cand = candidate_data[idx]
-                cand['max_coverage'] = max(cand['max_coverage'], coverage)
+                # Update if this partition has better coverage
+                if coverage > cand['max_coverage']:
+                    cand['max_coverage'] = coverage
+                    cand['best_partition'] = (track_toks, artist_toks, album_toks)
                 cand['total_rarity'] += rarity
                 cand['match_count'] += 1
-                if cand['best_partition'] is None:
-                    cand['best_partition'] = (track_toks, artist_toks, album_toks)
+        
+        print(f"DEBUG: Total unique candidates: {len(candidate_data)}")  # DEBUG
         
         if not candidate_data:
             return []
         
-        # Process and rank candidates using BM25
         return _process_candidates_bm25(
             candidate_data, query, raw_tokens, limit, searcher, vector_cache
         )
-    
     finally:
         searcher.close()
         vector_cache.close()
-
 
 def _process_candidates_bm25(
     candidate_data: Dict[int, Dict],
@@ -420,10 +429,12 @@ def _process_candidates_bm25(
             'cand_info': candidate_data[idx]
         })
     
-    # Sort by popularity initially to take top 200 for full BM25 scoring
-    # (This limits DB hits to only promising candidates)
-    scored_candidates.sort(key=lambda x: x['popularity'], reverse=True)
-    top_candidates = scored_candidates[:200]
+    # Only pre-filter if we have an enormous number of candidates
+    if len(scored_candidates) > 2000:
+        scored_candidates.sort(key=lambda x: x['popularity'], reverse=True)
+        top_candidates = scored_candidates[:2000]
+    else:
+        top_candidates = scored_candidates
     
     # Fetch metadata for top 200 only
     track_ids = [c['track_id'] for c in top_candidates]
