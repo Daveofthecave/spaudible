@@ -100,11 +100,9 @@ class VectorMetadataCache:
             self._file.close()
 
 class FlexibleSearcher:
-    """
-    Searches across all fields simultaneously without guessing partitions.
+    """ Searches across all fields simultaneously without guessing partitions.
     Finds tracks where ALL query tokens appear in ANY field (track, artist, or album).
     """
-    
     def __init__(self, searcher: QueryIndexSearcher):
         self.searcher = searcher
         self.idf_cache = {}
@@ -123,13 +121,12 @@ class FlexibleSearcher:
     
     def search(self, tokens: List[str], 
         max_df: int = 1_000_000) -> Dict[int, Dict[str, List[str]]]:
-        """
-        Find tracks containing ALL tokens in ANY field.
+        """Find tracks containing ALL tokens in ANY field.
         Returns: {vector_idx: {'track': [tokens], 'artist': [tokens], 'album': [tokens]}}
         """
         if not tokens:
             return {}
-        
+
         # Filter out high-occurrence stopwords
         filtered_tokens = []
         for tok in tokens:
@@ -141,37 +138,30 @@ class FlexibleSearcher:
         if not filtered_tokens:
             # All tokens were stopwords, use them anyway but warn
             filtered_tokens = tokens
-        
-        print(f"DEBUG: Searching for tokens: {filtered_tokens}")
+            print(f"DEBUG: Searching for tokens: {filtered_tokens}")
         
         # For each token, find tracks where it appears in any field
-        token_candidates = {}  # token -> {idx: [fields]}
-        
+        token_candidates = {} # token -> {idx: [fields]}
         for token in filtered_tokens:
             candidates = defaultdict(list)
-            
             # Check track field (no prefix)
             self._add_postings(token, candidates, 'track')
             # Check artist field (a_ prefix)
             self._add_postings(f"a_{token}", candidates, 'artist')
             # Check album field (al_ prefix)
             self._add_postings(f"al_{token}", candidates, 'album')
-            
             token_candidates[token] = dict(candidates)
         
         # Find intersection: tracks that have ALL tokens in at least one field
         if not token_candidates:
             return {}
-        
-        # Start with candidates from first token
-        all_candidates = set(token_candidates[filtered_tokens[0]].keys())
-        
-        # Intersect with candidates from other tokens
-        for token in filtered_tokens[1:]:
-            all_candidates &= set(token_candidates[token].keys())
-            if not all_candidates:
-                print(f"DEBUG: No candidates after filtering for token '{token}'")
-                return {}
+        # Use sorted list intersection for memory efficiency
+        # Posting lists are already sorted, so we use merge-join (O(n)) instead of hash sets
+        sorted_lists = [list(token_candidates[t].keys()) for t in filtered_tokens]
+        all_candidates = self._intersect_sorted_lists(sorted_lists)
+        if not all_candidates:
+            print(f"DEBUG: No candidates after filtering for token '{filtered_tokens[-1]}'")
+            return {}
         
         print(f"DEBUG: Found {len(all_candidates)} candidates with all tokens")
         
@@ -186,6 +176,40 @@ class FlexibleSearcher:
         
         return result
     
+    def _intersect_sorted_lists(self, lists: List[List[int]]) -> Set[int]:
+        """Intersect multiple sorted lists using two-pointer merge algorithm.
+        
+        Memory-efficient alternative to set intersection for large posting lists.
+        Avoids building hash tables for intermediate results.
+        """
+        if not lists:
+            return set()
+        if len(lists) == 1:
+            return set(lists[0])
+        # Start with smallest list for efficiency
+        lists = sorted(lists, key=len)
+        current = lists[0]
+        for other in lists[1:]:
+            # Two-pointer intersection of two sorted lists
+            i = j = 0
+            new_current = []
+            len_curr = len(current)
+            len_other = len(other)
+            while i < len_curr and j < len_other:
+                curr_val = current[i]
+                other_val = other[j]
+                if curr_val == other_val:
+                    new_current.append(curr_val)
+                    i += 1
+                    j += 1
+                elif curr_val < other_val:
+                    i += 1
+                else:
+                    j += 1
+            current = new_current
+            if not current:
+                break
+        return set(current)
     def _add_postings(self, lookup_token: str, candidates: Dict, field_name: str):
         """Helper to add postings for a token to candidate dict."""
         info = self.searcher._get_token_info(lookup_token)
