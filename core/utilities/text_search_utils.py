@@ -2,20 +2,20 @@
 """Text-based search utilities for Spaudible.
 Provides fast semantic search using an inverted index with a MARISA trie."""
 import math
-import re
-import struct
 import mmap
-from collections import defaultdict
-from dataclasses import dataclass, field
-from typing import List, Dict, Set, Optional, Tuple
-from pathlib import Path
+import re
 import sqlite3
+import struct
+from collections import defaultdict
 from config import (
     PathConfig, VECTOR_HEADER_SIZE, VECTOR_RECORD_SIZE, 
     TRACK_ID_OFFSET_IN_RECORD, EXPECTED_VECTORS
 )
 from core.preprocessing.querying.query_index_searcher import QueryIndexSearcher
 from core.preprocessing.querying.query_tokenizer import tokenize
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import List, Dict, Set, Optional, Tuple
 
 TOTAL_TRACKS = EXPECTED_VECTORS
 
@@ -345,7 +345,9 @@ def search_tracks_flexible(query: str, limit: int = 50) -> List[SearchResult]:
     
     try:
         # Phase 1: Find all candidates with matching tokens
-        candidates = flex_searcher.search(raw_tokens, max_df=1_000_000)
+        # Note: a max_df of 6.5M ignores the top 16 most common tokens
+        # (eg. 'the', 'a', 'for') to enable faster querying.
+        candidates = flex_searcher.search(raw_tokens, max_df=6_500_000)
         if not candidates:
             print("DEBUG: No candidates found")
             return []
@@ -501,228 +503,9 @@ def format_search_results(results: List[SearchResult]) -> str:
         lines.append(f"{idx:2d}. {result.display_text}{cover_marker}")
     return "\n".join(lines)
 
-# =============================================================================
-# Interactive UI with prompt_toolkit
-# =============================================================================
-
-def interactive_text_search(initial_query: str = "") -> Optional[str]:
-    """
-    Interactive text search with arrow-key navigation and query editing.
-    Fixed for prompt_toolkit compatibility and terminal size requirements.
-    Prevents unnecessary re-searching when query hasn't changed.
-    """
-    import shutil
-    
-    # Check terminal size before creating UI
-    terminal_size = shutil.get_terminal_size()
-    if terminal_size.lines < 25 or terminal_size.columns < 80:
-        print(f"\n ⚠️ Terminal too small ({terminal_size.columns}x{terminal_size.lines})")
-        print(" Minimum: 80x25. Using simple search...")
-        return simple_text_search_fallback(initial_query)
-    
-    try:
-        from prompt_toolkit.application import Application
-        from prompt_toolkit.buffer import Buffer
-        from prompt_toolkit.layout import Layout, HSplit, Window
-        from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
-        from prompt_toolkit.key_binding import KeyBindings
-        from prompt_toolkit.styles import Style
-        
-        # State management
-        results: List[SearchResult] = []
-        selected_idx = 0
-        query = initial_query
-        last_search_query = ""  # Track what we last searched for
-        
-        # Create query buffer for editing
-        query_buffer = Buffer(
-            multiline=False,
-            accept_handler=lambda buf: perform_search()
-        )
-        
-        # Set initial text if provided
-        if initial_query:
-            query_buffer.text = initial_query
-        
-        # UI components
-        query_window = Window(
-            height=1,
-            content=BufferControl(buffer=query_buffer),
-            style="class:query-field",
-            cursorline=True
-        )
-        results_window = Window(
-            height=20,
-            content=FormattedTextControl(text=""),
-            style="class:results-list",
-            cursorline=False,
-            always_hide_cursor=True
-        )
-        status_window = Window(
-            height=1,
-            content=FormattedTextControl(text=""),
-            style="class:status-bar"
-        )
-        
-        # Key bindings
-        kb = KeyBindings()
-        
-        def perform_search():
-            """Execute search and update results display"""
-            nonlocal results, selected_idx, query, last_search_query
-            query = query_buffer.text.strip()
-            if not query:
-                results_window.content.text = "Enter a search query above..."
-                return
-            
-            # Only search if query actually changed
-            if query == last_search_query and results:
-                return  # Don't re-search the same query
-            
-            last_search_query = query
-            
-            try:
-                # Use new flexible search
-                results = search_tracks_flexible(query, limit=50)
-                selected_idx = 0
-                if not results:
-                    results_window.content.text = f"No results found for '{query}'"
-                else:
-                    update_results_display()
-            except Exception as e:
-                results_window.content.text = f"Search error: {str(e)}"
-                results = []
-        
-        def update_results_display():
-            """Update the results list with current selection"""
-            if not results:
-                results_window.content.text = "No results"
-                return
-            
-            lines = []
-            display_count = min(len(results), 20)
-            for i in range(display_count):
-                prefix = "→" if i == selected_idx else " "
-                result = results[i]
-                lines.append(f"{prefix} {result.display_text}")
-            
-            if len(results) > 20:
-                lines.append(f" ... and {len(results) - 20} more")
-            
-            results_window.content.text = "\n".join(lines)
-        
-        def update_status_bar():
-            """Update status bar text"""
-            if not query:
-                status = "Enter a song/artist query"
-            else:
-                status = f"Query: {query} | {len(results)} results"
-            status += " | ↑↓ Navigate | Enter=Select | Ctrl+C=Cancel | Backspace=Edit"
-            status_window.content.text = status
-        
-        @kb.add('up')
-        def move_up(event):
-            """Navigate up in results list"""
-            nonlocal selected_idx
-            if results:
-                selected_idx = max(0, selected_idx - 1)
-                update_results_display()
-        
-        @kb.add('down')
-        def move_down(event):
-            """Navigate down in results list"""
-            nonlocal selected_idx
-            if results:
-                selected_idx = min(len(results) - 1, selected_idx + 1)
-                update_results_display()
-        
-        @kb.add('enter')
-        def handle_enter(event):
-            """Handle Enter key based on context"""
-            # If query field is focused, perform search
-            if event.app.layout.current_window == query_window:
-                perform_search()
-                event.app.layout.focus(results_window)
-            else:
-                # Results field is focused: select track
-                if results and selected_idx < len(results):
-                    event.app.exit(result=results[selected_idx].track_id)
-        
-        @kb.add('backspace')
-        def handle_backspace(event):
-            """Switch focus to query field for editing"""
-            event.app.layout.focus(query_window)
-        
-        @kb.add('c-c')
-        def handle_cancel(event):
-            """Cancel search and return to main menu"""
-            event.app.exit(result=None)
-        
-        @kb.add('escape')
-        def handle_escape(event):
-            """Escape key also cancels"""
-            event.app.exit(result=None)
-        
-        # Initial search if query provided
-        if query:
-            perform_search()
-        
-        # Create layout
-        layout = Layout(
-            HSplit([
-                # Query label
-                Window(
-                    height=1,
-                    content=FormattedTextControl(text="Search query:"),
-                    style="class:query-label"
-                ),
-                query_window,
-                # Results label
-                Window(
-                    height=1,
-                    content=FormattedTextControl(text="Results:"),
-                    style="class:results-label"
-                ),
-                results_window,
-                status_window
-            ])
-        )
-        
-        # Styling
-        style = Style.from_dict({
-            'query-label': 'bold ansiblue',
-            'query-field': 'bg:ansiblack ansigreen',
-            'results-label': 'bold ansiblue',
-            'results-list': 'bg:ansiblack ansiwhite',
-            'status-bar': 'reverse',
-        })
-        
-        # Create and run application
-        app = Application(
-            layout=layout,
-            key_bindings=kb,
-            style=style,
-            full_screen=False,
-            mouse_support=False
-        )
-        
-        # Set initial focus
-        if query and results:
-            app.layout.focus(results_window)
-        else:
-            app.layout.focus(query_window)
-        
-        # Run the event loop
-        result = app.run()
-        return result  # track_id or None
-        
-    except Exception as e:
-        print(f"\n ⚠️ Interactive UI failed: {e}")
-        return simple_text_search_fallback(initial_query)
-
-
 def simple_text_search_fallback(query: str) -> Optional[str]:
-    """ Fallback text search without prompt_toolkit. Used if the library is not installed or terminal is too small. """
+    """ Fallback text search without prompt_toolkit. 
+    Used if the library is not installed or terminal is too small. """
     from ui.cli.console_utils import print_header
     
     try:
@@ -735,10 +518,12 @@ def simple_text_search_fallback(query: str) -> Optional[str]:
         
         print_header(f"Search Results for '{query}'")
         print()
+
         for idx, result in enumerate(results, 1):
             print(f" {idx:2d}. {result.display_text}")
         
         print("\n Options: [1-{}] select, [b]ack".format(len(results)))
+
         while True:
             choice = input("\n > ").strip().lower()
             if choice.isdigit():

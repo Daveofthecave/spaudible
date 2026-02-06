@@ -2,24 +2,28 @@
 """ Interactive text search interface for Spaudible. 
 Provides arrow-key navigation, query editing, and track selection. 
 """
+import shutil
 from typing import Optional, List
+
 from prompt_toolkit import Application
 from prompt_toolkit.buffer import Buffer
-from prompt_toolkit.layout import Layout, HSplit, Window, FormattedTextControl
-from prompt_toolkit.layout.controls import BufferControl
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.styles import Style
 from prompt_toolkit.keys import Keys
-from core.utilities.text_search_utils import search_tracks_flexible, SearchResult
+from prompt_toolkit.layout import HSplit, Layout, Window
+from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+from prompt_toolkit.styles import Style
+
+from core.utilities.text_search_utils import SearchResult, search_tracks_flexible
 
 def interactive_text_search(initial_query: str = "") -> Optional[str]:
     """ Interactive text search with arrow-key navigation and query editing. """
-    from prompt_toolkit.application import Application
-    from prompt_toolkit.buffer import Buffer
-    from prompt_toolkit.layout import Layout, HSplit, Window
-    from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
-    from prompt_toolkit.key_binding import KeyBindings
-    from prompt_toolkit.styles import Style
+
+    # Check terminal size before creating UI
+    terminal_size = shutil.get_terminal_size()
+    if terminal_size.lines < 25 or terminal_size.columns < 80:
+        print(f"\n ⚠️ Terminal too small ({terminal_size.columns}x{terminal_size.lines})")
+        print(" Minimum: 80x25. Using simple search...")
+        return simple_text_search_fallback(initial_query)
 
     # State management
     results: List[SearchResult] = []
