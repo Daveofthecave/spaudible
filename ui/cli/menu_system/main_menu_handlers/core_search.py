@@ -283,7 +283,8 @@ def _handle_text_search(query: str) -> str:
     Uses interactive CLI with arrow-key navigation.
     """
     print_header("Text Search")
-    print(f"\n  Searching for: '{query}'")
+    # print(f"\n  Searching for: '{query}'")
+    print()
     
     # Check preprocessed files
     files_exist, error_msg = check_preprocessed_files()

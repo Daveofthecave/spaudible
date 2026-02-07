@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import List, Dict, Set, Optional, Tuple
 
 TOTAL_TRACKS = EXPECTED_VECTORS
+DEBUG = False  # Set to True to activate debug print statements
 
 COVER_INDICATORS = frozenset([
     'karaoke', 'cover', 'tribute', 'instrumental', 'made famous by',
@@ -140,7 +141,7 @@ class FlexibleSearcher:
             # All tokens were stopwords, use them anyway but warn
             filtered_tokens = tokens
         
-        print(f"DEBUG: Searching for tokens: {filtered_tokens}")
+        if DEBUG: print(f"DEBUG: Searching for tokens: {filtered_tokens}")
         
         # For each token, find tracks where it appears in any field
         token_candidates = {}  # token -> {idx: [fields]}
@@ -170,11 +171,11 @@ class FlexibleSearcher:
             # Debug which specific token caused the empty intersection
             for token in filtered_tokens:
                 if not token_candidates[token]:
-                    print(f"DEBUG: Token '{token}' has no candidates in any field")
+                    if DEBUG: print(f"DEBUG: Token '{token}' has no candidates in any field")
                     break
             return {}
         
-        print(f"DEBUG: Found {len(all_candidates)} candidates with all tokens")
+        if DEBUG: print(f"DEBUG: Found {len(all_candidates)} candidates with all tokens")
         
         # Build result with field assignments
         result = {}
@@ -346,7 +347,7 @@ def search_tracks_flexible(query: str, limit: int = 50) -> List[SearchResult]:
     if not raw_tokens:
         return []
     
-    print(f"DEBUG: Query tokens: {raw_tokens}")
+    if DEBUG: print(f"DEBUG: Query tokens: {raw_tokens}")
     
     # Initialize
     searcher = QueryIndexSearcher()
@@ -360,14 +361,14 @@ def search_tracks_flexible(query: str, limit: int = 50) -> List[SearchResult]:
         # (eg. 'the', 'a', 'for') to enable faster querying.
         candidates = flex_searcher.search(raw_tokens, max_df=6_500_000)
         if not candidates:
-            print("DEBUG: No candidates found")
+            if DEBUG: print("DEBUG: No candidates found")
             return []
         
         vector_indices = list(candidates.keys())
-        print(f"DEBUG: {len(vector_indices):,} raw candidates from inverted index")
+        if DEBUG: print(f"DEBUG: {len(vector_indices):,} raw candidates from inverted index")
         
         # Phase 2: Pre-filter by popularity using fast vector cache
-        print(f"DEBUG: Ranking candidates by popularity...")
+        if DEBUG: print(f"DEBUG: Ranking candidates by popularity...")
         
         indexed_pops = []
         for idx in vector_indices:
@@ -380,7 +381,7 @@ def search_tracks_flexible(query: str, limit: int = 50) -> List[SearchResult]:
         indexed_pops.sort(key=lambda x: x[1], reverse=True)
         top_candidates = indexed_pops[:PRE_FILTER_LIMIT]
         
-        print(f"DEBUG: Selected top {len(top_candidates)} candidates by popularity for metadata lookup")
+        if DEBUG: print(f"DEBUG: Selected top {len(top_candidates)} candidates by popularity for metadata lookup")
         
         # Phase 3: Get track IDs only for the top candidates (fast mmap, no SQL yet)
         track_id_pairs = []  # (vector_idx, track_id, popularity)
@@ -432,7 +433,7 @@ def search_tracks_flexible(query: str, limit: int = 50) -> List[SearchResult]:
                 if len(unique_results) >= limit:
                     break
         
-        print(f"DEBUG: Returning {len(unique_results)} final results")
+        if DEBUG: print(f"DEBUG: Returning {len(unique_results)} final results")
         return unique_results
         
     finally:

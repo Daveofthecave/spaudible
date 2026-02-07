@@ -11,6 +11,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import HSplit, Layout, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+from prompt_toolkit.selection import SelectionState
 from prompt_toolkit.styles import Style
 
 from core.utilities.text_search_utils import SearchResult, search_tracks_flexible
@@ -166,6 +167,29 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         event.app.layout.focus(query_window)
         query_buffer.cursor_position = min(len(query_buffer.text), query_buffer.cursor_position + 1)
 
+    @kb.add('c-left')
+    def word_left(event):
+        """Jump cursor to previous word"""
+        event.app.layout.focus(query_window)
+        text = query_buffer.text[:query_buffer.cursor_position].rstrip()
+        # Find last space
+        last_space = text.rfind(' ')
+        if last_space == -1:
+            query_buffer.cursor_position = 0
+        else:
+            query_buffer.cursor_position = last_space
+
+    @kb.add('c-right')
+    def word_right(event):
+        """Jump cursor to next word"""
+        event.app.layout.focus(query_window)
+        text = query_buffer.text[query_buffer.cursor_position:]
+        next_space = text.find(' ')
+        if next_space == -1:
+            query_buffer.cursor_position = len(query_buffer.text)
+        else:
+            query_buffer.cursor_position += next_space + 1
+
     # Home key - move to beginning of query line
     @kb.add('home')
     def move_home(event):
@@ -180,24 +204,52 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         event.app.layout.focus(query_window)
         query_buffer.cursor_position = len(query_buffer.text)
 
+    @kb.add('c-a')
+    def select_all(event):
+        """Select all text in the query field"""
+        event.app.layout.focus(query_window)
+        query_buffer.cursor_position = len(query_buffer.text)
+        query_buffer.selection_state = SelectionState(original_cursor_position=0)
+
     # Backspace handling works from anywhere
     @kb.add('backspace')
     def handle_backspace(event):
-        """Delete character before cursor, regardless of current focus"""
+        """Delete character before cursor or selected text, regardless of focus"""
         # Always switch focus to query field first
         event.app.layout.focus(query_window)
-        # Then delete if possible
-        if query_buffer.cursor_position > 0:
+        
+        if query_buffer.selection_state is not None:
+            # Calculate selection boundaries
+            start = min(query_buffer.selection_state.original_cursor_position, 
+                    query_buffer.cursor_position)
+            end = max(query_buffer.selection_state.original_cursor_position, 
+                    query_buffer.cursor_position)
+            # Delete selection and clear it
+            query_buffer.text = query_buffer.text[:start] + query_buffer.text[end:]
+            query_buffer.cursor_position = start
+            query_buffer.selection_state = None
+        elif query_buffer.cursor_position > 0:
             query_buffer.delete_before_cursor()
 
     # Delete key handling works from anywhere
     @kb.add('delete')
     def handle_delete(event):
-        """Delete character at cursor, regardless of current focus"""
+        """Delete character at cursor or selected text, regardless of focus"""
         # Always switch focus to query field first
         event.app.layout.focus(query_window)
-        # Then delete character at cursor (if any)
-        query_buffer.delete()
+        
+        if query_buffer.selection_state is not None:
+            # Calculate selection boundaries
+            start = min(query_buffer.selection_state.original_cursor_position, 
+                    query_buffer.cursor_position)
+            end = max(query_buffer.selection_state.original_cursor_position, 
+                    query_buffer.cursor_position)
+            # Delete selection and clear it
+            query_buffer.text = query_buffer.text[:start] + query_buffer.text[end:]
+            query_buffer.cursor_position = start
+            query_buffer.selection_state = None
+        else:
+            query_buffer.delete()
 
     # Enter key handling - one press selects if results exist and query unchanged
     @kb.add('enter')
@@ -213,6 +265,15 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
             perform_search()
             # Ensure focus moves to results after search
             event.app.layout.focus(results_window)
+
+    # Clear the query line
+    @kb.add('c-u')
+    def clear_line(event):
+        """Clear entire query line"""
+        event.app.layout.focus(query_window)
+        query_buffer.text = ""
+        query_buffer.cursor_position = 0
+        query_buffer.selection_state = None
 
     # Cancel keys
     @kb.add('c-c')
@@ -231,8 +292,20 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         """Any printable character switches to query field and inserts character"""
         # Switch focus to query field
         event.app.layout.focus(query_window)
-        # Insert the character into the buffer at cursor position
-        query_buffer.insert_text(event.data, overwrite=False)
+        
+        if query_buffer.selection_state is not None:
+            # Calculate selection boundaries
+            start = min(query_buffer.selection_state.original_cursor_position, 
+                    query_buffer.cursor_position)
+            end = max(query_buffer.selection_state.original_cursor_position, 
+                    query_buffer.cursor_position)
+            # Replace selected text with typed character
+            query_buffer.text = query_buffer.text[:start] + event.data + query_buffer.text[end:]
+            query_buffer.cursor_position = start + len(event.data)
+            query_buffer.selection_state = None
+        else:
+            # Insert the character into the buffer at cursor position
+            query_buffer.insert_text(event.data, overwrite=False)
 
     # Initial search if query provided
     if query:
