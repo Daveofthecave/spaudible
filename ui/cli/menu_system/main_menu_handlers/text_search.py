@@ -19,13 +19,6 @@ from core.utilities.text_search_utils import SearchResult, search_tracks_flexibl
 def interactive_text_search(initial_query: str = "") -> Optional[str]:
     """ Interactive text search with arrow-key navigation and query editing. """
 
-    # Check terminal size before creating UI
-    terminal_size = shutil.get_terminal_size()
-    if terminal_size.lines < 25 or terminal_size.columns < 80:
-        print(f"\n ⚠️ Terminal too small ({terminal_size.columns}x{terminal_size.lines})")
-        print(" Minimum: 80x25. Using simple search...")
-        return simple_text_search_fallback(initial_query)
-
     # State management
     results: List[SearchResult] = []
     selected_idx = 0
