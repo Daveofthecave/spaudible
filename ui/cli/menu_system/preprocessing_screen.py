@@ -26,7 +26,7 @@ def screen_preprocessing():
     elif choice == '3':
         enable_profiling = True
         try:
-            interval = int(input("  Enter profile interval (millions of vectors, e.g., 4): "))
+            interval = int(input("  Enter profile interval (millions of vectors, eg. 4): "))
             profile_interval = interval * 1_000_000
             print(f"  ✅ Periodic profiling every {profile_interval:,} vectors")
         except ValueError:

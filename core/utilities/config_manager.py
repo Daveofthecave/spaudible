@@ -197,7 +197,7 @@ class ConfigManager:
         self.set('benchmark_result', result)
 
     def clear_benchmark_result(self):
-        """Clear cached benchmark result (e.g., when toggling force modes)."""
+        """Clear cached benchmark result (eg. when toggling force modes)."""
         self.set('benchmark_result', None)
 
     def get_top_k(self) -> int:

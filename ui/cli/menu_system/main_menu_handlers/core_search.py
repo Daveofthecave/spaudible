@@ -279,7 +279,7 @@ def _handle_audio_file(file_path: str) -> str:
 
 def _handle_text_search(query: str) -> str:
     """
-    Handle text-based search queries (e.g., "Keane Perfect Symmetry").
+    Handle text-based search queries (eg. "Keane Perfect Symmetry").
     Uses interactive CLI with arrow-key navigation.
     """
     print_header("Text Search")
