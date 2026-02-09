@@ -75,7 +75,8 @@ def screen_database_check():
     if not dbs_extracted and not has_any_zst and not has_vectors:
         missing = check_databases()
         if missing:
-            print("\n  Welcome to Spaudible! Setup is required before first use.\n")
+            print("\n🎵 Welcome to Spaudible!")
+            print("  Setup is required before first use.")
             print("  This application requires two types of data files to function:\n")
             print("1️⃣  Spotify Source Databases (Required for metadata & audio features)")
             print("  • spotify_clean.sqlite3 (Main database)")

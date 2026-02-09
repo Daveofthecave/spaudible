@@ -83,9 +83,7 @@ def screen_extraction() -> str:
         return "database_check"
     
     # Perform extraction
-    print("\n" + "=" * 65)
-    print("Extracting database files...")
-    print("=" * 65)
+    print_header("Extracting database files...")
 
     overall_start = time.time()
     files_completed = 0
@@ -130,9 +128,7 @@ def screen_extraction() -> str:
             return "database_check"
     
     # Summary
-    print("\n" + "=" * 65)
-    print("Extraction Summary")
-    print("=" * 65)
+    print_header("Extraction Summary")
     print(f"  Completed: {files_completed}/{len(status['to_extract'])} files")
 
     if failed_files:

@@ -23,6 +23,7 @@ from config import PathConfig
 from core.preprocessing.querying.query_tokenizer import (
     tokenize_track_name, tokenize_artist_name, tokenize_album_name
 )
+from ui.cli.console_utils import print_header
 
 # Configuration
 CHUNK_SIZE = 1_000_000  # Pairs per chunk during sort
@@ -185,9 +186,7 @@ def external_sort_token_pairs(temp_dir: Path) -> Path:
     Sort token pairs using external merge sort.
     Returns path to sorted file.
     """
-    print("\n" + "=" * 65)
-    print(" Phase 1: Writing unsorted token pairs")
-    print("=" * 65)
+    print_header("Phase 1: Writing unsorted token pairs")
 
     temp_unsorted = temp_dir / "token_pairs_unsorted.bin"
     pair_count = 0
@@ -235,9 +234,7 @@ def external_merge_sort(temp_dir: Path, unsorted_path: Path) -> Path:
     Phase 2: External merge sort for token pairs.
     Splits into chunks, sorts each, then merges with heap.
     """
-    print("\n" + "=" * 65)
-    print(" Phase 2: External Merge Sort")
-    print("=" * 65)
+    print_header("Phase 2: External Merge Sort")
 
     # Configuration
     chunk_size = 50_000_000  # 50M pairs per chunk (~500MB)
@@ -342,9 +339,7 @@ def build_inverted_index(sorted_path: Path, output_dir: Path) -> Tuple[int, int]
     Fixed interleaving bug - now writes token table first, then postings.
     Returns (token_count, posting_bytes_written)
     """
-    print("\n" + "=" * 65)
-    print(" Phase 3: Building inverted index")
-    print("=" * 65)
+    print_header("Phase 3: Building inverted index")
 
     postings_path = output_dir / "inverted_index.bin"
     offsets_path = output_dir / "temp" / "postings_offsets.tmp"
@@ -455,9 +450,7 @@ def build_marisa_trie(tokens_with_ids: Iterator[Tuple[str, int]], output_path: P
     """ Phase 4: Build MARISA trie with embedded token table indices.
     Uses RecordTrie to ensure alignment with token table.
     """
-    print("\n" + "=" * 65)
-    print(" Phase 4: Building MARISA trie")
-    print("=" * 65)
+    print_header("Phase 4: Building MARISA trie")
     print(f" Memory before trie build: {get_memory_usage()}")
     start_time = time.time()
     # Build trie from iterator (streaming)
@@ -473,9 +466,7 @@ def build_marisa_trie(tokens_with_ids: Iterator[Tuple[str, int]], output_path: P
 
 def build_query_index():
     """Main entry point with full phase structure and resumability"""
-    print("\n" + "=" * 65)
-    print(" Building Query Index")
-    print("=" * 65)
+    print_header("Building Query Index")
     print(f"  Start time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  Initial memory: {get_memory_usage()}")
     print("\nℹ️ This process will take 4-6 hours and will require")
@@ -570,9 +561,7 @@ def build_query_index():
         # Final statistics
         total_elapsed = time.time() - overall_start
 
-        print("\n" + "=" * 65)
-        print("✅ Query Index Built Successfully")
-        print("=" * 65)
+        print_header("✅ Query Index Built Successfully")
         print(f"  Completion time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"  Total time: {total_elapsed:.1f}s ({total_elapsed/3600:.1f} hours)")
         print(f"  Final memory: {get_memory_usage()}")

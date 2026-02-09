@@ -370,9 +370,7 @@ def _handle_performance_test() -> str:
     test_track_id = "0eGsygTp906u18L0Oimnem"  # Sample track ID
     
     # Section 1: CPU Chunk Size Optimization
-    print("=" * 70)
-    print("  🔧 CPU Chunk Size Optimization")
-    print("=" * 70)
+    print_header("🔧 CPU Chunk Size Optimization")
     print("  Testing various chunk sizes with 1,000,000 vectors\n")
     
     cpu_chunk_sizes = [1_000_000, 750_000, 500_000, 300_000, 200_000, 150_000, 
@@ -418,9 +416,7 @@ def _handle_performance_test() -> str:
     print(f"\n  Optimal CPU chunk size: {optimal_cpu_chunk:,} ({optimal_cpu_speed/1e6:.2f}M vec/sec)")
     
     # Section 2: GPU Batch Scaling
-    print("\n" + "=" * 70)
-    print("  🚀 GPU Batch Scaling Performance")
-    print("=" * 70)
+    print_header("📈 GPU Batch Scaling Performance")
     
     gpu_results = []
     if torch.cuda.is_available():
@@ -471,9 +467,7 @@ def _handle_performance_test() -> str:
         print("  ⚠️  No GPU available - skipping GPU tests")
     
     # Section 3: Track Search Performance
-    print("\n" + "=" * 70)
-    print("  🔍 Track Search Performance")
-    print("=" * 70)
+    print_header("🔍 Track Search Performance")
     
     track_vector, _ = build_canonical_vector(test_track_id)
     if track_vector is None:

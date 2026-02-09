@@ -72,18 +72,14 @@ def screen_download_databases() -> str:
             print(f"  - {key.replace('db_', '')}")
     
     try:
-        print("\n" + "=" * 65)
-        print("Initializing download...")
-        print("=" * 65)
+        print_header("Initializing download...")
         print()
         
         # Perform downloads
         success = downloader.download_databases()
         
         if success:
-            print("\n" + "=" * 65)
-            print("✅ All database files downloaded successfully!")
-            print("=" * 65)
+            print_header("✅ All database files downloaded successfully!")
             print(f"\n  Downloaded to: {PathConfig.DATABASES}")
             print("  Next step: Extraction (decompressing the files)")
             
@@ -206,9 +202,7 @@ def screen_download_vectors() -> str:
     downloader = SpaudibleDownloader()
     
     try:
-        print("\n" + "=" * 65)
-        print("Downloading vector cache...")
-        print("=" * 65)
+        print_header("Downloading vector cache...")
         
         # Download only the files we need
         success_count = 0
