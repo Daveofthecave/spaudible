@@ -50,12 +50,12 @@ class ZstExtractor:
         
         # Check if already extracted and valid
         if output_path.exists():
-            actual_gb = output_path.stat().st_size / (1024**3)
+            actual_gb = output_path.stat().st_size / (1e9)
             min_expected = expected_gb * 0.95  # 5% tolerance
             if actual_gb >= min_expected:
                 return output_path
             else:
-                print(f" ⚠️ Existing file too small ({actual_gb:.1f}GB vs {expected_gb}GB expected), re-extracting...")
+                print(f"⚠️ Existing file too small ({actual_gb:.1f}GB vs {expected_gb}GB expected), re-extracting...")
                 try:
                     output_path.unlink()
                 except OSError as e:
@@ -69,7 +69,7 @@ class ZstExtractor:
             raise ExtractionError("Extraction completed but output file missing")
         
         actual_size = output_path.stat().st_size
-        expected_bytes = expected_gb * 1024**3
+        expected_bytes = expected_gb * 1e9
         
         if actual_size < expected_bytes * 0.95:
             # Cleanup failed extraction
@@ -78,7 +78,7 @@ class ZstExtractor:
             except:
                 pass
             raise ExtractionError(
-                f"Extracted file too small: {actual_size / (1024**3):.1f} GB "
+                f"Extracted file too small: {actual_size / (1e9):.1f} GB "
                 f"(expected {expected_gb} GB). File may be corrupted."
             )
         
@@ -95,10 +95,10 @@ class ZstExtractor:
             extracted_path = PathConfig.DATABASES / filename.replace('.zst', '')
             
             if zst_path.exists() and not extracted_path.exists():
-                print(f"Extracting {filename}...")
+                print(f"  Extracting {filename}...")
                 try:
                     self.extract_database(filename)
-                    print(f" Done: {filename.replace('.zst', '')}")
+                    print(f"  Done: {filename.replace('.zst', '')}")
                 except Exception as e:
                     raise ExtractionError(f"Failed to extract {filename}: {e}")
         
@@ -110,7 +110,7 @@ class ZstExtractor:
         Writes to temp file first, then moves atomically on success.
         """
         temp_path = output_path.with_suffix('.tmp')
-        total_bytes = input_path.stat().st_size
+        total_bytes_expected = int(expected_gb * 1e9)
         bytes_written = 0
         
         try:
@@ -128,7 +128,7 @@ class ZstExtractor:
                         bytes_written += len(chunk)
                         
                         if self.progress_callback:
-                            self.progress_callback(input_path.name, bytes_written, total_bytes)
+                            self.progress_callback(input_path.name, bytes_written, total_bytes_expected)
             
             # Validate extraction succeeded (check non-empty)
             if temp_path.stat().st_size == 0:
@@ -165,7 +165,7 @@ class ZstExtractor:
                     (extracted for fname, _, extracted in DownloadConfig.DATABASE_FILES if fname == filename),
                     0
                 )
-                actual_gb = extracted_path.stat().st_size / (1024**3)
+                actual_gb = extracted_path.stat().st_size / (1e9)
                 
                 if actual_gb >= expected_gb * 0.95:  # Verify extraction was complete
                     zst_path.unlink()

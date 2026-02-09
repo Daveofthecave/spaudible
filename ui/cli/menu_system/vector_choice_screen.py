@@ -36,36 +36,29 @@ def screen_vector_choice() -> str:
     print("\n The vector cache enables fast similarity searching.")
     print(" You have two options:\n")
     
-    print(f" [1] 📥 Download Pre-built Vectors (Recommended)")
-    print(f" • Download size: ~{download_gb:.1f} GB")
-    print(f" • Setup time: ~30-60 minutes")
-    print(f" • Ready to use: Immediately after download")
+    print(f"[1] Download pre-built vectors (Recommended)")
+    print(f"  • Download size: {download_gb:.1f} GB")
+    print(f"  • Setup time: ~10-30 minutes")
     
-    print(f"\n [2] 🔨 Build Locally from Databases")
-    print(f" • Processing time: 4-6 hours on fast NVMe SSD")
-    print(f" • CPU usage: High (100% utilization)")
-    print(f" • Ready to use: After processing completes")
-    
-    print(f"\n [3] ⬅️ Return to Main Menu (setup later)")
+    print(f"\n[2] Build Locally from Databases")
+    print(f"  • Processing time: 5-10 hours on fast NVMe SSD")
     
     # Check disk space
     try:
         stat = shutil.disk_usage(PathConfig.VECTORS)
-        available_gb = stat.free / (1024**3)
-        print(f"\n 💾 Available disk space: {available_gb:.1f} GB")
+        available_gb = stat.free / (1e9)
+        print(f"\n  Available disk space: {available_gb:.1f} GB")
         if available_gb < download_gb:
-            print(f" ⚠️ Warning: Insufficient space for download!")
+            print(f"⚠️ Warning: Insufficient space for download!")
     except Exception:
         pass
     
-    choice = input("\n Choice (1-3): ").strip()
+    choice = input("\n Choice (1-2): ").strip()
     
     if choice == "1":
         return _handle_download_option()
     elif choice == "2":
         return "preprocessing_prompt"
-    else:
-        return "main_menu"
 
 def _handle_download_option() -> str:
     """Simply route to the download screen."""

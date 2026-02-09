@@ -62,14 +62,15 @@ class PathConfig:
         return cls.get_query_index_dir() / "inverted_index.bin"
 
     @classmethod
-    def all_required_files(cls):
+    def get_all_required_files(cls):
         """Return all required files for setup completion"""
         return [
             cls.get_main_db(),
             cls.get_audio_db(),
             cls.get_vector_file(),
             cls.get_index_file(),
-            cls.get_metadata_file()
+            cls.get_query_marisa_file(),
+            cls.get_query_postings_file()
         ]
 
     @classmethod
@@ -85,8 +86,8 @@ class DownloadConfig:
     
     # Database files: (filename, compressed_size_gb, extracted_size_gb_approx)
     DATABASE_FILES = [
-        ("spotify_clean.sqlite3.zst", 36.7, 125.0),
-        ("spotify_clean_audio_features.sqlite3.zst", 17.7, 42.0)
+        ("spotify_clean.sqlite3.zst", 36.7, 125.4),
+        ("spotify_clean_audio_features.sqlite3.zst", 17.7, 41.5)
     ]
     
     # Vector files: (filename, subdir, size_gb)

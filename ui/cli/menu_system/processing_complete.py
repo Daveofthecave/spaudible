@@ -31,7 +31,7 @@ def check_processing_status():
 def get_file_size_gb(file_path):
     """Get file size in GB."""
     if file_path.exists():
-        return file_path.stat().st_size / (1024**3)
+        return file_path.stat().st_size / (1e9)
     return 0.0
 
 def screen_processing_complete():
