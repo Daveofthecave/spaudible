@@ -18,7 +18,7 @@ def screen_preprocessing():
     print("     2. Full profiling (save at end)")
     print("     3. Periodic profiling (save every N million vectors)")
     
-    choice = input("\n  Choose profiling option (1-3): ").strip()
+    choice = input("\n  Choose profiling option [1-3]: ").strip()
     
     if choice == '2':
         enable_profiling = True
@@ -26,7 +26,7 @@ def screen_preprocessing():
     elif choice == '3':
         enable_profiling = True
         try:
-            interval = int(input("  Enter profile interval (millions of vectors, e.g., 4): "))
+            interval = int(input("  Enter profile interval (millions of vectors, eg. 4): "))
             profile_interval = interval * 1_000_000
             print(f"  ✅ Periodic profiling every {profile_interval:,} vectors")
         except ValueError:

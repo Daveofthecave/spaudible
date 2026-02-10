@@ -1,5 +1,5 @@
 # config.py
-VERSION = "0.2.3"
+VERSION = "0.2.4"
 AUTO_OPTIMIZE_CHUNK_SIZE = True
 VRAM_SAFETY_FACTOR = 0.85 # What percentage of available VRAM to use
 VRAM_SCALING_FACTOR_MB = 2**8
@@ -47,16 +47,77 @@ class PathConfig:
         return cls.GENRE_MAPPING
 
     @classmethod
-    def all_required_files(cls):
+    def get_query_index_dir(cls):
+        """Directory for query index files"""
+        return cls.VECTORS / "query_index"
+
+    @classmethod
+    def get_query_marisa_file(cls):
+        """MARISA trie file for token lookup"""
+        return cls.get_query_index_dir() / "marisa_trie.bin"
+
+    @classmethod
+    def get_query_postings_file(cls):
+        """Inverted index postings file"""
+        return cls.get_query_index_dir() / "inverted_index.bin"
+
+    @classmethod
+    def get_all_required_files(cls):
         """Return all required files for setup completion"""
         return [
             cls.get_main_db(),
             cls.get_audio_db(),
             cls.get_vector_file(),
             cls.get_index_file(),
-            cls.get_metadata_file()
+            cls.get_query_marisa_file(),
+            cls.get_query_postings_file()
         ]
 
     @classmethod
     def get_config_path(cls):
         return cls.BASE_DIR / "config.json"
+
+class DownloadConfig:
+    """Configuration for HuggingFace downloads and file specifications."""
+    
+    # Repository IDs
+    REPO_DB = "Daveofthecave/spaudible_db"
+    REPO_VECTORS = "Daveofthecave/spaudible_vectors"
+    
+    # Database files: (filename, compressed_size_gb, extracted_size_gb_approx)
+    DATABASE_FILES = [
+        ("spotify_clean.sqlite3.zst", 36.7, 125.4),
+        ("spotify_clean_audio_features.sqlite3.zst", 17.7, 41.5)
+    ]
+    
+    # Vector files: (filename, subdir, size_gb)
+    VECTOR_FILES = [
+        ("track_vectors.bin", None, 26.6),
+        ("track_index.bin", None, 6.7),
+        ("inverted_index.bin", "query_index", 4.7),
+        ("marisa_trie.bin", "query_index", 0.148)
+    ]
+    
+    @classmethod
+    def get_download_state_file(cls):
+        """Path to download state JSON for resume tracking."""
+        return PathConfig.BASE_DIR / "data" / "download_state.json"
+    
+    @classmethod
+    def get_required_space_gb(cls, include_databases: bool = True, include_vectors: bool = True) -> float:
+        """Calculate total required download space in GB."""
+        total = 0.0
+        if include_databases:
+            total += sum(compressed for _, compressed, _ in cls.DATABASE_FILES)
+        if include_vectors:
+            total += sum(size for _, _, size in cls.VECTOR_FILES)
+        return total
+    
+    @classmethod
+    def get_total_extracted_space_gb(cls) -> float:
+        """Calculate max disk space needed at peak (compressed + extracted)."""
+        db_compressed = sum(compressed for _, compressed, _ in cls.DATABASE_FILES)
+        db_extracted = sum(extracted for _, _, extracted in cls.DATABASE_FILES)
+        vectors = sum(size for _, _, size in cls.VECTOR_FILES)
+        # Peak usage: compressed DBs + extracted DBs + vectors
+        return db_compressed + db_extracted + vectors

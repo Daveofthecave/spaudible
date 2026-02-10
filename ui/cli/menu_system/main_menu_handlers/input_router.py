@@ -3,8 +3,10 @@ import os
 import re
 from enum import Enum
 from pathlib import Path
+from typing import Tuple, Any, Optional
 
 class InputType(Enum):
+    """Enum for input type classification."""
     SPOTIFY_TRACK = "Spotify Track URL"
     SPOTIFY_PLAYLIST = "Spotify Playlist URL"
     TRACK_ID = "Spotify Track ID"
@@ -13,94 +15,168 @@ class InputType(Enum):
     TEXT_QUERY = "Text Search Query"
     UNKNOWN = "Unknown Input"
 
-def route_input(user_input: str):
-    """Detect input type and extract relevant data."""
+def is_valid_isrc(isrc: str) -> bool:
+    """
+    Strict ISRC validation according to ISO 3901 standard.
+    Format: CC-XXX-YY-NNNNN or CCXXXYYNNNNNN where:
+    - CC: 2 letters (country code, e.g., US, GB, FR)
+    - XXX: 3 alphanumeric (registrant code)
+    - YY: 2 digits (year, 00-99)
+    - NNNNN: 5 digits (recording designation)
+    """
+    if not isrc:
+        return False
+        
+    # Remove hyphens and normalize
+    compact = isrc.replace('-', '').upper()
+    
+    if len(compact) != 12:
+        return False
+        
+    # CC: Country code must be 2 letters
+    if not compact[0:2].isalpha():
+        return False
+        
+    # XXX: Registrant code must be 3 alphanumeric characters
+    if not compact[2:5].isalnum():
+        return False
+        
+    # YY: Year must be 2 digits (00-99)
+    if not compact[5:7].isdigit():
+        return False
+        
+    # NNNNN: Designation must be 5 digits
+    if not compact[7:12].isdigit():
+        return False
+        
+    return True
+
+def detect_input_type(user_input: str) -> Tuple[str, Any]:
+    """
+    Detect input type with strict validation to prevent false positives.
+    
+    Detection hierarchy (first match wins):
+    1. Spotify track URLs (eg. https://open.spotify.com/track/4PTG3Z6ehGkBFwjybzWkR8)
+    2. Spotify playlist URLs (eg. https://open.spotify.com/playlist/37i9dQZF1EIec0dMqGbsyB)
+    3. ISRC codes (eg. USIR20400274)
+    4. Spotify track IDs (eg. 0eGsygTp906u18L0Oimnem)
+    5. Local audio file paths (must look like path or have audio extension)
+    6. Text queries (fallback for any remaining input including "AC/DC", "song name", etc.)
+    
+    Args:
+        user_input: Raw user input string
+        
+    Returns:
+        Tuple of (input_type_key, extracted_data)
+    """
     if not user_input:
         return "unknown", None
-
+        
     user_input = user_input.strip()
-    detected_type = InputType.UNKNOWN
     processed_data = None
-
-    # ISRC codes (12 characters: CC-XXX-YY-NNNNN or CCXXXYYNNNNN format)
-    # Accept both formatted and compact forms
-    compact_isrc = user_input.replace('-', '').upper()
-    if len(compact_isrc) == 12 and compact_isrc[:2].isalpha() and compact_isrc[2:].isalnum():
-        detected_type = InputType.ISRC_CODE
-        processed_data = compact_isrc
     
-    # Spotify track URLs
-    elif "open.spotify.com/track/" in user_input.lower():
+    # 1. Spotify track URLs - check before anything else since they're very specific
+    if "open.spotify.com/track/" in user_input.lower():
         track_id = extract_spotify_track_id(user_input)
         if track_id:
-            detected_type = InputType.SPOTIFY_TRACK
-            processed_data = track_id
+            return "spotify_track_url", track_id
     
-    # Spotify playlist URLs
+    # 2. Spotify playlist URLs
     elif "open.spotify.com/playlist/" in user_input.lower():
         playlist_id = extract_spotify_playlist_id(user_input)
         if playlist_id:
-            detected_type = InputType.SPOTIFY_PLAYLIST
-            processed_data = playlist_id
+            return "spotify_playlist_url", playlist_id
     
-    # Spotify track IDs (22 chars)
-    elif len(user_input) == 22 and re.match(r'^[A-Za-z0-9_-]+$', user_input):
-        detected_type = InputType.TRACK_ID
-        processed_data = user_input
+    # 3. ISRC codes - strict validation to avoid matching words like "illumination"
+    #    ISRCs never contain spaces, so skip if space present
+    if ' ' not in user_input and len(user_input.replace('-', '')) == 12:
+        if is_valid_isrc(user_input):
+            # Return non-hyphenated for consistency
+            return "isrc_code", user_input.replace('-', '').upper()
     
-    # Local file paths
-    elif os.path.sep in user_input or user_input.startswith('.') or user_input.startswith('~'):
-        expanded_path = os.path.expanduser(user_input)
-        if os.path.exists(expanded_path):
-            audio_extensions = {'.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.oga', '.m4b'}
-            if Path(expanded_path).suffix.lower() in audio_extensions:
-                detected_type = InputType.FILE_PATH
-                processed_data = expanded_path
+    # 4. Spotify track IDs (22 characters, base62)
+    #    Must be exactly 22 chars, no spaces, and valid base62 characters
+    if (len(user_input) == 22 and 
+        ' ' not in user_input and 
+        re.match(r'^[A-Za-z0-9_-]+$', user_input) and
+        # Must also contain at least one letter AND at least one digit,
+        # since there are no purely alphabetical or purely numerical track IDs
+        # in the Spotify database
+        re.search(r'[A-Za-z]', user_input) and 
+        re.search(r'[0-9]', user_input)):
+        return "track_id", user_input
     
-    # Text queries (fallback)
-    elif len(user_input) >= 2:
-        detected_type = InputType.TEXT_QUERY
-        processed_data = user_input
-
-    # Map to string key
-    type_to_key = {
-        InputType.SPOTIFY_TRACK: "spotify_track_url",
-        InputType.SPOTIFY_PLAYLIST: "spotify_playlist_url",
-        InputType.TRACK_ID: "track_id",
-        InputType.FILE_PATH: "audio_file",
-        InputType.ISRC_CODE: "isrc_code",
-        InputType.TEXT_QUERY: "text_query",
-        InputType.UNKNOWN: "unknown"
+    # 5. Audio file paths - tightened to avoid "AC/DC" false positives
+    #    Must either:
+    #      - Start with explicit path indicators (/, ./, ~/, C:\, etc.)
+    #      - OR contain path separators AND have audio file extension
+    has_audio_ext = os.path.splitext(user_input)[1].lower() in {
+        '.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', 
+        '.oga', '.m4b', '.wma', '.aiff', '.opus'
     }
+    
+    is_audio_file_path = (
+        # Unix: absolute or relative paths
+        user_input.startswith(('./', '../', '~/', '/')) or
+        # Windows: drive letters or UNC paths  
+        re.match(r'^[A-Za-z]:[/\\]', user_input) or
+        re.match(r'^\\\\', user_input) or  # UNC paths \\server\share
+        # Has separator and extension (e.g., "music/song.mp3" or "music\song.mp3")
+        (('/' in user_input or '\\' in user_input) and has_audio_ext)
+    )
+    
+    if is_audio_file_path:
+        expanded_path = os.path.expanduser(user_input)
+        # Only accept if file exists OR has audio extension (avoid "AC/DC" which has no ext)
+        if os.path.exists(expanded_path) or has_audio_ext:
+            # Verify it's not a URL that happens to have a dot
+            if not user_input.startswith('http'):
+                return "audio_file", expanded_path
+    
+    # 6. Text queries
+    #    This catches:
+    #      - "AC/DC" (has slash but not a file path)
+    #      - "illumination" (12 chars but not ISRC format)
+    #      - "Keane Perfect Symmetry"
+    if len(user_input) >= 1:
+        return "text_query", user_input
+        
+    return "unknown", None
 
-    return type_to_key[detected_type], processed_data
-
-def extract_spotify_track_id(url: str) -> str:
-    """Extract track ID from Spotify URL."""
+def extract_spotify_track_id(url: str) -> Optional[str]:
+    """ Extract track ID from various Spotify URL formats. """
     patterns = [
         r'open\.spotify\.com/track/([A-Za-z0-9_-]+)',
         r'spotify:track:([A-Za-z0-9_-]+)',
-        r'track/([A-Za-z0-9_-]+)',
+        r'track/([A-Za-z0-9_-]{22})',
     ]
+
     for pattern in patterns:
-        match = re.search(pattern, url)
+        match = re.search(pattern, url, re.IGNORECASE)
         if match:
             track_id = match.group(1)
             if len(track_id) == 22:
                 return track_id
+    
     return None
 
-def extract_spotify_playlist_id(url: str) -> str:
-    """Extract playlist ID from Spotify URL."""
+def extract_spotify_playlist_id(url: str) -> Optional[str]:
+    """ Extract playlist ID from various Spotify URL formats. """
     patterns = [
         r'open\.spotify\.com/playlist/([A-Za-z0-9_-]+)',
         r'spotify:playlist:([A-Za-z0-9_-]+)',
-        r'playlist/([A-Za-z0-9_-]+)',
+        r'playlist/([A-Za-z0-9_-]{22})',
     ]
+
     for pattern in patterns:
-        match = re.search(pattern, url)
+        match = re.search(pattern, url, re.IGNORECASE)
         if match:
             playlist_id = match.group(1)
             if len(playlist_id) == 22:
                 return playlist_id
+    
     return None
+
+def route_input(user_input: str) -> Tuple[str, Any]:
+    """ Backwards-compatible alias for detect_input_type. """
+    return detect_input_type(user_input)

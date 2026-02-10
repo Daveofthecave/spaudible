@@ -137,12 +137,7 @@ def is_setup_complete() -> bool:
     Fast check if setup is complete by verifying all required files exist
     and have reasonable sizes.
     """
-    required_files = [
-        PathConfig.get_main_db(),
-        PathConfig.get_audio_db(),
-        PathConfig.get_vector_file(),
-        PathConfig.get_index_file(),
-    ]
+    required_files = PathConfig.get_all_required_files()
     
     if not all(file.exists() for file in required_files):
         return False

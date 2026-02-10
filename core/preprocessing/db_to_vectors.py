@@ -16,6 +16,7 @@ from core.vectorization.track_vectorizer import build_track_vectors_batch
 from core.preprocessing.unified_vector_writer import UnifiedVectorWriter
 from core.preprocessing.progress import ProgressTracker
 from core.utilities.region_utils import REGION_MAPPING, get_region_from_isrc
+from ui.cli.console_utils import print_header
 from typing import List, Dict, Any, Generator
 
 # The SQLite parameter limit is 999
@@ -358,9 +359,7 @@ class PreprocessingEngine:
     
     def run(self):
         """Run complete preprocessing pipeline (vectors + sorted index)."""
-        print("\n" + "═" * 65)
-        print("  🚀 Starting Database Preprocessing")
-        print("═" * 65)
+        print_header("🚀 Starting Database Preprocessing")
         
         # Validate databases
         if not Path(self.main_db_path).exists():

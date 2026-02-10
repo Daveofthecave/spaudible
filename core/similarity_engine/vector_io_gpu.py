@@ -32,6 +32,14 @@ class VectorReaderGPU:
         """
         self.vectors_path = Path(vectors_path) if vectors_path else PathConfig.get_vector_file()
         self.device = device if torch.cuda.is_available() else "cpu"
+
+        # Check CUDA availability first
+        cuda_available = torch.cuda.is_available()
+        if not cuda_available:
+            print("  ⚠️  CUDA not available; falling back to CPU mode")
+            self.device = "cpu"
+        else:
+            self.device = device
         
         # Open and memory-map the file
         self._file = open(self.vectors_path, 'rb')

@@ -191,7 +191,7 @@ class TrackResolver:
         Requires main database to be present.
         
         Args:
-            isrc: 12-character ISRC code (e.g., "USIR20400274")
+            isrc: 12-character ISRC code (eg. "USIR20400274")
             
         Returns:
             Spotify track ID string or None if not found
