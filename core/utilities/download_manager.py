@@ -131,10 +131,12 @@ class SpaudibleDownloader:
         self._save_state()
         
         try:
-            # Filter out deprecation warnings for cleaner output
+            # Filter out deprecation/authentication nag messages for cleaner output
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", message=".*resume_download.*deprecated.*")
                 warnings.filterwarnings("ignore", message=".*local_dir_use_symlinks.*deprecated.*")
+                warnings.filterwarnings("ignore", message=".*unauthenticated.*")
+                warnings.filterwarnings("ignore", message=".*HF_TOKEN.*")    
                 
                 downloaded_path = hf_hub_download(
                     repo_id=repo_id,

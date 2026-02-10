@@ -22,26 +22,26 @@ def screen_vector_choice() -> str:
     if has_vectors:
         is_valid, msg = validate_vector_cache(checksum_validation=False)
         if is_valid:
-            print("\n ✅ Vector cache already exists and is valid!")
-            input("\n Press Enter to continue to main menu...")
+            print("\n  ✅ Vector cache already exists and is valid!")
+            input("\n  Press Enter to continue to main menu...")
             return "main_menu"
         else:
-            print("\n ⚠️ Existing vector cache appears incomplete.")
+            print("\n  ⚠️  Existing vector cache appears incomplete.")
     
     # Calculate requirements
     download_gb = DownloadConfig.get_required_space_gb(
         include_databases=False, include_vectors=True
     )
     
-    print("\n The vector cache enables fast similarity searching.")
-    print(" You have two options:\n")
+    print("\n  The vector cache enables fast similarity searching.")
+    print("  You have two options:\n")
     
-    print(f"[1] Download pre-built vectors (Recommended)")
-    print(f"  • Download size: {download_gb:.1f} GB")
-    print(f"  • Setup time: ~10-30 minutes")
+    print(f"  [1] Download pre-built vectors (Recommended)")
+    print(f"    • Download size: {download_gb:.1f} GB")
+    print(f"    • Setup time: ~10-30 minutes")
     
-    print(f"\n[2] Build Locally from Databases")
-    print(f"  • Processing time: 5-10 hours on fast NVMe SSD")
+    print(f"\n  [2] Build Locally from Databases")
+    print(f"    • Processing time: 5-10 hours on fast NVMe SSD")
     
     # Check disk space
     try:
@@ -49,11 +49,11 @@ def screen_vector_choice() -> str:
         available_gb = stat.free / (1e9)
         print(f"\n  Available disk space: {available_gb:.1f} GB")
         if available_gb < download_gb:
-            print(f"⚠️ Warning: Insufficient space for download!")
+            print(f"  ⚠️  Warning: Insufficient space for download!")
     except Exception:
         pass
     
-    choice = input("\n Choice (1-2): ").strip()
+    choice = input("\n  Choice [1-2]: ").strip()
     
     if choice == "1":
         return _handle_download_option()

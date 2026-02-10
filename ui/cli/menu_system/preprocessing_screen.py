@@ -18,7 +18,7 @@ def screen_preprocessing():
     print("     2. Full profiling (save at end)")
     print("     3. Periodic profiling (save every N million vectors)")
     
-    choice = input("\n  Choose profiling option (1-3): ").strip()
+    choice = input("\n  Choose profiling option [1-3]: ").strip()
     
     if choice == '2':
         enable_profiling = True

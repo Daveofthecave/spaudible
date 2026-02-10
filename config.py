@@ -1,5 +1,5 @@
 # config.py
-VERSION = "0.2.3"
+VERSION = "0.2.4"
 AUTO_OPTIMIZE_CHUNK_SIZE = True
 VRAM_SAFETY_FACTOR = 0.85 # What percentage of available VRAM to use
 VRAM_SCALING_FACTOR_MB = 2**8
@@ -93,8 +93,8 @@ class DownloadConfig:
     # Vector files: (filename, subdir, size_gb)
     VECTOR_FILES = [
         ("track_vectors.bin", None, 26.6),
-        ("track_index.bin", None, 6.66),
-        ("inverted_index.bin", "query_index", 4.72),
+        ("track_index.bin", None, 6.7),
+        ("inverted_index.bin", "query_index", 4.7),
         ("marisa_trie.bin", "query_index", 0.148)
     ]
     

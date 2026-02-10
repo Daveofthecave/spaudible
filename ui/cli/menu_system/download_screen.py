@@ -24,29 +24,29 @@ def screen_download_databases() -> str:
         # Fallback if can't determine disk space
         available_gb = float('inf')
     
-    print(f"\n Download Size: {download_gb:.1f} GB (compressed)")
-    print(f" Peak Disk Usage: {peak_usage_gb:.1f} GB (during extraction)")
-    print(f" Available Space: {available_gb:.1f} GB")
+    print(f"\n  Download Size: {download_gb:.1f} GB (compressed)")
+    print(f"  Peak Disk Usage: {peak_usage_gb:.1f} GB (during extraction)")
+    print(f"  Available Space: {available_gb:.1f} GB")
     
     if available_gb < peak_usage_gb:
-        print(f"\n❌ Insufficient disk space!")
+        print(f"\n  ❌ Insufficient disk space!")
         print(f"  You need at least {peak_usage_gb:.1f} GB free for extraction,")
         print(f"  but only {available_gb:.1f} GB is available.")
         print(f"\n  Options:")
-        print(f"1. Free up disk space")
-        print(f"2. Download files manually and place them in:")
+        print(f"  1. Free up disk space")
+        print(f"  2. Download files manually and place them in:")
         print(f"     {PathConfig.DATABASES}")
         input("\n  Press Enter to return to system check...")
         return "database_check"
     
     if available_gb < peak_usage_gb * 1.2:  # 20% buffer warning
-        print(f"\n⚠️ Warning: Disk space is tight!")
+        print(f"\n  ⚠️  Warning: Disk space is tight!")
         print(f"  Ensure you have {peak_usage_gb:.1f} GB free before extraction.")
     
     print("\n  Files to download:\n")
     for filename, size_gb, extracted_gb in DownloadConfig.DATABASE_FILES:
-        print(f"• {filename}")
-        print(f"  Compressed: {size_gb:.1f} GB → Extracted: {extracted_gb:.1f} GB")
+        print(f"  • {filename}")
+        print(f"    Compressed: {size_gb:.1f} GB → Extracted: {extracted_gb:.1f} GB")
     
     print("\n  Downloads can be resumed if interrupted.")
     
@@ -90,26 +90,30 @@ def screen_download_databases() -> str:
             else:
                 return "database_check"
         else:
-            print("\n❌ Download could not be completed.")
+            print("\n  ❌ Download could not be completed.")
             input("\n  Press Enter to return...")
             return "database_check"
             
     except DownloadError as e:
-        print(f"\n❌ Download failed: {e}")
+        print(f"\n  ❌ Download failed: {e}")
         
         # Check if it's a network issue or file issue
         if "404" in str(e) or "not found" in str(e).lower():
             print("\n  The file may have been moved or renamed.")
             print(f"  Please check: https://huggingface.co/datasets/{DownloadConfig.REPO_DB}")
+
             print("\n  Options:")
-            print("  1. Retry download")
-            print("  2. Clear download state and retry")
-            print("  3. Return to system check")
+            options = [
+                "Retry download", 
+                "Clear download state and retry", 
+                "Return to system check"
+            ]
+            print_menu(options)            
+            choice = get_choice(len(options))
             
-            choice = input("\n  Choice (1-3): ").strip()
-            if choice == "1":
+            if choice == 1:
                 return "download_screen"
-            elif choice == "2":
+            elif choice == 2:
                 print("  Clearing download state...")
                 downloader.clear_state()
                 print("  State cleared. You can retry now.")
@@ -119,14 +123,14 @@ def screen_download_databases() -> str:
                 return "database_check"
                 
     except KeyboardInterrupt:
-        print("\n\n⚠️ Download interrupted by user!")
+        print("\n\n  ⚠️  Download interrupted by user!")
         print("  Progress has been saved. You can resume by restarting.")
         print(f"  Resume from: {downloader.state_file}")
         input("\n  Press Enter to return...")
         return "database_check"
         
     except Exception as e:
-        print(f"\n❌ Unexpected error: {e}")
+        print(f"\n  ❌ Unexpected error: {e}")
         import traceback
         traceback.print_exc()
         input("\n  Press Enter to return...")
@@ -153,7 +157,7 @@ def screen_download_vectors() -> str:
     
     # If all files exist, we're done
     if not files_needed:
-        print("\n✅ All vector cache files already exist!")
+        print("\n  ✅ All vector cache files already exist!")
         input("\n  Press Enter to continue...")
         return "main_menu"
     
@@ -162,7 +166,7 @@ def screen_download_vectors() -> str:
     only_query_index = has_main_vectors and all(f[0] in ['inverted_index.bin', 'marisa_trie.bin'] for f in files_needed)
     
     if only_query_index:
-        print("\n⚠️ Query index files are missing (required for text search).")
+        print("\n  ⚠️  Query index files are missing (required for text search).")
         print("  The main vector files exist, but the search index needs to be downloaded.\n")
     else:
         print("\n  The vector cache enables fast similarity searching.")
@@ -179,7 +183,7 @@ def screen_download_vectors() -> str:
     print(f"  Available Space: {available_gb:.1f} GB")
     
     if available_gb < total_size_needed:
-        print(f"\n❌ Insufficient disk space!")
+        print(f"\n  ❌ Insufficient disk space!")
         print(f"  You need at least {total_size_needed:.1f} GB free.")
         input("\n  Press Enter to return...")
         return "vector_choice" if not only_query_index else "database_check"
@@ -188,7 +192,7 @@ def screen_download_vectors() -> str:
     print("\n  The following files will be downloaded:\n")
     for filename, subdir, size_gb in files_needed:
         path_display = f"{subdir}/{filename}" if subdir else filename
-        print(f"• {path_display} ({size_gb} GB)")
+        print(f"  • {path_display} ({size_gb} GB)")
     
     if len(files_needed) < len(DownloadConfig.VECTOR_FILES):
         existing_count = len(DownloadConfig.VECTOR_FILES) - len(files_needed)
@@ -241,7 +245,7 @@ def screen_download_vectors() -> str:
         
         # Determine next screen based on what we downloaded
         if success_count == len(files_needed):
-            print("\n✅ All required files downloaded successfully!")
+            print("\n  ✅ All required files downloaded successfully!")
             
             if only_query_index:
                 print("  The query index is now ready.")
@@ -253,21 +257,21 @@ def screen_download_vectors() -> str:
                 return "main_menu"
                 
         elif success_count > 0:
-            print(f"\n⚠️ Downloaded {success_count}/{len(files_needed)} files.")
+            print(f"\n  ⚠️  Downloaded {success_count}/{len(files_needed)} files.")
             print("  Some files failed to download. You may need to retry.")
             input("\n  Press Enter to return...")
             return "vector_choice" if not only_query_index else "database_check"
         else:
-            print("\n❌ Download failed. No files were downloaded.")
+            print("\n  ❌ Download failed. No files were downloaded.")
             input("\n  Press Enter to return...")
             return "vector_choice" if not only_query_index else "database_check"
             
     except KeyboardInterrupt:
-        print("\n\n⚠️ Download interrupted!")
+        print("\n\n  ⚠️  Download interrupted!")
         print("  Progress saved. Resume by restarting.")
         input("\n  Press Enter to return...")
         return "download_vectors" if not only_query_index else "database_check"
     except Exception as e:
-        print(f"\n❌ Unexpected error: {e}")
+        print(f"\n  ❌ Unexpected error: {e}")
         input("\n  Press Enter to return...")
         return "vector_choice" if not only_query_index else "database_check"

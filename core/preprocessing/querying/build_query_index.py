@@ -38,7 +38,7 @@ def get_memory_usage() -> str:
 
 def signal_handler(sig, frame):
     """Handle Ctrl+C gracefully"""
-    print("\n\n⚠️ Received interrupt signal. Cleaning up...")
+    print("\n\n  ⚠️  Received interrupt signal. Cleaning up...")
     sys.exit(0)
 
 signal.signal(signal.SIGINT, signal_handler)
@@ -112,10 +112,10 @@ def stream_token_pairs() -> Iterator[Tuple[str, int]]:
     total_pairs = 0
     start_time = time.time()
 
-    print(f"Initial memory: {get_memory_usage()}")
-    print(f"Total tracks in database: {total_tracks:,}")
-    print(f"Estimated token pairs: ~{total_tracks * 9.4:,} (avg 9.4 tokens/track)")
-    print(f"Processing in batches of 500K tracks...")
+    print(f"  Initial memory: {get_memory_usage()}")
+    print(f"  Total tracks in database: {total_tracks:,}")
+    print(f"  Estimated token pairs: ~{total_tracks * 9.4:,} (avg 9.4 tokens/track)")
+    print(f"  Processing in batches of 500K tracks...")
 
     # Process in batches of 500K tracks
     batch_size = 500_000
@@ -451,7 +451,7 @@ def build_marisa_trie(tokens_with_ids: Iterator[Tuple[str, int]], output_path: P
     Uses RecordTrie to ensure alignment with token table.
     """
     print_header("Phase 4: Building MARISA trie")
-    print(f" Memory before trie build: {get_memory_usage()}")
+    print(f"  Memory before trie build: {get_memory_usage()}")
     start_time = time.time()
     # Build trie from iterator (streaming)
     # Store token table index as a tuple (idx,) - RecordTrie packs it internally via format string
@@ -469,10 +469,10 @@ def build_query_index():
     print_header("Building Query Index")
     print(f"  Start time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  Initial memory: {get_memory_usage()}")
-    print("\nℹ️ This process will take 4-6 hours and will require")
-    print("   ~70 GB of temporary disk space before producing")
-    print("   the final inverted index and MARISA trie, totalling 5 GB.")
-    print("   Temporary files will be kept in data/vectors/query_index/temp/ for debugging.")
+    print("\n  ℹ️  This process will take 4-6 hours and will require")
+    print("     ~70 GB of temporary disk space before producing")
+    print("     the final inverted index and MARISA trie, totalling 5 GB.")
+    print("     Temporary files will be kept in data/vectors/query_index/temp/ for debugging.")
 
     overall_start = time.time()
 
@@ -518,17 +518,16 @@ def build_query_index():
             print(f"  Size: {postings_path.stat().st_size / (1024**3):.2f} GB")
 
             # Ask user if he wants to rebuild
-            print(" Do you want to rebuild Phase 3?")
-            print(" [1] Yes (recommended)")
-            print(" [2] No, skip to Phase 4")
-            print(" [3] Cancel")
+            print("\n  Do you want to rebuild Phase 3?")
+            options = ["Yes (recommended)", "No, skip to Phase 4", "Cancel"]
+            print_menu(options)
 
-            choice = input("\n Choice (1-3): ").strip()
-            if choice == '1':
+            choice = get_choice(len(options))
+            if choice == 1:
                 print("  Rebuilding Phase 3...")
                 postings_path.unlink()  # Delete corrupt file
                 token_count, postings_size = build_inverted_index(sorted_path, output_dir)
-            elif choice == '2':
+            elif choice == 2:
                 print("  Skipping Phase 3 (using existing index)")
                 # Need to get token count for stats
                 with open(postings_path, 'rb') as f:
@@ -536,7 +535,7 @@ def build_query_index():
                     magic, version, token_count, token_table_offset, postings_offset = struct.unpack("<7sBQQQ", header)
                 postings_size = postings_path.stat().st_size
             else:
-                print(" ❌ Build cancelled by user")
+                print("  ❌ Build cancelled by user")
                 return
         else:
             print("\n  Phase 3: Building inverted index from sorted pairs...")
@@ -549,8 +548,8 @@ def build_query_index():
             print(f"  Skipping Phase 4 (MARISA trie)")
         else:
             if not sorted_path.exists():
-                print("\n ❌ ERROR: Cannot build MARISA trie - sorted file missing!")
-                print(f" Expected: {sorted_path}")
+                print("\n  ❌ ERROR: Cannot build MARISA trie - sorted file missing!")
+                print(f"  Expected: {sorted_path}")
                 return
             
             print("\n  Phase 4: Building MARISA trie from tokens...")
@@ -574,17 +573,18 @@ def build_query_index():
         print("  (Delete manually if you need to reclaim disk space)")
 
     except Exception as e:
-        print(f"\n ❌ Build failed: {e}")
+        print(f"\n  ❌ Build failed: {e}")
         import traceback
         traceback.print_exc()
         raise
     finally:
-        # Only cleanup temp directory if explicitly requested (not by default)
+        # Only cleanup temp directory if explicitly requested (shouldn't be the default)
         # This preserves temp files for debugging
         print("\n  Cleanup: Temp files preserved for debugging")
-        print(f" To clean up manually, delete: {temp_dir}")
+        print(f"  To clean up manually, delete: {temp_dir}")
 
-def _write_token_entry(f, token: str, indices: List[int], token_table_offset: int, postings_offset: int, token_idx: int):
+def _write_token_entry(f, token: str, indices: List[int], token_table_offset: int, 
+                       postings_offset: int, token_idx: int):
     """Write token table entry (does not write postings)"""
     # Calculate entry position
     entry_offset = token_table_offset + token_idx * TOKEN_TABLE_ENTRY_SIZE

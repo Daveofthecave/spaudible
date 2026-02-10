@@ -74,9 +74,7 @@ def main():
             current_screen = next_screen
         elif current_screen == "exit":
             print("\n" + "═" * 70)
-            print("  Thank you for using Spaudible!")
-            print("  Exiting in 2 seconds...")
-            time.sleep(2)
+            print("  Thank you for using Spaudible!\n")
             break
         else:
             print(f"\n  Error: Unknown screen '{current_screen}'")

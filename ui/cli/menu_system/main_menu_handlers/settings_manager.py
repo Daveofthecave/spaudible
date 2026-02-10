@@ -31,6 +31,7 @@ except ImportError:
 
 def handle_settings() -> str:
     """Handle settings and tools menu."""
+    clear_screen()
     print_header("Settings & Tools")
 
     # Get current settings
@@ -238,11 +239,13 @@ def _adjust_feature_weights() -> str:
         print(f"  {i+1:2d}. {feature:25} : {weight:.2f}")
     
     print("\n  Options:")
-    print("  1. Edit individual weights")
-    print("  2. Reset all weights to default")
-    print("  3. Back to settings")
-    
-    choice = get_choice(3)
+    options = [
+        "Edit individual weights", 
+        "Reset all weights to default", 
+        "Back to settings"
+    ]
+    print_menu(options)
+    choice = get_choice(len(options))
     
     if choice == 1:
         return _edit_weights(weights, features)
@@ -294,7 +297,7 @@ def _handle_system_status() -> str:
     """Display comprehensive system status."""
     print_header("System Status")
     
-    print("\n  📊 Database Metrics:\n")
+    print("\n   Data Files Present:\n")
     
     # Main Spotify database
     main_db = PathConfig.get_main_db()
@@ -323,6 +326,17 @@ def _handle_system_status() -> str:
     # are obsolete in the new format.
     # They are now embedded within the unified vector file.
     
+    # Query index files
+    inverted_index = PathConfig.get_query_postings_file()
+    inverted_index_size = format_file_size(inverted_index.stat().st_size) if inverted_index.exists() else "Not found"
+    print(f"   • Query Index: {inverted_index.name}")
+    print(f"       Size: {inverted_index_size}")
+
+    marisa_trie = PathConfig.get_query_marisa_file()
+    marisa_trie_size = format_file_size(marisa_trie.stat().st_size) if marisa_trie.exists() else "Not found"
+    print(f"   • Query Trie: {marisa_trie.name}")
+    print(f"       Size: {marisa_trie_size}")
+
     # Genre mapping
     genre_file = PathConfig.get_genre_mapping()
     genre_size = format_file_size(genre_file.stat().st_size) if genre_file.exists() else "Not found"
@@ -332,21 +346,22 @@ def _handle_system_status() -> str:
     # Total disk usage (only active files)
     total_size = 0
     files_to_check = [
-        main_db, audio_db, vector_file, index_file, genre_file
+        main_db, audio_db, vector_file, index_file,
+        inverted_index, marisa_trie, genre_file
     ]
     for file in files_to_check:
         if file.exists():
             total_size += file.stat().st_size
-    print(f"\n  💾 Total Disk Usage: {format_file_size(total_size)}")            
+    print(f"\n   Total Disk Usage: {format_file_size(total_size)}")            
     
     # Check canonical resolver
     try:
         build_canonical_vector("0eGsygTp906u18L0Oimnem")  # Test track
-        print("\n  ✅ Canonical Track ID Resolver: Ready")
+        print("\n✅ Canonical Track ID Resolver: Ready")
     except Exception as e:
-        print(f"\n  ⚠️  Canonical Track ID Resolver: Error - {str(e)}")
+        print(f"\n⚠️  Canonical Track ID Resolver: Error - {str(e)}")
     
-    input("\n  Press Enter to continue...")
+    input("\n   Press Enter to continue...")
     return "settings"
 
 def _handle_performance_test() -> str:
@@ -363,7 +378,7 @@ def _handle_performance_test() -> str:
         input("\n  Press Enter to continue...")
         return "settings"
     
-    print("🧪 Running performance test...\n")
+    print("🧪 Running performance test...")
     
     # Test parameters
     test_vector = np.random.rand(32).astype(np.float32)

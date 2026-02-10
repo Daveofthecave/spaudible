@@ -177,14 +177,14 @@ def format_elapsed_time(seconds: float) -> str:
 
 def format_file_size(size_bytes):
     """Convert bytes to human-readable format."""
-    if size_bytes < 1024:
+    if size_bytes < 1000:
         return f"{size_bytes} bytes"
-    elif size_bytes < 1024**2:
+    elif size_bytes < 1e6:
         return f"{size_bytes/1024:.1f} KB"
-    elif size_bytes < 1024**3:
-        return f"{size_bytes/(1024**2):.1f} MB"
+    elif size_bytes < 1e9:
+        return f"{size_bytes/(1e6):.1f} MB"
     else:
-        return f"{size_bytes/(1024**3):.1f} GB"
+        return f"{size_bytes/(1e9):.1f} GB"
 
 def get_metadata_db_path() -> Optional[str]:
     """Get path to metadata database."""

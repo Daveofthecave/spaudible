@@ -5,37 +5,40 @@ import time
 import math
 from pathlib import Path
 from typing import Optional, Tuple, Any
-from ui.cli.console_utils import print_header, format_elapsed_time, clear_screen
 from .input_router import route_input
-from .text_search import interactive_text_search, simple_text_search_fallback
+from .text_search import (
+    interactive_text_search, simple_text_search_fallback
+)
 from .utils import (
-    check_preprocessed_files,
-    get_metadata_db_path,
-    format_track_display,
-    get_similarity_color,
-    save_playlist
+    check_preprocessed_files, get_metadata_db_path, format_track_display,
+    get_similarity_color, save_playlist
+)
+from ui.cli.console_utils import (
+    print_header, format_elapsed_time, clear_screen, print_menu, get_choice
+)
+from core.vectorization.canonical_track_resolver import (
+    build_canonical_vector, get_resolver
 )
 from core.similarity_engine.orchestrator import SearchOrchestrator
-from core.vectorization.canonical_track_resolver import (
-    build_canonical_vector,
-    get_resolver
-)
 from config import PathConfig, REGION_FILTER_STRENGTH, EXPECTED_VECTORS
 from core.utilities.config_manager import config_manager
+
+def _print_search_prompt():
+    print("\n🔍 What would you like to find similar songs for?\n")
+    print("   Enter any of the following:\n")
+
+    print("   • Song, artist, or album (eg. Muse Knights of Cydonia)")    
+    print("   • Spotify track URL (https://open.spotify.com/track/...)")
+    print("   • Spotify track ID (eg. 0eGsygTp906u18L0Oimnem)")
+    print("   • ISRC code (eg. GBARL9300135)")
+    # print("   • Audio file (coming soon)")
+    # print("   • Spotify playlist URL (coming soon)")
 
 def handle_core_search() -> str:
     """Main search interface."""
     print_header("Find Similar Songs")
     
-    print("\n🔍 What would you like to find similar songs for?\n")
-    print("   Enter any of the following:\n")
-
-    print("   • Spotify track URL (https://open.spotify.com/track/...)")
-    print("   • Spotify track ID (eg. 0eGsygTp906u18L0Oimnem)")
-    print("   • ISRC code (eg. USIR20400274)")
-    # print("   • Audio file (coming soon)")
-    # print("   • Search query (artist, song, album) (coming soon)")
-    # print("   • Spotify playlist URL (coming soon)")
+    _print_search_prompt()
     
     while True:
         user_input = input("\n   Enter input (or type 'back' to return): ").strip()
@@ -128,7 +131,7 @@ def _search_by_track_id(
             year_str = f" ({year})" if year else ''
             
             print(f"   Searching {EXPECTED_VECTORS:,} vectors for songs similar to:\n")
-            print(f"   🎵   {track_name} - {artist_display}{year_str}")
+            print(f"   🎵  {track_name} - {artist_display}{year_str}")
 
         force_cpu = config_manager.get_force_cpu()
         
@@ -183,32 +186,25 @@ def _search_by_track_id(
                     color = get_similarity_color(similarity)
                     print(f"  {i:2d}. {color} {similarity:.4f} - {result_track_id}")
 
-            # Post-search options
-            print("\n  📋 Options:")
-            print("  1. Search another track")
-            print("  2. Save results as playlist")
-            print("  3. Return to main menu")
-            
-            choice = input("\n  Choice (1-3): ").strip()
-            
-            if choice == '1':
+            # Post-search options            
+            options = ["Search another track", "Save results as playlist", "Return to main menu"]
+            print_menu(options)
+            choice = get_choice(len(options))
+
+            if choice == 1:
                 # Clear screen and return to search screen
                 clear_screen()
                 print_header("Find Similar Songs")
-                print("\n🔍 What would you like to find similar songs for?\n")
-                print("   Enter any of the following:\n")
-                print("   • Spotify track URL (https://open.spotify.com/track/...)")
-                print("   • 22-character Spotify track ID (eg. 0eGsygTp906u18L0Oimnem)")
-                print("   • ISRC code (eg. USIR20400274)")
+                _print_search_prompt()
                 return "core_search"
-            elif choice == '2':
+            elif choice == 2:
                 playlist_name = input("  Enter playlist name: ").strip() or "Similar Songs"
                 filename = save_playlist(results, playlist_name)
                 print(f"  ✅ Playlist saved to: {filename}")
                 input("\n  Press Enter to continue...")
                 # Stay in results screen after saving
                 return "core_search"
-            elif choice == '3':
+            elif choice == 3:
                 return "main_menu"
             else:
                 print("  ❌ Invalid choice, returning to main menu.")
@@ -237,17 +233,21 @@ def _handle_isrc_code(isrc: str) -> str:
         print(f"     Missing: {main_db_path}")
         print("\n  ISRC search needs the database to map ISRC codes to track IDs.")
         print("  Please ensure data/databases/ contains the Spotify databases.")
-        
+
         print("\n  Options:")
-        print("  1. Use Spotify Track ID instead")
-        print("  2. Return to search")
-        
-        choice = input("\n  Choice: ").strip()
-        if choice == "1":
-            track_id = input("  Enter track ID: ").strip()
-            if len(track_id) == 22:
-                return _search_by_track_id(track_id)
-        return "core_search"
+        options = ["Use Spotify Track ID instead", "Return to search"]
+        print_menu(options)
+        choice = get_choice(len(options))
+        if choice == 1:
+            track_id_input = input(" Enter track ID: ").strip()
+            input_type, processed_data = route_input(track_id_input)
+            if input_type in ["spotify_track_url", "track_id"]:
+                return _search_by_track_id(processed_data)
+            else:
+                print("\n ❌ Invalid track ID format.")
+                print(" Please enter a valid 22-character Spotify track ID or URL.")
+                input("\n Press Enter to continue...")
+                return "core_search"
     
     # Resolve ISRC to track ID
     resolver = get_resolver()
