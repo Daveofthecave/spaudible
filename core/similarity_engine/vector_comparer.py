@@ -13,6 +13,7 @@ from .vector_math import VectorOps
 from .vector_math_gpu import VectorOpsGPU
 from ui.cli.console_utils import format_elapsed_time
 from core.utilities.config_manager import config_manager
+from config import FRAME_WIDTH
 
 class ChunkedSearch:
     """GPU-accelerated sequential similarity search."""
@@ -484,7 +485,7 @@ class ChunkedSearch:
         print(f"\n{description}")
         print(f"  [{'░' * self.PROGRESS_BAR_WIDTH}] 0.0%")
         print(f"   Speed: -- vectors/sec | ETA: --")
-        print(" " * 70)  # Reserve third line for adaptation
+        print(" " * FRAME_WIDTH)  # Reserve third line for adaptation
         sys.stdout.flush()
         return time.time()
 
@@ -510,7 +511,7 @@ class ChunkedSearch:
         sys.stdout.write("\033[3A\033[K")
         print(f"  [{'█' * filled}{'░' * (self.PROGRESS_BAR_WIDTH - filled)}] {percent:.1%}")
         print(f"   Speed: {speed_str} vectors/sec | ETA: {eta_str}")
-        print(adaptation_msg if adaptation_msg else " " * 70)  # Clear third line if no message
+        print(adaptation_msg if adaptation_msg else " " * FRAME_WIDTH)  # Clear third line if no message
         
         sys.stdout.flush()
         return current_time

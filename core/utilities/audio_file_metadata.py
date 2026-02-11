@@ -134,15 +134,12 @@ class AudioFileMetadataExtractor:
             raise FileNotFoundError(f"Audio file not found: {self.file_path}")
     
     def extract(self) -> AudioFileMetadata:
-        """
-        Extract metadata from the audio file.
-        Returns AudioFileMetadata with embedded data and filename fallback.
-        """
+        """ Extract metadata from the audio file. 
+        Returns AudioFileMetadata with embedded data and filename fallback. """
         metadata = AudioFileMetadata(file_path=self.file_path)
         
         try:
             audio = MutagenFile(self.file_path)
-            
             if audio is None:
                 return self._fallback_to_filename(metadata)
             
@@ -153,8 +150,7 @@ class AudioFileMetadataExtractor:
             metadata.title = self._extract_tag(audio, ['TIT2', 'TITLE', '©nam', 'Title'])
             
             # Extract artists
-            artists = self._extract_tag(audio, ['TPE1', 'ARTIST', '©ART', 'Author'], 
-                                         allow_list=True)
+            artists = self._extract_tag(audio, ['TPE1', 'ARTIST', '©ART', 'Author'], allow_list=True)
             if artists:
                 metadata.artists = artists if isinstance(artists, list) else [artists]
             
@@ -169,13 +165,14 @@ class AudioFileMetadataExtractor:
                 metadata.metadata_source = "embedded"
             else:
                 metadata = self._fallback_to_filename(metadata)
-            
+                
             return metadata
             
         except Exception as e:
-            logger.error(f"Error reading metadata from {self.file_path}: {e}")
+            # Use debug level to avoid console spam - failures are expected for some formats
+            logger.debug(f"Could not read embedded metadata from {self.file_path.name}: {e}")
             return self._fallback_to_filename(metadata)
-    
+
     def _extract_isrc(self, audio) -> Optional[str]:
         """Extract ISRC code from audio metadata."""
         file_type = type(audio).__name__
@@ -237,8 +234,9 @@ class AudioFileMetadataExtractor:
         """
         variations = []
         metadata = self.extract()
+        from_filename = metadata.metadata_source == "filename"
         
-        # Variation 1: ISRC (highest confidence)
+        # Variation 1: ISRC from metadata (rarely available)
         if metadata.isrc:
             variations.append({
                 'query': metadata.isrc,
@@ -247,8 +245,8 @@ class AudioFileMetadataExtractor:
                 'description': 'ISRC code'
             })
         
-        # Variation 2: Title + Artist + Album
-        if metadata.title and (metadata.artists or metadata.album_artist) and metadata.album:
+        # Variation 2: song + artist + album from metadata (only if embedded metadata exists)
+        if not from_filename and metadata.title and (metadata.artists or metadata.album_artist) and metadata.album:
             artist = metadata.primary_artist
             query = f"{metadata.title} {artist} {metadata.album}"
             variations.append({
@@ -258,8 +256,8 @@ class AudioFileMetadataExtractor:
                 'description': 'Title + Artist + Album'
             })
         
-        # Variation 3: Title + Artist
-        if metadata.title and (metadata.artists or metadata.album_artist):
+        # Variation 3: song + artist from metadata (only if embedded metadata exists)
+        if not from_filename and metadata.title and (metadata.artists or metadata.album_artist):
             artist = metadata.primary_artist
             query = f"{metadata.title} {artist}"
             variations.append({
@@ -269,8 +267,8 @@ class AudioFileMetadataExtractor:
                 'description': 'Title + Artist'
             })
         
-        # Variation 4: Title + Album
-        if metadata.title and metadata.album:
+        # Variation 4: song + album from metadata (only if embedded metadata exists)
+        if not from_filename and metadata.title and metadata.album:
             query = f"{metadata.title} {metadata.album}"
             variations.append({
                 'query': normalize_token(query),
@@ -279,7 +277,7 @@ class AudioFileMetadataExtractor:
                 'description': 'Title + Album'
             })
         
-        # Variation 5: Tokenized filename
+        # Variation 5: extensionless tokenized filename stripped of leading number
         tokenized = self.filename_parser.get_tokenized_query()
         if tokenized:
             variations.append({
@@ -289,8 +287,8 @@ class AudioFileMetadataExtractor:
                 'description': 'Filename'
             })
         
-        # Variation 6: Title only
-        if metadata.title:
+        # Variation 6: song from metadata (only if embedded metadata exists)
+        if not from_filename and metadata.title:
             variations.append({
                 'query': normalize_token(metadata.title),
                 'type': 'title_only',
@@ -298,7 +296,7 @@ class AudioFileMetadataExtractor:
                 'description': 'Title only'
             })
         
-        # Variation 7: First half of filename
+        # Variation 7: first half slice of the filename
         tokenized_filename = self.filename_parser.get_tokenized_query()
         if tokenized_filename:
             words = tokenized_filename.split()

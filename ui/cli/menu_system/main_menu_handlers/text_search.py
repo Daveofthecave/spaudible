@@ -15,29 +15,52 @@ from prompt_toolkit.selection import SelectionState
 from prompt_toolkit.styles import Style
 
 from core.utilities.text_search_utils import SearchResult, search_tracks_flexible
+from ui.cli.console_utils import print_header
+from ui.cli.menu_system.main_menu_handlers.utils import check_preprocessed_files
 
-def interactive_text_search(initial_query: str = "") -> Optional[str]:
+def interactive_text_search(initial_query: str = "",
+                            initial_results: List[SearchResult] = None,
+                            header_title: str = "Text Search",
+                            subtitle: str = "",
+                            show_progress: bool = True
+                        ) -> Optional[str]:
     """ Interactive text search with arrow-key navigation and query editing. """
-
+    
     # State management
-    results: List[SearchResult] = []
+    results: List[SearchResult] = initial_results if initial_results else []
     selected_idx = 0
     query = initial_query
-
+    
     # Track query state
-    last_searched_query = ""  # Last query that was actually searched
-    cached_results = None  # Cache results to avoid re-searching
-
+    # Last query that was actually searched
+    last_searched_query = "__INITIAL__" if initial_results else ""
+    # Cache results to avoid re-searching
+    cached_results = initial_results if initial_results else None
+    
+    # Display header
+    print_header(header_title)
+    if subtitle:
+        print(f"\n {subtitle}\n")
+    elif initial_query and not initial_results:
+        print(f"\n  Searching for: '{initial_query}'\n")
+    
+    # Check preprocessed files
+    files_exist, error_msg = check_preprocessed_files()
+    if not files_exist:
+        print(f"\n  ❌ {error_msg}")
+        input("\n  Press Enter to return...")
+        return None
+    
     # Create query buffer for editing
     query_buffer = Buffer(
         multiline=False
     )
-
+    
     # Set initial text and cursor position
     if initial_query:
         query_buffer.text = initial_query
         query_buffer.cursor_position = len(initial_query)  # Cursor at end
-
+    
     # UI components
     query_window = Window(
         height=1,
@@ -57,30 +80,32 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         content=FormattedTextControl(text=""),
         style="class:status-bar"
     )
-
+    
     # Key bindings
     kb = KeyBindings()
-
+    
     def perform_search():
         """Execute search and update results display"""
         nonlocal results, selected_idx, query, last_searched_query, cached_results
-
         query = query_buffer.text.strip()
         if not query:
             results_window.content.text = "Enter a search query above..."
             return
-
+        
         # Only search if query actually changed
         if query == last_searched_query and cached_results is not None:
             results = cached_results
             update_results_display()
+            update_status_bar()
             return
-
+        
         # New query - perform actual search
         last_searched_query = query
 
         try:
             # Use new flexible search
+            if show_progress:
+                results_window.content.text = f"Searching for '{query}'..."
             results = search_tracks_flexible(query, limit=50)
             cached_results = results  # Cache for potential reuse
             selected_idx = 0
@@ -89,6 +114,7 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
                 results_window.content.text = f"No results found for '{query}'"
             else:
                 update_results_display()
+                update_status_bar()
         except Exception as e:
             results_window.content.text = f"Search error: {str(e)}"
             results = []
@@ -111,7 +137,7 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         if len(results) > 20:
             lines.append(f" ... and {len(results) - 20} more")
         results_window.content.text = "\n".join(lines)
-
+    
     def update_status_bar():
         """Update status bar text"""
         if not query:
@@ -121,7 +147,7 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         
         status += " | ↑↓ Navigate | Enter=Select | Ctrl+C=Cancel | Backspace=Edit"
         status_window.content.text = status
-
+    
     # Navigation in results list (global, auto-switches focus)
     @kb.add('up')
     def move_up(event):
@@ -134,7 +160,7 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
             # Then navigate up
             selected_idx = max(0, selected_idx - 1)
             update_results_display()
-
+    
     @kb.add('down')
     def move_down(event):
         """Navigate down in results list (auto-switches from query field)"""
@@ -146,20 +172,20 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
             # Then navigate down
             selected_idx = min(len(results) - 1, selected_idx + 1)
             update_results_display()
-
+    
     # Cursor movement in query field (always works, switches focus)
     @kb.add('left')
     def move_left(event):
         """Move cursor left in query field (switches focus if needed)"""
         event.app.layout.focus(query_window)
         query_buffer.cursor_position = max(0, query_buffer.cursor_position - 1)
-
+    
     @kb.add('right')
     def move_right(event):
         """Move cursor right in query field (switches focus if needed)"""
         event.app.layout.focus(query_window)
         query_buffer.cursor_position = min(len(query_buffer.text), query_buffer.cursor_position + 1)
-
+    
     @kb.add('c-left')
     def word_left(event):
         """Jump cursor to previous word"""
@@ -171,7 +197,7 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
             query_buffer.cursor_position = 0
         else:
             query_buffer.cursor_position = last_space
-
+    
     @kb.add('c-right')
     def word_right(event):
         """Jump cursor to next word"""
@@ -182,28 +208,28 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
             query_buffer.cursor_position = len(query_buffer.text)
         else:
             query_buffer.cursor_position += next_space + 1
-
+    
     # Home key - move to beginning of query line
     @kb.add('home')
     def move_home(event):
         """Move cursor to beginning of line, regardless of current focus"""
         event.app.layout.focus(query_window)
         query_buffer.cursor_position = 0
-
-    # End key - move to end of query line  
+    
+    # End key - move to end of query line
     @kb.add('end')
     def move_end(event):
         """Move cursor to end of line, regardless of current focus"""
         event.app.layout.focus(query_window)
         query_buffer.cursor_position = len(query_buffer.text)
-
+    
     @kb.add('c-a')
     def select_all(event):
         """Select all text in the query field"""
         event.app.layout.focus(query_window)
         query_buffer.cursor_position = len(query_buffer.text)
         query_buffer.selection_state = SelectionState(original_cursor_position=0)
-
+    
     # Backspace handling works from anywhere
     @kb.add('backspace')
     def handle_backspace(event):
@@ -223,14 +249,14 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
             query_buffer.selection_state = None
         elif query_buffer.cursor_position > 0:
             query_buffer.delete_before_cursor()
-
+    
     # Delete key handling works from anywhere
     @kb.add('delete')
     def handle_delete(event):
         """Delete character at cursor or selected text, regardless of focus"""
         # Always switch focus to query field first
         event.app.layout.focus(query_window)
-        
+
         if query_buffer.selection_state is not None:
             # Calculate selection boundaries
             start = min(query_buffer.selection_state.original_cursor_position, 
@@ -243,13 +269,13 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
             query_buffer.selection_state = None
         else:
             query_buffer.delete()
-
+    
     # Enter key handling - one press selects if results exist and query unchanged
     @kb.add('enter')
     def handle_enter(event):
         """Handle Enter key - selects track if results exist, else searches"""
         current_query = query_buffer.text.strip()
-
+        
         # If results exist for this exact query, select immediately (regardless of focus)
         if results and current_query == last_searched_query and selected_idx < len(results):
             event.app.exit(result=results[selected_idx].track_id)
@@ -258,7 +284,7 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
             perform_search()
             # Ensure focus moves to results after search
             event.app.layout.focus(results_window)
-
+    
     # Clear the query line
     @kb.add('c-u')
     def clear_line(event):
@@ -267,18 +293,18 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         query_buffer.text = ""
         query_buffer.cursor_position = 0
         query_buffer.selection_state = None
-
+    
     # Cancel keys
     @kb.add('c-c')
     def handle_cancel(event):
         """Cancel search and return to main menu"""
         event.app.exit(result=None)
-
+    
     @kb.add('escape')
     def handle_escape(event):
         """Escape key also cancels"""
         event.app.exit(result=None)
-
+    
     # Catch-all for printable characters - route to query field
     @kb.add(Keys.Any)
     def handle_typing(event):
@@ -299,11 +325,17 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         else:
             # Insert the character into the buffer at cursor position
             query_buffer.insert_text(event.data, overwrite=False)
-
-    # Initial search if query provided
-    if query:
+    
+    if results:
+        # Initial display if we have results
+        update_results_display()
+        update_status_bar()
+    elif initial_query:
+        # Auto-perform search if initial query provided but no results cached yet
         perform_search()
-
+    else:
+        update_status_bar()
+    
     # Create layout container
     container = HSplit([
         # Query label
@@ -322,14 +354,14 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         results_window,
         status_window
     ])
-
+    
     # Determine which element should have initial focus
     # If we have results, focus results window; otherwise focus query input
     initial_focus = results_window if results else query_window
-
+    
     # Create layout with explicit initial focus
     layout = Layout(container, focused_element=initial_focus)
-
+    
     # Styling
     style = Style.from_dict({
         'query-label': 'bold ansiblue',
@@ -338,7 +370,7 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         'results-list': 'bg:ansiblack ansiwhite',
         'status-bar': 'reverse',
     })
-
+    
     # Create and run application
     app = Application(
         layout=layout,
@@ -347,10 +379,10 @@ def interactive_text_search(initial_query: str = "") -> Optional[str]:
         full_screen=False,
         mouse_support=False
     )
-
+    
     # Run the event loop
     result = app.run()
-
+    
     return result  # track_id or None
 
 # Helper function for simple fallback (if prompt_toolkit is not available)

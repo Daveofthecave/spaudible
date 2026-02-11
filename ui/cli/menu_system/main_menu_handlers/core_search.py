@@ -274,7 +274,7 @@ def _handle_isrc_code(isrc: str) -> str:
 
 def _handle_audio_file(file_path: str) -> str:
     """Handle audio file input by extracting metadata and finding matching track."""
-    
+
     # Check preprocessed files
     files_exist, error_msg = check_preprocessed_files()
     if not files_exist:
@@ -292,16 +292,17 @@ def _handle_audio_file(file_path: str) -> str:
     try:
         # Show confirmation dialog (handles resolution and refinement internally)
         track_id = confirm_audio_file_with_fallback(path)
-        
         if track_id:
             # User confirmed a match, proceed with similarity search
             return _search_by_track_id(track_id)
         else:
             # User cancelled or no match could be confirmed
             return "core_search"
-            
+
     except Exception as e:
         print(f"\n  ❌ Error processing audio file: {e}")
+        import traceback
+        traceback.print_exc()
         input("\n  Press Enter to return...")
         return "core_search"
 

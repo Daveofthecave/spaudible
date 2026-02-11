@@ -6,6 +6,7 @@ VRAM_SCALING_FACTOR_MB = 2**8
 FORCE_CPU_MODE = False
 REGION_FILTER_STRENGTH = 1.0 # 1 = stick to the same region; 0 = any region is fine
 EXPECTED_VECTORS = 256_039_007 # How many tracks are in the database
+FRAME_WIDTH = 70 # For CLI UI headings
 
 # Constants pertaining to the file structure of data/vectors/track_vectors.bin
 VECTOR_RECORD_SIZE = 104        # Total bytes per vector record

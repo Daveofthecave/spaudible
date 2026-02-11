@@ -200,6 +200,12 @@ class ResolvedAudioFile:
         
         return f"? {self.track_id}"
 
+    @property
+    def best_match(self) -> Optional[SearchVariation]:
+        """Get the matched variation (convenience alias)."""
+        return self.matched_variation
+    
+
 class VariationGenerator:
     """
     Generates and manages search variations for audio files.

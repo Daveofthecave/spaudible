@@ -3,7 +3,7 @@ import os
 import sys
 import time
 import torch
-from config import PathConfig
+from config import PathConfig, FRAME_WIDTH
 from pathlib import Path
 from ui.cli.console_utils import clear_screen
 from ui.cli.menu_system.database_check import screen_database_check
@@ -73,7 +73,7 @@ def main():
             next_screen = handle_settings()
             current_screen = next_screen
         elif current_screen == "exit":
-            print("\n" + "═" * 70)
+            print("\n" + "═" * FRAME_WIDTH)
             print("  Thank you for using Spaudible!\n")
             break
         else:

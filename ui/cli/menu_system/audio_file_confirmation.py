@@ -1,33 +1,31 @@
 # ui/cli/menu_system/audio_file_confirmation.py
-"""
-Audio File Confirmation UI
+""" Audio File Confirmation UI
 ============================
-Single-file confirmation dialog for audio file matching.
+Single-file confirmation dialog with table layout.
 Displays filename alongside matched track, allowing confirm/refine/cancel.
 """
 import logging
 from pathlib import Path
-from typing import Optional, Callable, Dict, Any, List
+from typing import Optional
+
 from prompt_toolkit import Application
-from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import HSplit, Layout, Window
-from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
+
 from core.utilities.audio_file_input_processor import (
-    AudioFileInput,
-    ResolvedAudioFile,
     AudioFileInputResolver,
+    ResolvedAudioFile,
 )
 from core.utilities.text_search_utils import search_tracks_flexible
-from ui.cli.console_utils import print_header
+from ui.cli.console_utils import print_header, clear_screen
+from config import FRAME_WIDTH
 
 logger = logging.getLogger(__name__)
 
-def _search_adapter(query: str, limit: int = 3) -> List[Dict[str, Any]]:
-    """
-    Adapt search_tracks_flexible to return dicts for AudioFileInputResolver.
-    """
+def _search_adapter(query: str, limit: int = 3) -> list:
+    """Adapt search_tracks_flexible to return dicts for AudioFileInputResolver."""
     results = search_tracks_flexible(query, limit=limit)
     return [
         {
@@ -38,53 +36,43 @@ def _search_adapter(query: str, limit: int = 3) -> List[Dict[str, Any]]:
             'album_release_year': r.album_release_year,
             'popularity': r.popularity,
             'isrc': r.isrc,
-            'confidence': r.confidence,
         }
         for r in results
     ]
 
 class AudioFileConfirmationDialog:
-    """
-    Prompt-toolkit based confirmation dialog for audio file matching.
+    """Table-based confirmation dialog for audio file matching.
     
     Layout:
-    [Filename: ...]
-    [Matched: ...] (or "Searching..." / "No match found")
-    
-    [Confirm (Enter)] [Refine (Tab)] [Cancel (Esc)]
+    [Audio File         | Matched Song                        ]
+    [─────────────────────────────────────────────────────────]
+    [audio_filename.mp3 | → Track Title - Artist - Album (Yr) ]
+    [                                                         ]
+
+    [Enter] Confirm  [Tab] Refine match  [Esc] Cancel
     """
-    
+
     def __init__(self):
         self.resolved: Optional[ResolvedAudioFile] = None
-        self.result: Optional[str] = None  # track_id or None
+        self.result: Optional[str] = None
         self.should_refine = False
-    
-    def show(self, file_path: Path, resolver: Optional[AudioFileInputResolver] = None) -> Optional[str]:
-        """
-        Show confirmation dialog for an audio file.
-        
-        Args:
-            file_path: Path to the audio file
-            resolver: Optional resolver instance (creates new if None)
-            
-        Returns:
-            track_id if confirmed, None if cancelled
-        """
+
+    def show(self, file_path: Path) -> Optional[str]:
+        """Show confirmation dialog with table layout."""
+        clear_screen()
         print_header("Audio File Match")
         
-        # Resolve the file (this may take a moment)
-        print(f"\n Analyzing: {file_path.name}")
-        print(" Searching database for matching track...")
+        # Resolve the file
+        print(f"\n   Analyzing: {file_path.name}")
+        print("   Searching database for matching track...")
         
-        if resolver is None:
-            resolver = AudioFileInputResolver(search_func=_search_adapter)
-        
+        resolver = AudioFileInputResolver(search_func=_search_adapter)
         self.resolved = resolver.resolve(file_path)
         
         # Build UI
         self._build_ui()
         
-        # Run app
+        # Run
         app = Application(
             layout=self.layout,
             key_bindings=self.kb,
@@ -92,47 +80,75 @@ class AudioFileConfirmationDialog:
             full_screen=False,
             mouse_support=False,
         )
-        
         self.result = app.run()
         
         if self.should_refine:
-            # Return special signal to caller to open refinement
             return "__REFINE__"
-        
         return self.result
-    
+
     def _build_ui(self):
-        """Build the prompt_toolkit UI layout."""
+        """Build the table-style UI layout."""
+        # Header row - aligned with content below
+        header_text = " " + "Audio File".ljust(26) + " │ " + "Matched Song"
+        separator_text = "─" * FRAME_WIDTH
         
-        # Status line at top
-        filename_line = f"File: {self.resolved.audio_file_input.filename}"
+        # File row - truncate filename from beginning if too long
+        filename = self.resolved.audio_file_input.filename
+        if len(filename) > 26:
+            filename = "…" + filename[-25:]
         
-        # Match line
-        if not self.resolved.is_resolved:
-            match_line = "❌ No match found in database"
-            match_style = "class:no-match"
+        # Match row
+        if self.resolved.is_resolved and self.resolved.matched_variation:
+            match = self.resolved.matched_variation.results[0] if \
+                self.resolved.matched_variation.results else None
+            if match:
+                artist = match.get('artist_name', 'Unknown')
+                title = match.get('track_name', 'Unknown')
+                album = match.get('album_name', '')
+                year = match.get('album_release_year', '')
+                
+                # Build match text
+                match_text = f"{title} - {artist}"
+                if album:
+                    match_text += f" - {album}"
+                if year:
+                    match_text += f" ({year})"
+                
+                # Truncate if too long
+                if len(match_text) > 200:
+                    match_text = match_text[:199] + "…"
+                file_row = f" {filename:<26} │ → {match_text}"
+                row_style = "class:matched"
+            else:
+                file_row = f" {filename:<26} │ (Error loading match)"
+                row_style = "class:no-match"
         else:
-            match_text = self.resolved.get_display_text()
-            match_line = f"Match: {match_text}"
-            match_style = "class:matched"
+            file_row = f" {filename:<26} │ ❌ No match found"
+            row_style = "class:no-match"
         
         # Create windows
-        self.filename_window = Window(
+        self.header_window = Window(
             height=1,
-            content=FormattedTextControl(text=filename_line),
-            style="class:filename"
+            content=FormattedTextControl(text=header_text),
+            style="class:header"
         )
-        self.match_window = Window(
+        self.separator_window = Window(
             height=1,
-            content=FormattedTextControl(text=match_line),
-            style=match_style
+            content=FormattedTextControl(text=separator_text),
+            style="class:separator"
+        )
+        self.file_window = Window(
+            height=1,
+            content=FormattedTextControl(text=file_row),
+            style=row_style,
+            always_hide_cursor=True  # Hide the blinking cursor
         )
         
         # Help text
         if self.resolved.is_resolved:
-            help_text = "[Enter] Confirm  [Tab] Refine match  [Esc] Cancel"
+            help_text = " [Enter] Confirm  [Tab] Refine match  [Esc] Cancel"
         else:
-            help_text = "[Tab] Try other searches  [Esc] Cancel"
+            help_text = " [Tab] Try other searches  [Esc] Cancel"
         
         self.help_window = Window(
             height=1,
@@ -140,14 +156,18 @@ class AudioFileConfirmationDialog:
             style="class:help"
         )
         
-        # Layout
+        # Layout container
         container = HSplit([
-            self.filename_window,
-            self.match_window,
-            Window(height=1),  # Spacer
+            Window(height=1),  # Top spacer
+            self.header_window,
+            self.separator_window,
+            self.file_window,
+            Window(height=1),  # Bottom spacer
             self.help_window,
         ])
-        self.layout = Layout(container)
+        
+        # Set layout with focus on the file entry (no cursor visible)
+        self.layout = Layout(container, focused_element=self.file_window)
         
         # Key bindings
         self.kb = KeyBindings()
@@ -158,9 +178,6 @@ class AudioFileConfirmationDialog:
             if self.resolved.is_resolved:
                 self.resolved.is_confirmed = True
                 event.app.exit(result=self.resolved.track_id)
-            else:
-                # Enter with no match does nothing (or could trigger refine)
-                pass
         
         @self.kb.add('tab')
         @self.kb.add('s-tab')
@@ -177,29 +194,28 @@ class AudioFileConfirmationDialog:
         
         # Style
         self.style = Style.from_dict({
-            'filename': 'bold ansiblue',
-            'matched': 'bold ansigreen',
-            'no-match': 'bold ansired',
+            'header': 'bold ansiblue',
+            'separator': 'ansiblue',
+            'matched': 'ansigreen',
+            'no-match': 'ansired',
             'help': 'ansiwhite',
         })
 
 def confirm_audio_file(file_path: Path) -> Optional[str]:
-    """
-    Convenience function to show confirmation dialog.
+    """Convenience function to show confirmation dialog.
     
     Args:
         file_path: Path to audio file
         
     Returns:
-        track_id if confirmed, None if cancelled or failed,
-        "__REFINE__" if user wants to refine (caller should open refinement UI)
+        track_id if confirmed, None if cancelled, "__REFINE__" if user wants to refine
     """
     dialog = AudioFileConfirmationDialog()
     return dialog.show(file_path)
 
+
 def confirm_audio_file_with_fallback(file_path: Path) -> Optional[str]:
-    """
-    Show confirmation, and if user wants to refine, open refinement dialog.
+    """Show confirmation, and if user wants to refine, open refinement dialog.
     
     Args:
         file_path: Path to audio file
@@ -207,14 +223,12 @@ def confirm_audio_file_with_fallback(file_path: Path) -> Optional[str]:
     Returns:
         Final track_id selected by user, or None
     """
-    from .audio_file_refinement import refine_audio_file_match
+    from ui.cli.menu_system.audio_file_refinement import refine_audio_file_match
     
     result = confirm_audio_file(file_path)
-    
     if result == "__REFINE__":
-        # Open refinement dialog
+        # Re-resolve to get all variations
         resolver = AudioFileInputResolver(search_func=_search_adapter)
         resolved = resolver.resolve(file_path)
         return refine_audio_file_match(resolved)
-    
     return result
