@@ -121,21 +121,39 @@ def interactive_text_search(initial_query: str = "",
             cached_results = None
 
     def update_results_display():
-        """Update the results list with current selection"""
+        """Update the results list with current selection and scrolling viewport"""
         if not results:
             results_window.content.text = "No results"
             return
         
         lines = []
-        display_count = min(len(results), 20)
-
-        for i in range(display_count):
+        total = len(results)
+        viewport_size = 20
+        
+        # Calculate viewport to keep selected item visible
+        if total <= viewport_size:
+            # All results fit on screen
+            start_idx = 0
+            end_idx = total
+        elif selected_idx < viewport_size:
+            # Near top - show first 20
+            start_idx = 0
+            end_idx = viewport_size
+        else:
+            # Scrolling - show 20 items ending at selected_idx
+            end_idx = min(selected_idx + 1, total)
+            start_idx = end_idx - viewport_size
+        
+        # Build visible lines
+        for i in range(start_idx, end_idx):
             prefix = "→" if i == selected_idx else " "
             result = results[i]
             lines.append(f"{prefix} {result.display_text}")
         
-        if len(results) > 20:
-            lines.append(f" ... and {len(results) - 20} more")
+        # Add indicator if there are more results below
+        if end_idx < total:
+            lines.append(f" ... and {total - end_idx} more")
+        
         results_window.content.text = "\n".join(lines)
     
     def update_status_bar():
