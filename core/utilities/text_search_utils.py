@@ -24,7 +24,8 @@ COVER_INDICATORS = frozenset([
     'karaoke', 'cover', 'tribute', 'instrumental', 'made famous by',
     'in the style of', 'originally performed by', 'salute to', 'vs',
     'extended', 'mashup', 'remix', 'edit', 'version', 'live', 'unplugged',
-    'chillout', 'lounge', 'drum beats', 'feat', 'featuring', 'tribute'
+    'chillout', 'lounge', 'drum beats', 'feat', 'featuring', 'tribute',
+    'ao', 'vivo'
 ])
 
 @dataclass

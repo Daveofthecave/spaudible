@@ -1,10 +1,13 @@
 # ui/cli/menu_system/main_menu_handlers/core_search.py
+import math
 import os
+import shlex
 import sys
 import time
-import math
 from pathlib import Path
 from typing import Optional, Tuple, Any
+from prompt_toolkit import prompt
+from prompt_toolkit.key_binding import KeyBindings
 from .input_router import route_input
 from .text_search import (
     interactive_text_search, simple_text_search_fallback
@@ -19,37 +22,49 @@ from ui.cli.console_utils import (
 from core.vectorization.canonical_track_resolver import (
     build_canonical_vector, get_resolver
 )
+from ui.cli.menu_system.audio_file_confirmation import (
+    confirm_audio_file_with_fallback
+)
 from core.similarity_engine.orchestrator import SearchOrchestrator
 from config import PathConfig, REGION_FILTER_STRENGTH, EXPECTED_VECTORS
 from core.utilities.config_manager import config_manager
 
 def _print_search_prompt():
     print("\n🔍 What would you like to find similar songs for?\n")
+    
     print("   Enter any of the following:\n")
 
-    print("   • Song, artist, or album (eg. Muse Knights of Cydonia)")    
-    print("   • Spotify track URL (https://open.spotify.com/track/...)")
-    print("   • Spotify track ID (eg. 0eGsygTp906u18L0Oimnem)")
-    print("   • ISRC code (eg. GBARL9300135)")
-    # print("   • Audio file (coming soon)")
-    # print("   • Spotify playlist URL (coming soon)")
+    print("    • Song, artist, or album  (eg. Muse Knights of Cydonia)")    
+    print("    • Spotify track URL       (https://open.spotify.com/track/...)")
+    print("    • Spotify track ID        (eg. 0eGsygTp906u18L0Oimnem)")
+    print("    • ISRC code               (eg. GBARL9300135)")
+    print("    • Audio file              (drag-and-drop /path/to/song.mp3)")
+    # print("    • Spotify playlist URL (coming soon)")
 
 def handle_core_search() -> str:
     """Main search interface."""
+    clear_screen()
     print_header("Find Similar Songs")
     
     _print_search_prompt()
     
+    # Setup key bindings for Escape key
+    kb = KeyBindings()
+    @kb.add('escape')
+    def escape_handler(event):
+        event.app.exit(result="__ESCAPE__")
+    
     while True:
-        user_input = input("\n   Enter input (or type 'back' to return): ").strip()
-        
-        if user_input.lower() == 'back':
+        try:
+            user_input = prompt("\n   Enter input: ", key_bindings=kb).strip()
+        except KeyboardInterrupt:
             return "main_menu"
         
-        if not user_input:
-            print("  ❌ Please enter something.")
-            continue
-        
+        if user_input == "__ESCAPE__":
+            return "main_menu"
+        # if not user_input:
+        #     return "core_search"        
+
         # Route the input
         input_type, processed_data = route_input(user_input)
         print(f"\n   Detected input type: {input_type}")
@@ -72,8 +87,8 @@ def handle_core_search() -> str:
                 return "main_menu"
                 
         except Exception as e:
-            print(f"  ❌ Error: {e}")
-            print("  Please try again.")
+            print(f"❌ Error: {e}")
+            print("   Please try again.")
             continue
 
 
@@ -96,7 +111,7 @@ def _search_by_track_id(
     # Check preprocessed files
     files_exist, error_msg = check_preprocessed_files()
     if not files_exist:
-        print(f"  ❌ {error_msg}")
+        print(f"❌ {error_msg}")
         input("\n   Press Enter to return...")
         return "main_menu"
     
@@ -113,9 +128,9 @@ def _search_by_track_id(
         '''
         
         if vector is None or all(v == -1.0 for v in vector):
-            print("  ❌ Could not build vector for this track.")
-            print("  Make sure the track exists in the database.")
-            input("\n   Press Enter to return...")
+            print("❌ Could not build vector for this track.")
+            print("   Make sure the track exists in the database.")
+            input("\n    Press Enter to return...")
             return "main_menu"
         
         vector_time = time.time() - start_time
@@ -198,22 +213,22 @@ def _search_by_track_id(
                 _print_search_prompt()
                 return "core_search"
             elif choice == 2:
-                playlist_name = input("  Enter playlist name: ").strip() or "Similar Songs"
+                playlist_name = input("   Enter playlist name: ").strip() or "Similar Songs"
                 filename = save_playlist(results, playlist_name)
-                print(f"  ✅ Playlist saved to: {filename}")
-                input("\n  Press Enter to continue...")
+                print(f"✅ Playlist saved to: {filename}")
+                input("\n   Press Enter to continue...")
                 # Stay in results screen after saving
                 return "core_search"
             elif choice == 3:
                 return "main_menu"
             else:
-                print("  ❌ Invalid choice, returning to main menu.")
+                print("❌ Invalid choice, returning to main menu.")
                 return "main_menu"
         
         return "main_menu"
         
     except Exception as e:
-        print(f"  ❌ Search error: {e}")
+        print(f"❌ Search error: {e}")
         import traceback
         traceback.print_exc()
         input("\n   Press Enter to return...")
@@ -229,10 +244,10 @@ def _handle_isrc_code(isrc: str) -> str:
     # Check if databases exist
     main_db_path = PathConfig.get_main_db()
     if not main_db_path.exists():
-        print("\n  ❌ This feature requires Spotify database files.")
-        print(f"     Missing: {main_db_path}")
-        print("\n  ISRC search needs the database to map ISRC codes to track IDs.")
-        print("  Please ensure data/databases/ contains the Spotify databases.")
+        print("\n❌ This feature requires Spotify database files.")
+        print(f"   Missing: {main_db_path}")
+        print("\n   ISRC search needs the database to map ISRC codes to track IDs.")
+        print("   Please ensure data/databases/ contains the Spotify databases.")
 
         print("\n  Options:")
         options = ["Use Spotify Track ID instead", "Return to search"]
@@ -244,9 +259,12 @@ def _handle_isrc_code(isrc: str) -> str:
             if input_type in ["spotify_track_url", "track_id"]:
                 return _search_by_track_id(processed_data)
             else:
-                print("\n ❌ Invalid track ID format.")
-                print(" Please enter a valid 22-character Spotify track ID or URL.")
-                input("\n Press Enter to continue...")
+                print("\n❌ Invalid track ID format.")
+                print("   Please enter a valid 22-character Spotify track ID or URL.\n")
+                input("   Press Enter to continue...")
+                clear_screen()
+                print_header("Find Similar Songs")
+                _print_search_prompt()
                 return "core_search"
     
     # Resolve ISRC to track ID
@@ -257,6 +275,9 @@ def _handle_isrc_code(isrc: str) -> str:
         print(f"\n❌ No track found with ISRC: {isrc}")
         print("   Make sure the ISRC is correct and the track exists in the database.")
         input("\n   Press Enter to return...")
+        clear_screen()
+        print_header("Find Similar Songs")
+        _print_search_prompt()
         return "core_search"
     
     # Show resolved track info
@@ -269,28 +290,73 @@ def _handle_isrc_code(isrc: str) -> str:
     # Proceed with normal similarity search
     return _search_by_track_id(track_id)
 
-# Placeholder implementations for other handlers
 def _handle_audio_file(file_path: str) -> str:
-    print(f"   Analyzing audio file: {file_path}")
-    print("   Audio file analysis coming soon!")
-    print("\n   This feature will require Spotify databases for metadata lookup.")
-    input("\n   Press Enter to return to search...")
-    return "core_search"
+    """Handle audio file input by extracting metadata and finding matching track."""
+
+    # Unescape shell apostrophes
+    file_path = file_path.strip("'\"").replace(r"'\''", "'")
+
+    # Check preprocessed files
+    files_exist, error_msg = check_preprocessed_files()
+    if not files_exist:
+        print(f"\n❌ {error_msg}")
+        input("\n   Press Enter to return...")
+        clear_screen()
+        print_header("Find Similar Songs")
+        _print_search_prompt()
+        return "core_search"
+    
+    # Validate file exists
+    path = Path(file_path)
+    if not path.exists():
+        print(f"\n❌ File not found: {file_path}")
+        input("\n   Press Enter to return...")
+        clear_screen()
+        print_header("Find Similar Songs")
+        _print_search_prompt()
+        return "core_search"
+    
+    try:
+        # Show confirmation dialog (handles resolution and refinement internally)
+        track_id = confirm_audio_file_with_fallback(path)
+        if track_id:
+            # User confirmed a match, proceed with similarity search
+            print()
+            return _search_by_track_id(track_id)
+        else:
+            # User cancelled or no match could be confirmed
+            clear_screen()
+            print_header("Find Similar Songs")
+            _print_search_prompt()
+            return "core_search"
+
+    except Exception as e:
+        print(f"\n❌ Error processing audio file: {e}")
+        import traceback
+        traceback.print_exc()
+        input("\n   Press Enter to return...")
+        clear_screen()
+        print_header("Find Similar Songs")
+        _print_search_prompt()        
+        return "core_search"
 
 def _handle_text_search(query: str) -> str:
     """
     Handle text-based search queries (eg. "Keane Perfect Symmetry").
     Uses interactive CLI with arrow-key navigation.
     """
-    print_header("Text Search")
-    # print(f"\n  Searching for: '{query}'")
+    # print_header("Text Search")
+    # print(f"\n   Searching for: '{query}'")
     print()
     
     # Check preprocessed files
     files_exist, error_msg = check_preprocessed_files()
     if not files_exist:
-        print(f"\n  ❌ {error_msg}")
-        input("\n  Press Enter to return...")
+        print(f"\n❌ {error_msg}")
+        input("\n   Press Enter to return...")
+        clear_screen()
+        print_header("Find Similar Songs")
+        _print_search_prompt()
         return "core_search"
     
     # Use interactive search
@@ -298,9 +364,13 @@ def _handle_text_search(query: str) -> str:
     
     if track_id:
         # User selected a track, now find similar songs
+        print()
         return _search_by_track_id(track_id)
     else:
         # User cancelled
+        clear_screen()
+        print_header("Find Similar Songs")
+        _print_search_prompt()
         return "core_search"
 
 def _handle_spotify_playlist(playlist_id: str) -> str:
@@ -308,13 +378,17 @@ def _handle_spotify_playlist(playlist_id: str) -> str:
     print("   Playlist analysis coming soon!")
     print("\n   This feature will require Spotify API access.")
     input("\n   Press Enter to return to search...")
+    clear_screen()
+    print_header("Find Similar Songs")
+    _print_search_prompt()
     return "core_search"
 
 def _handle_unknown_input(user_input: str) -> str:
-    print(f"  🤔 I didn't understand: '{user_input}'")
-    print("\n  Please try one of these formats:")
-    print("  • Spotify URL: https://open.spotify.com/track/0eGsygTp906u18L0Oimnem")
-    print("  • Track ID: 003vvx7Niy0yvhvHt4a68B")
-    print("  • ISRC code: USIR20400274")
-    input("\n   Press Enter to return to search...")
+    print(f"\n   The input '{user_input}' yielded no results.\n")
+
+    input("   Press Enter to return to search...")
+
+    clear_screen()
+    print_header("Find Similar Songs")
+    _print_search_prompt()
     return "core_search"

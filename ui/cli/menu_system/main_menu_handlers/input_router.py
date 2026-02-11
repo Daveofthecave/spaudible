@@ -26,29 +26,29 @@ def is_valid_isrc(isrc: str) -> bool:
     """
     if not isrc:
         return False
-        
+    
     # Remove hyphens and normalize
     compact = isrc.replace('-', '').upper()
     
     if len(compact) != 12:
         return False
-        
+    
     # CC: Country code must be 2 letters
     if not compact[0:2].isalpha():
         return False
-        
+    
     # XXX: Registrant code must be 3 alphanumeric characters
     if not compact[2:5].isalnum():
         return False
-        
+    
     # YY: Year must be 2 digits (00-99)
     if not compact[5:7].isdigit():
         return False
-        
+    
     # NNNNN: Designation must be 5 digits
     if not compact[7:12].isdigit():
         return False
-        
+    
     return True
 
 def detect_input_type(user_input: str) -> Tuple[str, Any]:
@@ -65,13 +65,13 @@ def detect_input_type(user_input: str) -> Tuple[str, Any]:
     
     Args:
         user_input: Raw user input string
-        
+    
     Returns:
         Tuple of (input_type_key, extracted_data)
     """
     if not user_input:
         return "unknown", None
-        
+    
     user_input = user_input.strip()
     processed_data = None
     
@@ -107,31 +107,38 @@ def detect_input_type(user_input: str) -> Tuple[str, Any]:
         return "track_id", user_input
     
     # 5. Audio file paths - tightened to avoid "AC/DC" false positives
-    #    Must either:
+    #    After quote removal, must either:
     #      - Start with explicit path indicators (/, ./, ~/, C:\, etc.)
     #      - OR contain path separators AND have audio file extension
-    has_audio_ext = os.path.splitext(user_input)[1].lower() in {
+    user_input_quoteless = user_input.strip('"\'')
+    has_audio_ext = os.path.splitext(user_input_quoteless)[1].lower() in {
         '.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', 
         '.oga', '.m4b', '.wma', '.aiff', '.opus'
     }
     
     is_audio_file_path = (
         # Unix: absolute or relative paths
-        user_input.startswith(('./', '../', '~/', '/')) or
+        user_input_quoteless.startswith(('./', '../', '~/', '/')) or
         # Windows: drive letters or UNC paths  
-        re.match(r'^[A-Za-z]:[/\\]', user_input) or
-        re.match(r'^\\\\', user_input) or  # UNC paths \\server\share
+        re.match(r'^[A-Za-z]:[/\\]', user_input_quoteless) or
+        re.match(r'^\\\\', user_input_quoteless) or  # UNC paths \\server\share
         # Has separator and extension (e.g., "music/song.mp3" or "music\song.mp3")
-        (('/' in user_input or '\\' in user_input) and has_audio_ext)
+        (('/' in user_input_quoteless or '\\' in user_input_quoteless) and has_audio_ext)
     )
     
     if is_audio_file_path:
-        expanded_path = os.path.expanduser(user_input)
+        expanded_path = os.path.expanduser(user_input_quoteless)
         # Only accept if file exists OR has audio extension (avoid "AC/DC" which has no ext)
         if os.path.exists(expanded_path) or has_audio_ext:
             # Verify it's not a URL that happens to have a dot
-            if not user_input.startswith('http'):
+            if not user_input_quoteless.startswith('http'):
                 return "audio_file", expanded_path
+    
+    # Check for bare filename with audio extension in current directory (terminal drag-drop)
+    if has_audio_ext and '/' not in user_input_quoteless and '\\' not in user_input_quoteless:
+        cwd_path = Path.cwd() / user_input_quoteless
+        if cwd_path.exists():
+            return "audio_file", str(cwd_path)
     
     # 6. Text queries
     #    This catches:
@@ -140,7 +147,7 @@ def detect_input_type(user_input: str) -> Tuple[str, Any]:
     #      - "Keane Perfect Symmetry"
     if len(user_input) >= 1:
         return "text_query", user_input
-        
+    
     return "unknown", None
 
 def extract_spotify_track_id(url: str) -> Optional[str]:
@@ -150,7 +157,7 @@ def extract_spotify_track_id(url: str) -> Optional[str]:
         r'spotify:track:([A-Za-z0-9_-]+)',
         r'track/([A-Za-z0-9_-]{22})',
     ]
-
+    
     for pattern in patterns:
         match = re.search(pattern, url, re.IGNORECASE)
         if match:
@@ -167,7 +174,7 @@ def extract_spotify_playlist_id(url: str) -> Optional[str]:
         r'spotify:playlist:([A-Za-z0-9_-]+)',
         r'playlist/([A-Za-z0-9_-]{22})',
     ]
-
+    
     for pattern in patterns:
         match = re.search(pattern, url, re.IGNORECASE)
         if match:
@@ -178,5 +185,7 @@ def extract_spotify_playlist_id(url: str) -> Optional[str]:
     return None
 
 def route_input(user_input: str) -> Tuple[str, Any]:
-    """ Backwards-compatible alias for detect_input_type. """
+    """
+    Backwards-compatible alias for detect_input_type.
+    """
     return detect_input_type(user_input)
