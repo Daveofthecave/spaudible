@@ -19,6 +19,9 @@ from ui.cli.console_utils import (
 from core.vectorization.canonical_track_resolver import (
     build_canonical_vector, get_resolver
 )
+from ui.cli.menu_system.audio_file_confirmation import (
+    confirm_audio_file_with_fallback
+)
 from core.similarity_engine.orchestrator import SearchOrchestrator
 from config import PathConfig, REGION_FILTER_STRENGTH, EXPECTED_VECTORS
 from core.utilities.config_manager import config_manager
@@ -269,13 +272,38 @@ def _handle_isrc_code(isrc: str) -> str:
     # Proceed with normal similarity search
     return _search_by_track_id(track_id)
 
-# Placeholder implementations for other handlers
 def _handle_audio_file(file_path: str) -> str:
-    print(f"   Analyzing audio file: {file_path}")
-    print("   Audio file analysis coming soon!")
-    print("\n   This feature will require Spotify databases for metadata lookup.")
-    input("\n   Press Enter to return to search...")
-    return "core_search"
+    """Handle audio file input by extracting metadata and finding matching track."""
+    
+    # Check preprocessed files
+    files_exist, error_msg = check_preprocessed_files()
+    if not files_exist:
+        print(f"\n  ❌ {error_msg}")
+        input("\n  Press Enter to return...")
+        return "core_search"
+    
+    # Validate file exists
+    path = Path(file_path)
+    if not path.exists():
+        print(f"\n  ❌ File not found: {file_path}")
+        input("\n  Press Enter to return...")
+        return "core_search"
+    
+    try:
+        # Show confirmation dialog (handles resolution and refinement internally)
+        track_id = confirm_audio_file_with_fallback(path)
+        
+        if track_id:
+            # User confirmed a match, proceed with similarity search
+            return _search_by_track_id(track_id)
+        else:
+            # User cancelled or no match could be confirmed
+            return "core_search"
+            
+    except Exception as e:
+        print(f"\n  ❌ Error processing audio file: {e}")
+        input("\n  Press Enter to return...")
+        return "core_search"
 
 def _handle_text_search(query: str) -> str:
     """
