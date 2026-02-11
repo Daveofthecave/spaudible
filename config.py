@@ -1,5 +1,5 @@
 # config.py
-VERSION = "0.2.4"
+VERSION = "0.2.5"
 AUTO_OPTIMIZE_CHUNK_SIZE = True
 VRAM_SAFETY_FACTOR = 0.85 # What percentage of available VRAM to use
 VRAM_SCALING_FACTOR_MB = 2**8

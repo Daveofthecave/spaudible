@@ -60,7 +60,7 @@ class AudioFileConfirmationDialog:
     def show(self, file_path: Path) -> Optional[str]:
         """Show confirmation dialog with table layout."""
         clear_screen()
-        print_header("Audio File Match")
+        print_header("Audio File Matcher")
         
         # Resolve the file
         print(f"\n   Analyzing: {file_path.name}")

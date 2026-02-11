@@ -15,7 +15,7 @@ from prompt_toolkit.selection import SelectionState
 from prompt_toolkit.styles import Style
 
 from core.utilities.text_search_utils import SearchResult, search_tracks_flexible
-from ui.cli.console_utils import print_header
+from ui.cli.console_utils import print_header, clear_screen
 from ui.cli.menu_system.main_menu_handlers.utils import check_preprocessed_files
 
 def interactive_text_search(initial_query: str = "",
@@ -29,6 +29,7 @@ def interactive_text_search(initial_query: str = "",
     # State management
     results: List[SearchResult] = initial_results if initial_results else []
     selected_idx = 0
+    viewport_start = 0  # Track first visible item for scrolling
     query = initial_query
     
     # Track query state
@@ -38,17 +39,18 @@ def interactive_text_search(initial_query: str = "",
     cached_results = initial_results if initial_results else None
     
     # Display header
+    clear_screen()
     print_header(header_title)
     if subtitle:
         print(f"\n {subtitle}\n")
     elif initial_query and not initial_results:
-        print(f"\n  Searching for: '{initial_query}'\n")
+        print(f"\n   Searching for: '{initial_query}'\n")
     
     # Check preprocessed files
     files_exist, error_msg = check_preprocessed_files()
     if not files_exist:
-        print(f"\n  ❌ {error_msg}")
-        input("\n  Press Enter to return...")
+        print(f"\n   ❌ {error_msg}")
+        input("\n   Press Enter to return...")
         return None
     
     # Create query buffer for editing
@@ -109,6 +111,7 @@ def interactive_text_search(initial_query: str = "",
             results = search_tracks_flexible(query, limit=50)
             cached_results = results  # Cache for potential reuse
             selected_idx = 0
+            viewport_start = 0  # Reset viewport to top
 
             if not results:
                 results_window.content.text = f"No results found for '{query}'"
@@ -122,6 +125,7 @@ def interactive_text_search(initial_query: str = "",
 
     def update_results_display():
         """Update the results list with current selection and scrolling viewport"""
+        nonlocal viewport_start
         if not results:
             results_window.content.text = "No results"
             return
@@ -130,22 +134,14 @@ def interactive_text_search(initial_query: str = "",
         total = len(results)
         viewport_size = 20
         
-        # Calculate viewport to keep selected item visible
-        if total <= viewport_size:
-            # All results fit on screen
-            start_idx = 0
-            end_idx = total
-        elif selected_idx < viewport_size:
-            # Near top - show first 20
-            start_idx = 0
-            end_idx = viewport_size
-        else:
-            # Scrolling - show 20 items ending at selected_idx
-            end_idx = min(selected_idx + 1, total)
-            start_idx = end_idx - viewport_size
+        # Ensure viewport_start is valid
+        viewport_start = max(0, min(viewport_start, total - 1))
+        
+        # Calculate end of viewport
+        end_idx = min(viewport_start + viewport_size, total)
         
         # Build visible lines
-        for i in range(start_idx, end_idx):
+        for i in range(viewport_start, end_idx):
             prefix = "→" if i == selected_idx else " "
             result = results[i]
             lines.append(f"{prefix} {result.display_text}")
@@ -155,40 +151,49 @@ def interactive_text_search(initial_query: str = "",
             lines.append(f" ... and {total - end_idx} more")
         
         results_window.content.text = "\n".join(lines)
-    
+
     def update_status_bar():
         """Update status bar text"""
         if not query:
             status = "Enter a song/artist query"
         else:
-            status = f"Query: {query} | {len(results)} results"
+            # status = f"Query: {query} | {len(results)} results"
+            status = f"{len(results)} results"
         
-        status += " | ↑↓ Navigate | Enter=Select | Ctrl+C=Cancel | Backspace=Edit"
+        status += " | ↑↓ Navigate | [Enter] Select | [Backspace] Edit | [Ctrl+C] Cancel"
         status_window.content.text = status
     
     # Navigation in results list (global, auto-switches focus)
     @kb.add('up')
     def move_up(event):
         """Navigate up in results list (auto-switches from query field)"""
-        nonlocal selected_idx
+        nonlocal selected_idx, viewport_start
         if results:
             # If in query window, switch to results first
             if event.app.layout.current_window == query_window:
                 event.app.layout.focus(results_window)
             # Then navigate up
-            selected_idx = max(0, selected_idx - 1)
+            if selected_idx > 0:
+                selected_idx -= 1
+                # Scroll up only when selection hits the top edge
+                if selected_idx < viewport_start:
+                    viewport_start = selected_idx
             update_results_display()
     
     @kb.add('down')
     def move_down(event):
         """Navigate down in results list (auto-switches from query field)"""
-        nonlocal selected_idx
+        nonlocal selected_idx, viewport_start
         if results:
             # If in query window, switch to results first
             if event.app.layout.current_window == query_window:
                 event.app.layout.focus(results_window)
             # Then navigate down
-            selected_idx = min(len(results) - 1, selected_idx + 1)
+            if selected_idx < len(results) - 1:
+                selected_idx += 1
+                # Scroll down only when selection hits the bottom edge
+                if selected_idx >= viewport_start + 20:
+                    viewport_start = selected_idx - 19
             update_results_display()
     
     # Cursor movement in query field (always works, switches focus)
@@ -240,7 +245,30 @@ def interactive_text_search(initial_query: str = "",
         """Move cursor to end of line, regardless of current focus"""
         event.app.layout.focus(query_window)
         query_buffer.cursor_position = len(query_buffer.text)
-    
+
+    @kb.add('pageup')
+    def page_up(event):
+        """Move selection up by one page (20 items)"""
+        nonlocal selected_idx, viewport_start
+        if results:
+            if event.app.layout.current_window == query_window:
+                event.app.layout.focus(results_window)
+            selected_idx = max(0, selected_idx - 20)
+            viewport_start = max(0, viewport_start - 20)
+            update_results_display()
+
+    @kb.add('pagedown')
+    def page_down(event):
+        """Move selection down by one page (20 items)"""
+        nonlocal selected_idx, viewport_start
+        if results:
+            if event.app.layout.current_window == query_window:
+                event.app.layout.focus(results_window)
+            selected_idx = min(len(results) - 1, selected_idx + 20)
+            max_start = max(0, len(results) - 20)
+            viewport_start = min(viewport_start + 20, max_start)
+            update_results_display()
+
     @kb.add('c-a')
     def select_all(event):
         """Select all text in the query field"""
@@ -295,7 +323,9 @@ def interactive_text_search(initial_query: str = "",
         current_query = query_buffer.text.strip()
         
         # If results exist for this exact query, select immediately (regardless of focus)
-        if results and current_query == last_searched_query and selected_idx < len(results):
+        if results and selected_idx < len(results) and \
+            (current_query == last_searched_query or \
+                (last_searched_query == "__INITIAL__" and not current_query)):
             event.app.exit(result=results[selected_idx].track_id)
         else:
             # No results yet, or query changed - perform search
@@ -412,8 +442,8 @@ def simple_text_search_fallback(query: str) -> Optional[str]:
         # Use new flexible search
         results = search_tracks_flexible(query, limit=20)
         if not results:
-            print(f"\n ❌ No results found for '{query}'")
-            input("\n Press Enter to continue...")
+            print(f"\n❌ No results found for '{query}'")
+            input("\n   Press Enter to continue...")
             return None
 
         print_header(f"Search Results for '{query}'")
@@ -431,8 +461,8 @@ def simple_text_search_fallback(query: str) -> Optional[str]:
             elif choice == 'b':
                 return None
             else:
-                print(" ❌ Invalid choice. Try again.")
+                print("❌ Invalid choice. Try again.")
     except Exception as e:
-        print(f"\n ❌ Search error: {e}")
-        input("\n Press Enter to continue...")
+        print(f"\n❌ Search error: {e}")
+        input("\n   Press Enter to continue...")
         return None

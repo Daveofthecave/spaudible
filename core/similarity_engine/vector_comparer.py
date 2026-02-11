@@ -536,5 +536,5 @@ class ChunkedSearch:
         
         # Line 3: Clear and move cursor to next line
         sys.stdout.write("\033[K")  # Clear line
-        print()  # Newline to move cursor to clean position
+        # print()  # Newline to move cursor to clean position
         sys.stdout.flush()

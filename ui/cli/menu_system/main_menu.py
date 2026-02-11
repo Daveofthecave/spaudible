@@ -8,9 +8,9 @@ def screen_main_menu():
     
     print()
     print("  Spaudible discovers music similar to any Spotify track")
-    print("  you provide. Input a song name, track ID, URL, or ISRC")
-    print("  to receive a playlist of acoustically similar songs")
-    print("  from a collection of 256 million tracks.\n")
+    print("  you provide. Input a song name, track URL, track ID,")
+    print("  ISRC, or audio file to receive a playlist of acoustically ")
+    print("  similar songs from a collection of 256 million tracks.\n")
 
     options = [
         "🔎 Find Similar Songs",

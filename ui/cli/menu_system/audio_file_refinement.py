@@ -60,7 +60,7 @@ def refine_audio_file_match(resolved: ResolvedAudioFile) -> Optional[str]:
     initial_results.sort(key=lambda x: x.popularity, reverse=True)
     
     # Call the standard text search interface with our pre-populated results
-    subtitle = f"Refining match for: {resolved.audio_file_input.filename}"
+    subtitle = f"  Refining match for: {resolved.audio_file_input.filename}"
     
     return interactive_text_search(
         initial_query="",  # Start with empty query
