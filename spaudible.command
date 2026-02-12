@@ -1,5 +1,26 @@
 #!/bin/bash
 # spaudible.command
+
+# If not running in a terminal (eg. Linux double-click), reopen in one
+if [ ! -t 0 ] && [ "$(uname -s)" = "Linux" ]; then
+    if command -v gnome-terminal &> /dev/null; then
+        gnome-terminal -- bash "$0" "$@"
+        exit
+    elif command -v konsole &> /dev/null; then
+        konsole -e bash "$0" "$@"
+        exit
+    elif command -v xfce4-terminal &> /dev/null; then
+        xfce4-terminal -e "bash '$0' '$@'"
+        exit
+    elif command -v xterm &> /dev/null; then
+        xterm -e bash "$0" "$@"
+        exit
+    elif command -v qterminal &> /dev/null; then
+        qterminal -e bash "$0" "$@"
+        exit
+    fi
+fi
+
 set -e
 cd "$(dirname "$0")"
 
