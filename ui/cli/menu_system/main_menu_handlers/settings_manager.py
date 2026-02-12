@@ -67,6 +67,7 @@ def handle_settings() -> str:
         f" ❔ Check System Status",
         f"📊 Performance Test",
         f"🔄 Re-run Setup",
+        f"🆕 Check for Updates",
         f"ℹ️ About Spaudible"
     ]
     
@@ -86,7 +87,8 @@ def handle_settings() -> str:
         9: _handle_system_status,
         10: _handle_performance_test,
         11: _handle_rerun_setup,
-        12: _handle_about
+        12: _handle_check_updates,
+        13: _handle_about
     }
     
     return handlers.get(choice, lambda: "settings")()
@@ -548,6 +550,129 @@ def _handle_rerun_setup() -> str:
         return "exit"
     
     return "settings"
+
+def _handle_check_updates() -> str:
+    """Check for and apply updates from GitHub."""
+    import time
+    
+    print_header("Check for Updates")
+    
+    updater = UpdateManager()
+    local = updater.get_local_version_info()
+    
+    print(f"\n   Current version: {local['version']}")
+    if local['commit']:
+        print(f"   Local commit: {local['commit']}")
+    if local['date']:
+        print(f"   Installed: {local['date']}")
+    
+    print("\n   Checking for updates...")
+    print("   (This may take a few seconds)")
+    
+    try:
+        available, local_info, remote_info = updater.check_for_update()
+        
+        if not remote_info:
+            print("\n❗️ Could not connect to GitHub.")
+            print("   Please check your internet connection.")
+            input("\n   Press Enter to continue...")
+            return "settings"
+        
+        if not available:
+            print(f"\n✅ Spaudible is up to date!")
+            print(f"   Latest commit: {remote_info['commit']}")
+            print(f"   Message: {remote_info['message']}")
+            input("\n   Press Enter to continue...")
+            return "settings"
+        
+        # Update available
+        print(f"\n   Update available!")
+        print(f"   Current:  {local_info.get('commit', 'unknown')[:7] if local_info.get('commit') else 'unknown'}")
+        print(f"   Latest:   {remote_info['commit']}")
+        print(f"   Date:     {remote_info['date'][:10]}")
+        print(f"   Message:  {remote_info['message']}")
+        
+        print(f"\n   Update method: {'Git' if updater.is_git_repo else 'Download ZIP'}")
+        
+        print("\n⚠️ This will:")
+        print("    • Backup your current version")
+        print("    • Download and install latest code")
+        print("    • Preserve your data/ directory and settings")
+        print("    • Require a restart when complete")
+        
+        confirm = input("\n   Proceed with update? (yes/no): ").strip().lower()
+        
+        if confirm != 'yes':
+            print("   Update cancelled.")
+            time.sleep(1)
+            return "settings"
+        
+        # Perform update
+        print("\n" + "─" * FRAME_WIDTH)
+        
+        def progress(msg, pct, total):
+            bar_width = 30
+            filled = int(bar_width * pct / total)
+            bar = '█' * filled + '░' * (bar_width - filled)
+            print(f"\r [{bar}] {pct}% {msg}", end='', flush=True)
+        
+        success = False
+        try:
+            if updater.is_git_repo:
+                print("   Updating via Git...")
+                success = updater.update_via_git()
+            else:
+                print("   Updating via ZIP download...")
+                success = updater.update_via_zip(progress_callback=progress)
+                print()  # New line after progress bar
+            
+            if success:
+                # Verify
+                print("\n✅ Update applied successfully!")
+                
+                # Get new version info
+                new_local = updater.get_local_version_info()
+                print(f"   New version: {new_local['version']}")
+                if new_local['commit']:
+                    print(f"   New commit: {new_local['commit']}")
+                
+                # Verify critical files
+                ok, msg = updater.verify_installation()
+                if not ok:
+                    print(f"\n ⚠️ Warning: {msg}")
+                
+                print("\n" + "═" * FRAME_WIDTH)
+                print("   IMPORTANT: Please restart Spaudible to complete the update.")
+                print("   Close this window and relaunch using your original method:")
+                print("     • Windows: Double-click spaudible.bat")
+                print("     • Mac/Linux: Double-click spaudible.command")
+                print("     • Or run: python main.py")
+                print("═" * FRAME_WIDTH)
+                
+                input("\n   Press Enter to exit...")
+                return "exit"  # Signal to exit program
+                
+        except UpdateError as e:
+            print(f"\n\n❗️ Update failed: {e}\n")
+           
+            print("   Your data files are safe. You may need to:")
+            print("     - Check your internet connection")
+            print("     - Manually download the latest version from GitHub")
+            print("     - Restore files from the backup in backups/ if needed\n")
+            
+            input("   Press Enter to continue...")
+            return "settings"
+            
+    except KeyboardInterrupt:
+        print("\n\n   Update cancelled.")
+        time.sleep(1)
+        return "settings"
+    except Exception as e:
+        print(f"\n❗️ Error: {e}")
+        import traceback
+        traceback.print_exc()
+        input("\n   Press Enter to continue...")
+        return "settings"
 
 def _handle_about() -> str:
     """Display about information."""
