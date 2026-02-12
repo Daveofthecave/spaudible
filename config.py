@@ -1,5 +1,19 @@
 # config.py
-VERSION = "0.2.5"
+import os
+import tomllib
+from pathlib import Path
+
+def _get_version():
+    """Read Spaudible's version from pyproject.toml"""
+    try:
+        pyproject_path = Path(__file__).parent / "pyproject.toml"
+        with open(pyproject_path, "rb") as f:
+            data = tomllib.load(f)
+        return data["project"]["version"]
+    except Exception:
+        return "unknown"  # Fallback if pyproject.toml is missing
+
+VERSION = _get_version()
 AUTO_OPTIMIZE_CHUNK_SIZE = True
 VRAM_SAFETY_FACTOR = 0.85 # What percentage of available VRAM to use
 VRAM_SCALING_FACTOR_MB = 2**8
@@ -13,9 +27,6 @@ VECTOR_RECORD_SIZE = 104        # Total bytes per vector record
 VECTOR_HEADER_SIZE = 16         # Header size at start of file
 ISRC_OFFSET_IN_RECORD = 70      # ISRC starts at byte 70
 TRACK_ID_OFFSET_IN_RECORD = 82  # Track ID starts at byte 82
-
-import os
-from pathlib import Path
 
 class PathConfig:
     BASE_DIR = Path(__file__).parent

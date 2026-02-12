@@ -47,3 +47,6 @@ Thumbs.db
 
 # Specific files to exclude
 services/
+
+# Replaced by pyproject.toml
+requirements.txt
