@@ -107,7 +107,7 @@ echo "Creating virtual environment..."
 $UV_CMD venv --python 3.12
 
 echo "Installing dependencies (this may take several minutes)..."
-$UV_CMD pip install
+$UV_CMD pip install -e .
 
 echo ""
 echo "Launching Spaudible..."
