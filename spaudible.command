@@ -36,7 +36,7 @@ if [ -d ".venv" ] && [ -f ".venv/bin/python" ]; then
 fi
 
 echo "=========================================="
-echo "Spaudible First-Time Setup (Mac/Linux)"
+echo "Spaudible - First-Time Setup (Mac/Linux)"
 echo "=========================================="
 echo ""
 
@@ -81,7 +81,7 @@ if ! command -v uv &> /dev/null; then
         
         tar -xzf uv.tar.gz && rm uv.tar.gz
         
-        # UV extracts to a subdirectory (e.g., uv-x86_64-unknown-linux-gnu/)
+        # UV extracts to a subdirectory (eg. uv-x86_64-unknown-linux-gnu/)
         # Find the binary and move it to current directory
         if [ ! -f "./uv" ]; then
             UV_BIN=$(find . -maxdepth 2 -name "uv" -type f 2>/dev/null | head -1)
