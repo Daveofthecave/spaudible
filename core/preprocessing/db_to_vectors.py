@@ -80,7 +80,7 @@ class DatabaseReader:
             with open(self.audio_db_path, 'rb') as f:
                 self.audio_mmap = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
         except Exception as e:
-            print(f"  ⚠️  Could not memory-map databases: {e}")
+            print(f"  ⚠️ Could not memory-map databases: {e}")
     
     def _preload_artist_metadata_numpy(self):
         """
@@ -213,7 +213,7 @@ class DatabaseReader:
                 rows = cursor.fetchall()
             except sqlite3.OperationalError as e:
                 if "locked" in str(e):
-                    print(f"  ❌ Database locked error: {e}")
+                    print(f"  ❗️ Database locked error: {e}")
                     print("  🔄 Retrying in 5 seconds...")
                     time.sleep(5)
                     continue
@@ -359,7 +359,7 @@ class PreprocessingEngine:
     
     def run(self):
         """Run complete preprocessing pipeline (vectors + sorted index)."""
-        print_header("🚀 Starting Database Preprocessing")
+        print_header("Starting Database Preprocessing")
         
         # Validate databases
         if not Path(self.main_db_path).exists():
@@ -391,7 +391,7 @@ class PreprocessingEngine:
                 print(f"\n  🔍 Resuming from vector #{resume_from:,}")
                 progress.update(resume_from)
             except:
-                print("\n  ⚠️  Corrupted checkpoint file, starting from beginning")
+                print("\n  ⚠️ Corrupted checkpoint file. Starting from beginning...")
         
         # Initialize profiling
         last_profile_count = resume_from
@@ -485,7 +485,7 @@ class PreprocessingEngine:
         Phase 1: Sort 2M-entry chunks in memory.
         Phase 2: Merge sorted chunks with heap sort.
         """
-        print("\n  🔧 Sorting index with external merge sort...")
+        print("\n  Sorting index with external merge sort...")
         
         temp_files = sorted(temp_index_dir.glob("temp_index_*.bin"),
                            key=lambda f: int(f.stem.split('_')[-1]))

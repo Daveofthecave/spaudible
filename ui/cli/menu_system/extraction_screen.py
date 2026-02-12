@@ -18,7 +18,7 @@ def screen_extraction() -> str:
 
     # If nothing to extract (no archives present)
     if not status['archives_present'] and not status['extracted']:
-        print("\n❌ No database archives found.")
+        print("\n❗️ No database archives found.")
         print(f"  Please download the database files first.")
         input("\n  Press Enter to return to download...")
         return "download_screen"
@@ -56,7 +56,7 @@ def screen_extraction() -> str:
         print(f" Available: {available_gb:.1f} GB")
 
         if available_gb < required_gb:
-            print(f"\n❌ Insufficient disk space!")
+            print(f"\n❗️ Insufficient disk space!")
             print(f"  You need at least {required_gb:.1f} GB free for extraction.")
             print(f"  (This includes space for both compressed and extracted files)")
             input("\n  Press Enter to return...")
@@ -119,7 +119,7 @@ def screen_extraction() -> str:
             print(f"\r✅ Done: {size_gb:.2f} GB extracted in {format_elapsed_time(elapsed).strip()} ")
             files_completed += 1
         except ExtractionError as e:
-            print(f"\n❌ Failed: {e}")
+            print(f"\n❗️ Failed: {e}")
             failed_files.append((filename, str(e)))
         except KeyboardInterrupt:
             print("\n\n⚠️ Extraction interrupted!")

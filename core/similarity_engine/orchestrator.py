@@ -67,10 +67,10 @@ class SearchOrchestrator:
         # Apply force settings before initializing any components
         if self.force_cpu:
             self.use_gpu = False
-            # print("ℹ️  CPU mode forced by configuration")
+            # print("ℹ️ CPU mode forced by configuration")
         elif self.force_gpu:
             self.use_gpu = True
-            # print("ℹ️  GPU mode forced by configuration")
+            # print("ℹ️ GPU mode forced by configuration")
         
         # Determine device early
         gpu_available = torch.cuda.is_available()
@@ -148,7 +148,7 @@ class SearchOrchestrator:
             try:
                 self._validate_implementation_parity()
             except Exception as e:
-                print(f"  ⚠️  Implementation validation failed: {e}")
+                print(f"  ⚠️ Implementation validation failed: {e}")
 
     def _init_vector_reader(self, vectors_path: str):
         """Initialize appropriate vector reader (CPU or GPU)."""
@@ -158,7 +158,7 @@ class SearchOrchestrator:
                 from .vector_io_gpu import VectorReaderGPU
                 return VectorReaderGPU(vectors_path)
             except ImportError:
-                print("  ⚠️  VectorReaderGPU not available, falling back to CPU")
+                print("  ⚠️ VectorReaderGPU not available, falling back to CPU")
                 self.use_gpu = False
                 self.device = "cpu"
         
@@ -180,7 +180,7 @@ class SearchOrchestrator:
                 self.gpu_ops.set_user_weights(config_manager.get_weights())
                 return True
         except Exception as e:
-            print(f"⚠️  GPU initialization failed: {e}")
+            print(f"⚠️ GPU initialization failed: {e}")
             self.gpu_ops = None
             return False
 
@@ -391,7 +391,7 @@ class SearchOrchestrator:
                     return region_byte
             
         except Exception as e:
-            print(f"  ⚠️  Error reading region for {track_id}: {e}")
+            print(f"  ⚠️ Error reading region for {track_id}: {e}")
             return -1
     
     def _apply_secondary_sort(self, results: List, with_metadata: bool) -> List:

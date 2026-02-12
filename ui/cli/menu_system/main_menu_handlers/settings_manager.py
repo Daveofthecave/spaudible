@@ -53,21 +53,21 @@ def handle_settings() -> str:
     region_strength_str = f"{region_strength:.2f}"
     top_k_str = f"{top_k}"
     
-    print("\n  ⚙️  Configuration & Diagnostics")
+    print("\n  ⚙️ Configuration & Diagnostics")
     
     options = [
-        f" ⬅️  Back to Main Menu",
+        f" ⬅️ Back to Main Menu",
         f" 🐌 Force CPU Mode: {cpu_status}",
         f" 🐆 Force GPU Mode: {gpu_status}",
         f" 🧮 Select Similarity Algorithm: {algorithm_name}", 
         f" 🧦 Deduplicate Results: {deduplicate_status}",
         f" 🌎️ Region Filter Strength: {region_strength_str}",
         f" 🔢 Number of Results: {top_k_str}",
-        f" ⚖️  Adjust Feature Weights",
+        f" ⚖️ Adjust Feature Weights",
         f" ❔ Check System Status",
         f"📊 Performance Test",
         f"🔄 Re-run Setup",
-        f"ℹ️  About Spaudible"
+        f"ℹ️ About Spaudible"
     ]
     
     print_menu(options)
@@ -184,9 +184,9 @@ def _adjust_region_strength() -> str:
                 input("\n  Press Enter to continue...")
                 return "settings"
             else:
-                print("  ❌ Value must be between 0.0 and 1.0")
+                print("  ❗️ Value must be between 0.0 and 1.0")
         except ValueError:
-            print("  ❌ Please enter a valid number")
+            print("  ❗️ Please enter a valid number")
 
 def _set_number_of_results() -> str:
     """Set the number of search results to return."""
@@ -209,9 +209,9 @@ def _set_number_of_results() -> str:
                 print(f"\n  ✅ Number of results set to: {new_value}")
                 break
             else:
-                print("  ❌ Value must be between 1 and 1000000")
+                print("  ❗️ Value must be between 1 and 1000000")
         except ValueError:
-            print("  ❌ Please enter a valid number")
+            print("  ❗️ Please enter a valid number")
     
     input("\n  Press Enter to continue...")
     return "settings"
@@ -287,10 +287,10 @@ def _edit_weights(weights, features):
                 print(f"  Updated {features[feature_idx]} weight to {weights[feature_idx]:.2f}")
                 input("\n  Press Enter to continue...")
             else:
-                print("  ❌ Invalid choice")
+                print("  ❗️ Invalid choice")
                 time.sleep(1)
         except ValueError:
-            print("  ❌ Please enter a valid number")
+            print("  ❗️ Please enter a valid number")
             time.sleep(1)       
 
 def _handle_system_status() -> str:
@@ -359,7 +359,7 @@ def _handle_system_status() -> str:
         build_canonical_vector("0eGsygTp906u18L0Oimnem")  # Test track
         print("\n✅ Canonical Track ID Resolver: Ready")
     except Exception as e:
-        print(f"\n⚠️  Canonical Track ID Resolver: Error - {str(e)}")
+        print(f"\n⚠️ Canonical Track ID Resolver: Error - {str(e)}")
     
     input("\n   Press Enter to continue...")
     return "settings"
@@ -374,7 +374,7 @@ def _handle_performance_test() -> str:
     # Check if files exist first
     files_exist, error_msg = check_preprocessed_files()
     if not files_exist:
-        print(f"  ❌ {error_msg}")
+        print(f"  ❗️ {error_msg}")
         input("\n  Press Enter to continue...")
         return "settings"
     
@@ -479,7 +479,7 @@ def _handle_performance_test() -> str:
             print(f"\n  🚀 Fastest GPU batch: {best_batch:,} ({best_speed/1e6:.2f}M vec/sec)")
         gpu_orchestrator.close()
     else:
-        print("  ⚠️  No GPU available - skipping GPU tests")
+        print("  ⚠️ No GPU available - skipping GPU tests")
     
     # Section 3: Track Search Performance
     print_header("🔍 Track Search Performance")
@@ -528,7 +528,7 @@ def _handle_rerun_setup() -> str:
     """Handle re-running the setup process."""
     print_header("Re-run Setup")
     
-    print("\n  ⚠️  This will delete existing processed files.")
+    print("\n  ⚠️ This will delete existing processed files.")
     print("  You will need to re-run preprocessing (several hours).")
     
     confirm = input("\n  Are you sure? (yes/no): ").lower().strip()

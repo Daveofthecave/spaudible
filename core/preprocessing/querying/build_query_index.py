@@ -38,7 +38,7 @@ def get_memory_usage() -> str:
 
 def signal_handler(sig, frame):
     """Handle Ctrl+C gracefully"""
-    print("\n\n  ⚠️  Received interrupt signal. Cleaning up...")
+    print("\n\n  ⚠️ Received interrupt signal. Cleaning up...")
     sys.exit(0)
 
 signal.signal(signal.SIGINT, signal_handler)
@@ -469,7 +469,7 @@ def build_query_index():
     print_header("Building Query Index")
     print(f"  Start time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  Initial memory: {get_memory_usage()}")
-    print("\n  ℹ️  This process will take 4-6 hours and will require")
+    print("\n  ℹ️ This process will take 4-6 hours and will require")
     print("     ~70 GB of temporary disk space before producing")
     print("     the final inverted index and MARISA trie, totalling 5 GB.")
     print("     Temporary files will be kept in data/vectors/query_index/temp/ for debugging.")
@@ -535,7 +535,7 @@ def build_query_index():
                     magic, version, token_count, token_table_offset, postings_offset = struct.unpack("<7sBQQQ", header)
                 postings_size = postings_path.stat().st_size
             else:
-                print("  ❌ Build cancelled by user")
+                print("  ❗️ Build cancelled by user")
                 return
         else:
             print("\n  Phase 3: Building inverted index from sorted pairs...")
@@ -548,7 +548,7 @@ def build_query_index():
             print(f"  Skipping Phase 4 (MARISA trie)")
         else:
             if not sorted_path.exists():
-                print("\n  ❌ ERROR: Cannot build MARISA trie - sorted file missing!")
+                print("\n  ❗️ Error: Cannot build MARISA trie - sorted file missing!")
                 print(f"  Expected: {sorted_path}")
                 return
             
@@ -573,7 +573,7 @@ def build_query_index():
         print("  (Delete manually if you need to reclaim disk space)")
 
     except Exception as e:
-        print(f"\n  ❌ Build failed: {e}")
+        print(f"\n  ❗️ Build failed: {e}")
         import traceback
         traceback.print_exc()
         raise

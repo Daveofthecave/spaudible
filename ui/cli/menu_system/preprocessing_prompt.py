@@ -7,7 +7,7 @@ def screen_preprocessing_prompt():
 
     print("\n  ✅ All required databases found!\n")
 
-    print("  ⚠️  IMPORTANT: One-time setup required\n")
+    print("  ⚠️ IMPORTANT: One-time setup required\n")
 
     print("  Spotify's music metadata databases hold over")
     print("  256 million cataloged tracks containing detailed")

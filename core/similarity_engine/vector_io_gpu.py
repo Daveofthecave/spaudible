@@ -36,7 +36,7 @@ class VectorReaderGPU:
         # Check CUDA availability first
         cuda_available = torch.cuda.is_available()
         if not cuda_available:
-            print("  ⚠️  CUDA not available; falling back to CPU mode")
+            print("  ⚠️ CUDA not available; falling back to CPU mode")
             self.device = "cpu"
         else:
             self.device = device
@@ -163,7 +163,7 @@ class VectorReaderGPU:
         """
         # Enforce safe batch size SAME as read_chunk
         if num_vectors > self.max_batch_size:
-            print(f"  ⚠️  Requested {num_vectors:,} masks, limiting to {self.max_batch_size:,} for safety")
+            print(f"  ⚠️ Requested {num_vectors:,} masks, limiting to {self.max_batch_size:,} for safety")
             num_vectors = self.max_batch_size
         
         if start_idx + num_vectors > self.total_vectors:
@@ -183,7 +183,7 @@ class VectorReaderGPU:
         """
         # Enforce safe batch size SAME as read_chunk
         if num_vectors > self.max_batch_size:
-            print(f"  ⚠️  Requested {num_vectors:,} regions, limiting to {self.max_batch_size:,} for safety")
+            print(f"  ⚠️ Requested {num_vectors:,} regions, limiting to {self.max_batch_size:,} for safety")
             num_vectors = self.max_batch_size
         
         if start_idx + num_vectors > self.total_vectors:

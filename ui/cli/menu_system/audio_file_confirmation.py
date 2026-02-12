@@ -123,7 +123,7 @@ class AudioFileConfirmationDialog:
                 file_row = f" {filename:<26} │ (Error loading match)"
                 row_style = "class:no-match"
         else:
-            file_row = f" {filename:<26} │ ❌ No match found"
+            file_row = f" {filename:<26} │ ❗️ No match found"
             row_style = "class:no-match"
         
         # Create windows

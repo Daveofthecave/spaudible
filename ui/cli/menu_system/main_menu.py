@@ -14,7 +14,7 @@ def screen_main_menu():
 
     options = [
         "🔎 Find Similar Songs",
-        "⚙️  Settings",
+        "⚙️ Settings",
         "🚪 Exit"
     ]
     

@@ -218,7 +218,7 @@ class TrackResolver:
             return result[0] if result else None
             
         except sqlite3.Error as e:
-            print(f"  ❌ Database error resolving ISRC: {e}")
+            print(f"  ❗️ Database error resolving ISRC: {e}")
             return None
 
 class CanonicalVectorBuilder:
