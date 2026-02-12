@@ -80,6 +80,19 @@ if ! command -v uv &> /dev/null; then
         fi
         
         tar -xzf uv.tar.gz && rm uv.tar.gz
+        
+        # UV extracts to a subdirectory (e.g., uv-x86_64-unknown-linux-gnu/)
+        # Find the binary and move it to current directory
+        if [ ! -f "./uv" ]; then
+            UV_BIN=$(find . -maxdepth 2 -name "uv" -type f 2>/dev/null | head -1)
+            if [ -n "$UV_BIN" ]; then
+                mv "$UV_BIN" ./uv
+                # Clean up the extracted directory
+                UVX_DIR=$(dirname "$UV_BIN")
+                rm -rf "$UVX_DIR" 2>/dev/null || true
+            fi
+        fi
+        
         chmod +x ./uv
     fi
     UV_CMD="./uv"
