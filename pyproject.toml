@@ -22,3 +22,6 @@ dependencies = [
 
 [project.scripts]
 spaudible = "main:main"
+
+[tool.setuptools]
+packages = []
