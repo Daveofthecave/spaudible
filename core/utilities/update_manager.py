@@ -343,8 +343,9 @@ class UpdateManager:
         critical_files = [
             PathConfig.BASE_DIR / "main.py",
             PathConfig.BASE_DIR / "config.py",
-            PathConfig.BASE_DIR / "core" / "__init__.py",
-            PathConfig.BASE_DIR / "core" / "similarity_engine" / "__init__.py"
+            PathConfig.BASE_DIR / "data" / "genre_intensity_mapping.csv",
+            PathConfig.BASE_DIR / "core" / "similarity_engine" / "__init__.py",
+            PathConfig.BASE_DIR / "ui" / "cli" / "menu_system" / "main_menu_handlers" / "core_search.py"
         ]
         
         for file_path in critical_files:
