@@ -187,7 +187,7 @@ class UpdateManager:
         Update by downloading ZIP of main branch.
         Used when git is not available.
         """
-        zip_url = f"https://github.com/{self.REPO_OWNER}/{self.REPO_NAME}/archive/refs/heads/main.zip"
+        zip_url = f"https://github.com/{self.REPO_OWNER}/{self.REPO_NAME}/archive/refs/heads/{self.target_branch}.zip"
         
         self.temp_dir = tempfile.mkdtemp(prefix='spaudible_update_')
         zip_path = Path(self.temp_dir) / "spaudible_update.zip"
