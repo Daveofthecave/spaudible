@@ -622,8 +622,11 @@ def _handle_check_updates() -> str:
                 print("   Updating via Git...")
                 success = updater.update_via_git()
             else:
-                print("   Updating via ZIP download...")
-                success = updater.update_via_zip(progress_callback=progress)
+                print(" Updating via ZIP download...")
+                success = updater.update_via_zip(
+                    progress_callback=progress,
+                    target_commit=remote_info['commit']  # Pass commit to save to config.json
+                )
                 print()  # New line after progress bar
             
             if success:

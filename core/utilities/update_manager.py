@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional, Tuple, Dict, List
 from datetime import datetime
 from config import VERSION, PathConfig, FRAME_WIDTH
+from core.utilities.config_manager import config_manager
 
 class UpdateManager:
     """Handles Spaudible updates from GitHub main branch."""
@@ -80,7 +81,12 @@ class UpdateManager:
                 info['date'] = result.stdout.strip()
             except Exception:
                 pass
-                
+        else:
+            # Try to get commit from config (ZIP installs)
+            saved_commit = config_manager.get('installed_commit')
+            if saved_commit:
+                info['commit'] = saved_commit
+      
         return info
     
     def get_remote_version_info(self) -> Optional[Dict]:
@@ -124,11 +130,13 @@ class UpdateManager:
         # If we have git, compare commit hashes
         if local['commit'] and remote['commit']:
             update_available = local['commit'] != remote['commit']
-        else:
-            # Fallback: compare version strings (if version changed)
-            # Or assume update available if we can't determine
+        elif remote['commit'] and not local['commit']:
+            # No local commit info (fresh ZIP install) - allow update
             update_available = True
-            
+        else:
+            # Don't assume update needed if we can't determine remote state
+            update_available = False
+
         return update_available, local, remote
     
     def update_via_git(self) -> bool:
@@ -182,7 +190,7 @@ class UpdateManager:
         except subprocess.CalledProcessError as e:
             raise UpdateError(f"Git update failed: {e.stderr}")
     
-    def update_via_zip(self, progress_callback=None) -> bool:
+    def update_via_zip(self, progress_callback=None, target_commit: str = None) -> bool:
         """
         Update by downloading ZIP of main branch.
         Used when git is not available.
@@ -245,6 +253,11 @@ class UpdateManager:
             
             # Write update log
             self._log_update(f"ZIP update successful, {updated} files updated")
+
+            # Save commit hash to config for future version checks (ZIP installs)
+            # Note: target_commit is passed from the caller
+            if target_commit:
+                config_manager.set('installed_commit', target_commit)
             
             return True
             
