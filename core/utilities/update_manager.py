@@ -139,7 +139,7 @@ class UpdateManager:
         try:
             # Fetch latest
             result = subprocess.run(
-                ["git", "fetch", "origin", "main"],
+                ["git", "fetch", "origin", self.target_branch],
                 cwd=self.base_dir,
                 capture_output=True,
                 text=True,
@@ -169,7 +169,7 @@ class UpdateManager:
             
             # Hard reset to origin/main (cleanest update)
             result = subprocess.run(
-                ["git", "reset", "--hard", "origin/main"],
+                ["git", "reset", "--hard", f"origin/{self.target_branch}"],
                 cwd=self.base_dir,
                 capture_output=True,
                 text=True,
