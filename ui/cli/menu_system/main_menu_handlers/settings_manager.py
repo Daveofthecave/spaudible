@@ -581,7 +581,7 @@ def _handle_check_updates() -> str:
             return "settings"
         
         if not available:
-            print(f"\n✅ Spaudible is up to date!")
+            print(f"\n✅ Spaudible is up to date!\n")
             print(f"   Latest commit: {remote_info['commit']}")
             print(f"   Message: {remote_info['message']}")
             input("\n   Press Enter to continue...")

@@ -2,11 +2,23 @@
 @echo off
 setlocal enabledelayedexpansion
 
+:: Ensure we run from the batch file's directory
+cd /d "%~dp0"
+
 :: Run directly if the environment has already been set up
 if exist ".venv\Scripts\python.exe" (
     echo Launching Spaudible...
-    .venv\Scripts\python.exe main.py
-    if errorlevel 1 pause
+    call ".venv\Scripts\python.exe" main.py
+    if errorlevel 1 (
+        echo.
+        echo [Error] Spaudible crashed or encountered an error (exit code %errorlevel%^).
+        echo If the error above mentions "ModuleNotFoundError", try deleting the .venv folder and running again.
+        pause
+        exit /b 1
+    )
+    echo.
+    echo Spaudible has finished running.
+    pause
     exit /b 0
 )
 
@@ -17,23 +29,30 @@ echo.
 
 :: Check for UV in PATH
 where uv >nul 2>&1
-if %errorlevel% == 0 (
+if %errorlevel% equ 0 (
     set UV_CMD=uv
+    echo Found UV in system PATH.
 ) else (
+    echo UV not found in PATH, checking for local copy...
     if not exist "uv.exe" (
-        echo Downloading UV (Python project manager)...
-        curl -L -o uv.zip https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip 2>nul
+        echo Downloading UV ^(Python project manager^)...
         
+        :: Try curl first (Windows 10/11), fallback to PowerShell
+        curl -L -o uv.zip https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip 2>nul
         if not exist uv.zip (
+            echo curl not available or download failed, trying PowerShell...
             powershell -Command "Invoke-WebRequest -Uri 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip' -OutFile uv.zip"
         )
         
         if not exist uv.zip (
-            echo Error: Failed to download UV. Check internet connection.
+            echo [Error] Failed to download UV.
+            echo Please check your internet connection or download UV manually from:
+            echo https://github.com/astral-sh/uv/releases
             pause
             exit /b 1
         )
         
+        echo Extracting UV...
         powershell -Command "Expand-Archive -Path uv.zip -DestinationPath . -Force"
         del uv.zip
         
@@ -49,10 +68,11 @@ if %errorlevel% == 0 (
         )
         
         if not exist "uv.exe" (
-            echo Error: UV installation failed. uv.exe not found after extraction.
+            echo [Error] UV installation failed. uv.exe not found after extraction.
             pause
             exit /b 1
         )
+        echo UV downloaded successfully.
     )
     set UV_CMD=uv.exe
 )
@@ -60,7 +80,8 @@ if %errorlevel% == 0 (
 echo Installing Python 3.12 (this may take a moment)...
 %UV_CMD% python install 3.12 --quiet
 if errorlevel 1 (
-    echo Error: Failed to install Python 3.12.
+    echo [Error] Failed to install Python 3.12.
+    echo This might be due to insufficient disk space or network issues.
     pause
     exit /b 1
 )
@@ -68,7 +89,7 @@ if errorlevel 1 (
 echo Creating virtual environment...
 %UV_CMD% venv --python 3.12
 if errorlevel 1 (
-    echo Error: Failed to create virtual environment.
+    echo [Error] Failed to create virtual environment.
     pause
     exit /b 1
 )
@@ -76,13 +97,26 @@ if errorlevel 1 (
 echo Installing dependencies (this may take several minutes)...
 %UV_CMD% pip install -e .
 if errorlevel 1 (
-    echo Error: Failed to install dependencies.
+    echo [Error] Failed to install dependencies.
+    echo Check that you have an internet connection and that pyproject.toml exists.
     pause
     exit /b 1
 )
 
 echo.
+echo ==========================================
 echo Launching Spaudible...
 echo ==========================================
+
 %UV_CMD% run main.py
-if errorlevel 1 pause
+if errorlevel 1 (
+    echo.
+    echo [Error] Spaudible encountered an error during launch.
+    pause
+    exit /b 1
+)
+
+echo.
+echo Setup complete!
+pause
+exit /b 0
