@@ -105,17 +105,17 @@ class VectorReader:
 
         # Avoid memory-mapping on Windows, since it triggers excessive RAM growth
         if self._is_windows:
-            # Read specific byte ranges for masks (bytes 65-68 of each record)
+            # Read full chunk, then extract mask bytes (65-68) - avoids seek overhead
             byte_offset = self.VECTOR_HEADER_SIZE + start_idx * self.VECTOR_RECORD_SIZE
-            # Create array to hold mask data
-            mask_data = np.empty((num_vectors, 4), dtype=np.uint8)
-            for i in range(num_vectors):
-                self._file.seek(byte_offset + i * self.VECTOR_RECORD_SIZE + 65)
-                mask_data[i, :] = np.frombuffer(self._file.read(4), dtype=np.uint8)
+            num_bytes = num_vectors * self.VECTOR_RECORD_SIZE
+            self._file.seek(byte_offset)
+            raw_bytes = self._file.read(num_bytes)
+            records = np.frombuffer(raw_bytes, dtype=np.uint8).reshape(num_vectors, self.VECTOR_RECORD_SIZE)
+            mask_data = records[:, 65:69]
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 masks = torch.from_numpy(mask_data)
-
+            
             return masks.view(torch.int32).view(num_vectors).to(self.device)
         
         # Slice numpy array first, then convert to torch
@@ -132,12 +132,13 @@ class VectorReader:
 
         # Avoid memory-mapping on Windows, since it triggers excessive RAM growth
         if self._is_windows:
-            # Read specific byte (69) from each record
+            # Read full chunk, then extract region byte (69) - avoids seek overhead
             byte_offset = self.VECTOR_HEADER_SIZE + start_idx * self.VECTOR_RECORD_SIZE
-            region_data = np.empty(num_vectors, dtype=np.uint8)
-            for i in range(num_vectors):
-                self._file.seek(byte_offset + i * self.VECTOR_RECORD_SIZE + 69)
-                region_data[i] = ord(self._file.read(1))
+            num_bytes = num_vectors * self.VECTOR_RECORD_SIZE
+            self._file.seek(byte_offset)
+            raw_bytes = self._file.read(num_bytes)
+            records = np.frombuffer(raw_bytes, dtype=np.uint8).reshape(num_vectors, self.VECTOR_RECORD_SIZE)
+            region_data = records[:, 69]
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 regions = torch.from_numpy(region_data)
