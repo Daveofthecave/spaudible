@@ -1,6 +1,7 @@
 # core/utilities/download_manager.py
 """Download manager for Spaudible data files from HuggingFace Hub."""
 import json
+import logging
 import warnings
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
@@ -130,6 +131,11 @@ class SpaudibleDownloader:
         }
         self._save_state()
         
+        # Suppress HF logging warnings
+        hf_logger = logging.getLogger("huggingface_hub")
+        original_level = hf_logger.level
+        hf_logger.setLevel(logging.ERROR)  # Only show errors while hiding warnings
+        
         try:
             # Suppress all warnings during download (HF deprecation, auth tokens, etc.)
             with warnings.catch_warnings():
@@ -152,6 +158,9 @@ class SpaudibleDownloader:
             self.state["failed"][state_key] = str(e)
             self._save_state()
             raise DownloadError(f"Failed to download {filename}: {e}")
+        finally:
+            # Restore original logging level
+            hf_logger.setLevel(original_level)
 
     def _get_expected_size(self, state_key: str) -> int:
         """Get expected file size in bytes from config."""
