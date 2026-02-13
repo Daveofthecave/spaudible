@@ -1,6 +1,7 @@
 # core/similarity_engine/vector_io.py
 import mmap
 import torch
+import sys
 import warnings
 import numpy as np
 from pathlib import Path
@@ -19,6 +20,7 @@ class VectorReader:
     def __init__(self, vectors_path: Union[str, Path], device: str = "cpu"):
         self.vectors_path = Path(vectors_path)
         self.device = device
+        self._is_windows = sys.platform == "win32"  # To disable memory-mapping on Windows
         
         # Open and memory-map
         self._file = open(self.vectors_path, 'rb')
@@ -43,9 +45,22 @@ class VectorReader:
             return torch.empty((0, 32), dtype=torch.float32, device=self.device)
         
         num_vectors = min(num_vectors, self.total_vectors - start_idx)
+
+        if self._is_windows:
+            # On Windows, ditch memory-mapping for file I/O to prevent RAM accumulation
+            byte_offset = self.VECTOR_HEADER_SIZE + start_idx * self.VECTOR_RECORD_SIZE
+            num_bytes = num_vectors * self.VECTOR_RECORD_SIZE
+            self._file.seek(byte_offset)
+            raw_bytes = self._file.read(num_bytes)
+            records_numpy = np.frombuffer(raw_bytes, dtype=np.uint8).reshape(num_vectors, self.VECTOR_RECORD_SIZE)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                records = torch.from_numpy(records_numpy)
+
+            return self._unpack_vectors(records, num_vectors)
         
         # Slice numpy array first, then convert to tensor
-        records_numpy = self._numpy_array[start_idx:start_idx + num_vectors].copy()
+        records_numpy = self._numpy_array[start_idx:start_idx + num_vectors]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             records = torch.from_numpy(records_numpy).clone()
@@ -87,9 +102,24 @@ class VectorReader:
             return torch.empty(0, dtype=torch.int32, device=self.device)
         
         num_vectors = min(num_vectors, self.total_vectors - start_idx)
+
+        # Avoid memory-mapping on Windows, since it triggers excessive RAM growth
+        if self._is_windows:
+            # Read specific byte ranges for masks (bytes 65-68 of each record)
+            byte_offset = self.VECTOR_HEADER_SIZE + start_idx * self.VECTOR_RECORD_SIZE
+            # Create array to hold mask data
+            mask_data = np.empty((num_vectors, 4), dtype=np.uint8)
+            for i in range(num_vectors):
+                self._file.seek(byte_offset + i * self.VECTOR_RECORD_SIZE + 65)
+                mask_data[i, :] = np.frombuffer(self._file.read(4), dtype=np.uint8)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                masks = torch.from_numpy(mask_data)
+
+            return masks.view(torch.int32).view(num_vectors).to(self.device)
         
         # Slice numpy array first, then convert to torch
-        mask_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 65:69].copy()
+        mask_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 65:69]
         masks = torch.from_numpy(mask_bytes).clone().contiguous()
         
         return masks.view(torch.int32).view(num_vectors).to(self.device)
@@ -99,9 +129,23 @@ class VectorReader:
             return torch.empty(0, dtype=torch.uint8, device=self.device)
         
         num_vectors = min(num_vectors, self.total_vectors - start_idx)
+
+        # Avoid memory-mapping on Windows, since it triggers excessive RAM growth
+        if self._is_windows:
+            # Read specific byte (69) from each record
+            byte_offset = self.VECTOR_HEADER_SIZE + start_idx * self.VECTOR_RECORD_SIZE
+            region_data = np.empty(num_vectors, dtype=np.uint8)
+            for i in range(num_vectors):
+                self._file.seek(byte_offset + i * self.VECTOR_RECORD_SIZE + 69)
+                region_data[i] = ord(self._file.read(1))
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                regions = torch.from_numpy(region_data)
+            
+            return regions.view(torch.uint8).view(num_vectors).to(self.device)
         
         # Slice numpy array first, then convert to torch
-        region_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 69].copy()
+        region_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 69]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             regions = torch.from_numpy(region_bytes).clone()

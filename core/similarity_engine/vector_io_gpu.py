@@ -2,11 +2,12 @@
 """
 Vector file reader using PyTorch operations run on the GPU.
 """
-import torch
-import numpy as np
-import struct
 import mmap
+import struct
+import sys
+import torch
 import warnings
+import numpy as np
 from pathlib import Path
 from typing import Optional, Union
 from config import PathConfig
@@ -32,6 +33,7 @@ class VectorReaderGPU:
         """
         self.vectors_path = Path(vectors_path) if vectors_path else PathConfig.get_vector_file()
         self.device = device if torch.cuda.is_available() else "cpu"
+        self._is_windows = sys.platform == 'win32'
         
         # Check CUDA availability first
         cuda_available = torch.cuda.is_available()
@@ -93,9 +95,22 @@ class VectorReaderGPU:
         
         if start_idx + num_vectors > self.total_vectors:
             num_vectors = self.total_vectors - start_idx
+
+        if self._is_windows:
+            # On Windows, ditch memory-mapping for file I/O to prevent RAM accumulation
+            byte_offset = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE
+            num_bytes = num_vectors * VECTOR_RECORD_SIZE
+            self._file.seek(byte_offset)
+            raw_bytes = self._file.read(num_bytes)
+            records_numpy = np.frombuffer(raw_bytes, dtype=np.uint8).reshape(num_vectors, VECTOR_RECORD_SIZE)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                gpu_records = torch.from_numpy(records_numpy).to(self.device, non_blocking=True)
+            
+            return self._unpack_vectors(gpu_records, num_vectors)
         
         # Slice numpy array first, then convert to tensor
-        cpu_records = self._numpy_array[start_idx:start_idx + num_vectors].copy()
+        cpu_records = self._numpy_array[start_idx:start_idx + num_vectors]
         
         # Move to GPU with async transfer
         with warnings.catch_warnings():
@@ -170,10 +185,23 @@ class VectorReaderGPU:
         
         if start_idx + num_vectors > self.total_vectors:
             num_vectors = self.total_vectors - start_idx
+
+        # Avoid memory-mapping on Windows, since it triggers excessive RAM growth
+        if self._is_windows:
+            byte_offset = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE
+            mask_data = np.empty((num_vectors, 4), dtype=np.uint8)
+            for i in range(num_vectors):
+                self._file.seek(byte_offset + i * VECTOR_RECORD_SIZE + 65)
+                mask_data[i, :] = np.frombuffer(self._file.read(4), dtype=np.uint8)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                masks = torch.from_numpy(mask_data)
+                
+            return masks.view(torch.int32).view(num_vectors).to(self.device, non_blocking=True)
         
         # Slice numpy array first, then convert and move to GPU
         # Byte 65 may not be 4-byte aligned, so clone first
-        mask_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 65:69].copy()
+        mask_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 65:69]
         masks = torch.from_numpy(mask_bytes).clone().contiguous()
         
         # Reinterpret as int32 and return
@@ -192,9 +220,22 @@ class VectorReaderGPU:
         if start_idx + num_vectors > self.total_vectors:
             num_vectors = self.total_vectors - start_idx
         
+        # Avoid memory-mapping on Windows, since it triggers excessive RAM growth
+        if self._is_windows:
+            byte_offset = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE
+            region_data = np.empty(num_vectors, dtype=np.uint8)
+            for i in range(num_vectors):
+                self._file.seek(byte_offset + i * VECTOR_RECORD_SIZE + 69)
+                region_data[i] = ord(self._file.read(1))
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                regions = torch.from_numpy(region_data)
+            
+            return regions.view(torch.uint8).view(num_vectors).to(self.device, non_blocking=True)
+
         # Slice numpy array first, then convert and move to GPU
         # Direct slice and return (single bytes don't have alignment issues)
-        region_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 69].copy()
+        region_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 69]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             regions = torch.from_numpy(region_bytes).clone()
