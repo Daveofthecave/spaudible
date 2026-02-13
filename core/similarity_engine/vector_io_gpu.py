@@ -95,7 +95,7 @@ class VectorReaderGPU:
             num_vectors = self.total_vectors - start_idx
         
         # Slice numpy array first, then convert to tensor
-        cpu_records = self._numpy_array[start_idx:start_idx + num_vectors]
+        cpu_records = self._numpy_array[start_idx:start_idx + num_vectors].copy()
         
         # Move to GPU with async transfer
         with warnings.catch_warnings():
@@ -173,7 +173,7 @@ class VectorReaderGPU:
         
         # Slice numpy array first, then convert and move to GPU
         # Byte 65 may not be 4-byte aligned, so clone first
-        mask_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 65:69]
+        mask_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 65:69].copy()
         masks = torch.from_numpy(mask_bytes).clone().contiguous()
         
         # Reinterpret as int32 and return
@@ -194,7 +194,7 @@ class VectorReaderGPU:
         
         # Slice numpy array first, then convert and move to GPU
         # Direct slice and return (single bytes don't have alignment issues)
-        region_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 69]
+        region_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 69].copy()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             regions = torch.from_numpy(region_bytes).clone()

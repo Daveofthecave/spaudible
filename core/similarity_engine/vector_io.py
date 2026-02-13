@@ -45,7 +45,7 @@ class VectorReader:
         num_vectors = min(num_vectors, self.total_vectors - start_idx)
         
         # Slice numpy array first, then convert to tensor
-        records_numpy = self._numpy_array[start_idx:start_idx + num_vectors]
+        records_numpy = self._numpy_array[start_idx:start_idx + num_vectors].copy()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             records = torch.from_numpy(records_numpy).clone()
@@ -89,7 +89,7 @@ class VectorReader:
         num_vectors = min(num_vectors, self.total_vectors - start_idx)
         
         # Slice numpy array first, then convert to torch
-        mask_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 65:69]
+        mask_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 65:69].copy()
         masks = torch.from_numpy(mask_bytes).clone().contiguous()
         
         return masks.view(torch.int32).view(num_vectors).to(self.device)
@@ -101,7 +101,7 @@ class VectorReader:
         num_vectors = min(num_vectors, self.total_vectors - start_idx)
         
         # Slice numpy array first, then convert to torch
-        region_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 69]
+        region_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 69].copy()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             regions = torch.from_numpy(region_bytes).clone()
