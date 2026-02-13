@@ -1,7 +1,7 @@
 # ui/cli/menu_system/main_menu_handlers/settings_manager.py
 import numpy as np
 import time
-from config import VERSION, VRAM_SAFETY_FACTOR
+from config import VERSION, VRAM_SAFETY_FACTOR, FRAME_WIDTH
 from pathlib import Path
 from ui.cli.console_utils import (
     print_header, 
@@ -23,6 +23,7 @@ from core.utilities.gpu_utils import get_gpu_info, print_gpu_info
 from core.similarity_engine.vector_comparer import ChunkedSearch
 from core.utilities.config_manager import config_manager
 from core.similarity_engine.vector_math import VectorOps
+from core.utilities.update_manager import UpdateManager
 
 try:
     import torch
@@ -555,6 +556,7 @@ def _handle_check_updates() -> str:
     """Check for and apply updates from GitHub."""
     import time
     
+    clear_screen()
     print_header("Check for Updates")
     
     updater = UpdateManager()
@@ -586,21 +588,19 @@ def _handle_check_updates() -> str:
             return "settings"
         
         # Update available
-        print(f"\n   Update available!")
+        print(f"\n   ❇️  Update available!\n")
+
         print(f"   Current:  {local_info.get('commit', 'unknown')[:7] if local_info.get('commit') else 'unknown'}")
         print(f"   Latest:   {remote_info['commit']}")
         print(f"   Date:     {remote_info['date'][:10]}")
-        print(f"   Message:  {remote_info['message']}")
+        print(f"   Message:  {remote_info['message']}\n")
         
-        print(f"\n   Update method: {'Git' if updater.is_git_repo else 'Download ZIP'}")
+        print(f"   Update method: {'Git' if updater.is_git_repo else 'Download ZIP'}\n")
         
-        print("\n⚠️ This will:")
-        print("    • Backup your current version")
-        print("    • Download and install latest code")
-        print("    • Preserve your data/ directory and settings")
-        print("    • Require a restart when complete")
+        print("   Would you like to update Spaudible now?")
+        print("   Changes will take effect after you restart the program.\n")
         
-        confirm = input("\n   Proceed with update? (yes/no): ").strip().lower()
+        confirm = input("   Proceed? (yes/no): ").strip().lower()
         
         if confirm != 'yes':
             print("   Update cancelled.")
@@ -652,13 +652,13 @@ def _handle_check_updates() -> str:
                 input("\n   Press Enter to exit...")
                 return "exit"  # Signal to exit program
                 
-        except UpdateError as e:
-            print(f"\n\n❗️ Update failed: {e}\n")
+        except Exception as e:
+            print(f"\n\n❗️ An error occurred: {e}\n")
            
             print("   Your data files are safe. You may need to:")
             print("     - Check your internet connection")
             print("     - Manually download the latest version from GitHub")
-            print("     - Restore files from the backup in backups/ if needed\n")
+            print("     - Restore files from the backups/ directory if needed\n")
             
             input("   Press Enter to continue...")
             return "settings"
