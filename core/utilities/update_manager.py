@@ -34,7 +34,7 @@ class UpdateManager:
         self.target_branch = "dev"  # Change to "main" for production
         
     def _check_git_available(self) -> bool:
-        """Check if git command is available. """
+        """Check if git command is available."""
         try:
             result = subprocess.run(
                 ["git", "--version"], 
