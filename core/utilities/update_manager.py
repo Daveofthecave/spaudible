@@ -32,7 +32,7 @@ class UpdateManager:
         self.base_dir = PathConfig.BASE_DIR
         self.is_git_repo = self._check_git_available() and (self.base_dir / ".git").exists()
         self.temp_dir = None
-        self.target_branch = "dev"  # Change to "main" for production
+        self.target_branch = "dev"  # Change to "main" for production 
         
     def _check_git_available(self) -> bool:
         """Check if git command is available."""
