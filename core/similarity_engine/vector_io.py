@@ -28,21 +28,27 @@ class VectorReader:
         # Create memory map
         self._mmap = mmap.mmap(self._file.fileno(), 0, access=mmap.ACCESS_READ)
         
-        # Create torch tensor view
+        # Create numpy view instead of a tensor to allow slicing before tensor conversion.
+        # This prevents Windows from loading the entire 26GB track_vectors.bin file into RAM
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning) # We never write to this array
-            numpy_array = np.frombuffer(self._mmap, dtype=np.uint8, offset=self.VECTOR_HEADER_SIZE)
-            self._full_mmap_tensor = torch.from_numpy(numpy_array).view(-1, self.VECTOR_RECORD_SIZE)
-        
-        # print(f"   Loaded {self.total_vectors:,} vectors")
-        # print(f"   Using {self.device} tensor operations")
-        
+            warnings.simplefilter("ignore", UserWarning)
+            self._numpy_array = np.frombuffer(
+                self._mmap, 
+                dtype=np.uint8, 
+                offset=self.VECTOR_HEADER_SIZE
+            ).reshape(-1, self.VECTOR_RECORD_SIZE)
+
     def read_chunk(self, start_idx: int, num_vectors: int) -> torch.Tensor:
         if start_idx >= self.total_vectors:
             return torch.empty((0, 32), dtype=torch.float32, device=self.device)
         
         num_vectors = min(num_vectors, self.total_vectors - start_idx)
-        records = self._full_mmap_tensor[start_idx:start_idx + num_vectors]
+        
+        # Slice numpy array first, then convert to tensor
+        records_numpy = self._numpy_array[start_idx:start_idx + num_vectors]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            records = torch.from_numpy(records_numpy).clone()
         
         return self._unpack_vectors(records, num_vectors)
     
@@ -80,22 +86,28 @@ class VectorReader:
         if start_idx >= self.total_vectors:
             return torch.empty(0, dtype=torch.int32, device=self.device)
         
-        records = self._full_mmap_tensor[start_idx:start_idx + num_vectors]
+        num_vectors = min(num_vectors, self.total_vectors - start_idx)
         
-        # Clone to ensure 4-byte alignment for int32 view
-        mask_bytes = records[:, 65:69].clone().contiguous()
-        return mask_bytes.view(torch.int32).view(num_vectors).to(self.device)
-    
+        # Slice numpy array first, then convert to torch
+        mask_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 65:69]
+        masks = torch.from_numpy(mask_bytes).clone().contiguous()
+        
+        return masks.view(torch.int32).view(num_vectors).to(self.device)
+
     def read_regions(self, start_idx: int, num_vectors: int) -> torch.Tensor:
         if start_idx >= self.total_vectors:
             return torch.empty(0, dtype=torch.uint8, device=self.device)
         
-        records = self._full_mmap_tensor[start_idx:start_idx + num_vectors]
+        num_vectors = min(num_vectors, self.total_vectors - start_idx)
         
-        # Clone to be safe (though uint8 is less alignment-sensitive)
-        region_bytes = records[:, 69].clone().contiguous()
-        return region_bytes.view(torch.uint8).view(num_vectors).to(self.device)
-    
+        # Slice numpy array first, then convert to torch
+        region_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 69]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            regions = torch.from_numpy(region_bytes).clone()
+        
+        return regions.view(torch.uint8).view(num_vectors).to(self.device)
+
     def get_isrcs_batch(self, indices: Union[list, torch.Tensor]) -> list:
         """Extract ISRCs directly from vector file."""
         if isinstance(indices, torch.Tensor):
@@ -104,8 +116,8 @@ class VectorReader:
         results = []
         for idx in indices:
             # ISRC is at bytes 70-81 (12 bytes)
-            isrc_bytes = self._full_mmap_tensor[idx, 70:82]
-            isrc = isrc_bytes.contiguous().numpy().tobytes().decode('ascii', errors='ignore').rstrip('\0')
+            isrc_bytes = self._numpy_array[idx, 70:82]
+            isrc = isrc_bytes.tobytes().decode('ascii', errors='ignore').rstrip('\0')
             results.append(isrc)
         
         return results
@@ -117,8 +129,8 @@ class VectorReader:
         
         results = []
         for idx in indices:
-            track_id_bytes = self._full_mmap_tensor[idx, 82:104]
-            track_id = track_id_bytes.contiguous().numpy().tobytes().decode('ascii', errors='ignore').rstrip('\0')
+            track_id_bytes = self._numpy_array[idx, 82:104]
+            track_id = track_id_bytes.tobytes().decode('ascii', errors='ignore').rstrip('\0')
             results.append(track_id)
         
         return results
@@ -138,8 +150,8 @@ class VectorReader:
         return 100_000
     
     def close(self):
-        if hasattr(self, '_full_mmap_tensor'):
-            del self._full_mmap_tensor
+        if hasattr(self, '_numpy_array'):
+            del self._numpy_array
         if hasattr(self, '_mmap'):
             self._mmap.close()
         if hasattr(self, '_file'):
