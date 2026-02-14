@@ -95,6 +95,8 @@ if errorlevel 1 (
 )
 
 echo Installing dependencies (this may take several minutes)...
+
+:: Install dependencies from pyproject.toml
 %UV_CMD% pip install -e .
 if errorlevel 1 (
     echo [Error] Failed to install dependencies.
@@ -103,12 +105,36 @@ if errorlevel 1 (
     exit /b 1
 )
 
+:: Check for NVIDIA GPU before downloading CUDA libraries
+where nvidia-smi >nul 2>&1
+if %errorlevel% equ 0 (
+    echo.
+    echo NVIDIA GPU detected; installing CUDA-enabled PyTorch...
+    :: Force reinstall to overwrite the CPU version with CUDA version
+    %UV_CMD% pip install torch==2.9.1 --extra-index-url https://download.pytorch.org/whl/cu128 --force-reinstall
+
+    :: Verify CUDA is working
+    echo.
+    echo Verifying CUDA installation...
+    .venv\Scripts\python.exe -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')"
+    
+    if errorlevel 1 (
+        echo [Warning] Failed to install CUDA-enabled PyTorch. Falling back to CPU...
+        %UV_CMD% pip install torch==2.9.1
+    )
+) else (
+    echo.
+    echo No NVIDIA GPU detected. Installing CPU-only PyTorch...
+    %UV_CMD% pip install torch==2.9.1
+)
+
 echo.
 echo ==========================================
 echo Launching Spaudible...
 echo ==========================================
 
-%UV_CMD% run main.py
+:: Direct launch command for Spaudible
+.venv\Scripts\python.exe main.py
 if errorlevel 1 (
     echo.
     echo [Error] Spaudible encountered an error during launch.
