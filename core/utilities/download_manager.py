@@ -1,6 +1,7 @@
 # core/utilities/download_manager.py
 """Download manager for Spaudible data files from HuggingFace Hub."""
 import json
+import logging
 import warnings
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
@@ -130,21 +131,23 @@ class SpaudibleDownloader:
         }
         self._save_state()
         
+        # Suppress HF logging warnings
+        hf_logger = logging.getLogger("huggingface_hub")
+        original_level = hf_logger.level
+        hf_logger.setLevel(logging.ERROR)  # Only show errors while hiding warnings
+        
         try:
-            # Filter out deprecation/authentication nag messages for cleaner output
+            # Suppress all warnings during download (HF deprecation, auth tokens, etc.)
             with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", message=".*resume_download.*deprecated.*")
-                warnings.filterwarnings("ignore", message=".*local_dir_use_symlinks.*deprecated.*")
-                warnings.filterwarnings("ignore", message=".*unauthenticated.*")
-                warnings.filterwarnings("ignore", message=".*HF_TOKEN.*")    
-                
+                warnings.simplefilter("ignore")
                 downloaded_path = hf_hub_download(
                     repo_id=repo_id,
                     filename=filename,  # Pass full path including subdirectories
                     local_dir=str(local_dir),
                     repo_type=repo_type,
                     local_dir_use_symlinks=False,
-                    resume_download=True
+                    resume_download=True,
+                    token=False  # Explicitly disable auth to suppress unauthenticated warning
                 )
                 
             self.state["completed"][state_key] = str(downloaded_path)
@@ -155,6 +158,9 @@ class SpaudibleDownloader:
             self.state["failed"][state_key] = str(e)
             self._save_state()
             raise DownloadError(f"Failed to download {filename}: {e}")
+        finally:
+            # Restore original logging level
+            hf_logger.setLevel(original_level)
 
     def _get_expected_size(self, state_key: str) -> int:
         """Get expected file size in bytes from config."""

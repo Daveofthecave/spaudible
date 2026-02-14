@@ -71,7 +71,7 @@ class ChunkSizeOptimizer:
                     
                 except Exception as e:
                     # Log individual test failures but continue
-                    print(f"   ⚠️  Chunk size {size:,} test failed at pos {start_idx}: {e}")
+                    print(f"   ⚠️ Chunk size {size:,} test failed at pos {start_idx}: {e}")
                     continue
             
             if valid_tests > 0:
@@ -88,7 +88,7 @@ class ChunkSizeOptimizer:
             print(f"   Optimal CPU chunk size: {self.best_size:,} ({best_speed/1e6:.2f}M vec/sec)")
         else:
             # All benchmarks failed - use conservative default
-            print(f"   ⚠️  All chunk size benchmarks failed!")
+            print(f"   ⚠️ All chunk size benchmarks failed!")
             print(f"      This may indicate a corrupted vector file or I/O error.")
             print(f"      Using safe default chunk size: {self.best_size:,}")
             self.best_size = 100_000

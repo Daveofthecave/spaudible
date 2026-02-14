@@ -180,7 +180,7 @@ class ResolvedAudioFile:
     def get_display_text(self) -> str:
         """Get formatted display text for the match."""
         if not self.is_resolved:
-            return f"❌ {self.audio_file_input.filename} (no match)"
+            return f"❗️ {self.audio_file_input.filename} (no match)"
         
         if self.matched_variation and self.matched_variation.results:
             top = self.matched_variation.results[0]

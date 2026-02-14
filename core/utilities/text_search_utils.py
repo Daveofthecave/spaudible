@@ -525,7 +525,7 @@ def simple_text_search_fallback(query: str) -> Optional[str]:
         # Use new flexible search
         results = search_tracks_flexible(query, limit=20)
         if not results:
-            print(f"\n ❌ No results found for '{query}'")
+            print(f"\n ❗️ No results found for '{query}'")
             input("\n Press Enter to continue...")
             return None
         
@@ -546,9 +546,9 @@ def simple_text_search_fallback(query: str) -> Optional[str]:
             elif choice == 'b':
                 return None
             else:
-                print(" ❌ Invalid choice. Try again.")
+                print(" ❗️ Invalid choice. Try again.")
                 
     except Exception as e:
-        print(f"\n ❌ Search error: {e}")
+        print(f"\n ❗️ Search error: {e}")
         input("\n Press Enter to continue...")
         return None

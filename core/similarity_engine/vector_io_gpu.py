@@ -2,11 +2,12 @@
 """
 Vector file reader using PyTorch operations run on the GPU.
 """
-import torch
-import numpy as np
-import struct
 import mmap
+import struct
+import sys
+import torch
 import warnings
+import numpy as np
 from pathlib import Path
 from typing import Optional, Union
 from config import PathConfig
@@ -32,11 +33,12 @@ class VectorReaderGPU:
         """
         self.vectors_path = Path(vectors_path) if vectors_path else PathConfig.get_vector_file()
         self.device = device if torch.cuda.is_available() else "cpu"
-
+        self._is_windows = sys.platform == 'win32'
+        
         # Check CUDA availability first
         cuda_available = torch.cuda.is_available()
         if not cuda_available:
-            print("  ⚠️  CUDA not available; falling back to CPU mode")
+            print("  ⚠️ CUDA not available; falling back to CPU mode")
             self.device = "cpu"
         else:
             self.device = device
@@ -49,14 +51,14 @@ class VectorReaderGPU:
         # Create persistent memory map
         self._mmap = mmap.mmap(self._file.fileno(), 0, access=mmap.ACCESS_READ)
         
-        # Suppress the non-writable tensor warning for memory-mapped files 
-        # (it's harmless because we never write to them, anyway)
+        # Create numpy view instead of tensor to allow slicing on Windows
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            # Use numpy's frombuffer to create properly aligned array
-            # This handles the byte offset correctly and avoids alignment issues
-            numpy_array = np.frombuffer(self._mmap, dtype=np.uint8, offset=VECTOR_HEADER_SIZE)
-            self._full_mmap_tensor = torch.from_numpy(numpy_array).view(-1, VECTOR_RECORD_SIZE)
+            self._numpy_array = np.frombuffer(
+                self._mmap, 
+                dtype=np.uint8, 
+                offset=VECTOR_HEADER_SIZE
+            ).reshape(-1, VECTOR_RECORD_SIZE)
         
         # Pre-allocate GPU unpacking buffer for reuse
         self._gpu_unpack_buffer = None
@@ -93,14 +95,29 @@ class VectorReaderGPU:
         
         if start_idx + num_vectors > self.total_vectors:
             num_vectors = self.total_vectors - start_idx
+
+        if self._is_windows:
+            # On Windows, ditch memory-mapping for file I/O to prevent RAM accumulation
+            byte_offset = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE
+            num_bytes = num_vectors * VECTOR_RECORD_SIZE
+            self._file.seek(byte_offset)
+            raw_bytes = self._file.read(num_bytes)
+            records_numpy = np.frombuffer(raw_bytes, dtype=np.uint8).reshape(num_vectors, VECTOR_RECORD_SIZE)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                gpu_records = torch.from_numpy(records_numpy).to(self.device, non_blocking=True)
+            
+            return self._unpack_vectors(gpu_records, num_vectors)
         
-        # Slice pre-mapped tensor (ZERO copy - just a view)
-        cpu_records = self._full_mmap_tensor[start_idx:start_idx + num_vectors]
+        # Slice numpy array first, then convert to tensor
+        cpu_records = self._numpy_array[start_idx:start_idx + num_vectors]
         
         # Move to GPU with async transfer
-        gpu_records = cpu_records.to(self.device, non_blocking=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            gpu_records = torch.from_numpy(cpu_records).clone().to(self.device, non_blocking=True)
         
-        # Unpack using optimized manual method (no torch.compile to avoid alignment errors)
+        # Unpack using optimized manual method
         return self._unpack_vectors(gpu_records, num_vectors)
 
     def _unpack_vectors(self, records_gpu: torch.Tensor, num_vectors: int) -> torch.Tensor:
@@ -163,34 +180,71 @@ class VectorReaderGPU:
         """
         # Enforce safe batch size SAME as read_chunk
         if num_vectors > self.max_batch_size:
-            print(f"  ⚠️  Requested {num_vectors:,} masks, limiting to {self.max_batch_size:,} for safety")
+            print(f"  ⚠️ Requested {num_vectors:,} masks, limiting to {self.max_batch_size:,} for safety")
             num_vectors = self.max_batch_size
         
         if start_idx + num_vectors > self.total_vectors:
             num_vectors = self.total_vectors - start_idx
+
+        # Avoid memory-mapping on Windows, since it triggers excessive RAM growth
+        if self._is_windows:
+            # Read full chunk, then extract mask bytes (65-68) - avoids seek overhead
+            byte_offset = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE
+            num_bytes = num_vectors * VECTOR_RECORD_SIZE
+            self._file.seek(byte_offset)
+            raw_bytes = self._file.read(num_bytes)
+            records = np.frombuffer(raw_bytes, dtype=np.uint8).reshape(num_vectors, VECTOR_RECORD_SIZE)
+            mask_data = records[:, 65:69]
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                masks = torch.from_numpy(mask_data)
+            
+            return masks.view(torch.int32).view(num_vectors).to(self.device, non_blocking=True)
         
-        # Extract mask bytes directly from mmap tensor
+        # Slice numpy array first, then convert and move to GPU
         # Byte 65 may not be 4-byte aligned, so clone first
-        mask_bytes = self._full_mmap_tensor[start_idx:start_idx + num_vectors, 65:69].clone().contiguous()
+        mask_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 65:69]
+        masks = torch.from_numpy(mask_bytes).clone().contiguous()
         
         # Reinterpret as int32 and return
-        return mask_bytes.view(torch.int32).view(num_vectors).to(self.device, non_blocking=True)
+        return masks.view(torch.int32).view(num_vectors).to(self.device, non_blocking=True)
 
     def read_regions(self, start_idx: int, num_vectors: int) -> torch.Tensor:
         """
         Read region codes (single byte at position 69).
         No alignment issues since we're reading single bytes.
         """
-        # Enforce safe batch size SAME as read_chunk
+        # Enforce safe batch size same as read_chunk
         if num_vectors > self.max_batch_size:
-            print(f"  ⚠️  Requested {num_vectors:,} regions, limiting to {self.max_batch_size:,} for safety")
+            print(f"  ⚠️ Requested {num_vectors:,} regions, limiting to {self.max_batch_size:,} for safety")
             num_vectors = self.max_batch_size
         
         if start_idx + num_vectors > self.total_vectors:
             num_vectors = self.total_vectors - start_idx
         
+        # Avoid memory-mapping on Windows, since it triggers excessive RAM growth
+        if self._is_windows:
+            # Read full chunk, then extract region byte (69) - avoids seek overhead
+            byte_offset = VECTOR_HEADER_SIZE + start_idx * VECTOR_RECORD_SIZE
+            num_bytes = num_vectors * VECTOR_RECORD_SIZE
+            self._file.seek(byte_offset)
+            raw_bytes = self._file.read(num_bytes)
+            records = np.frombuffer(raw_bytes, dtype=np.uint8).reshape(num_vectors, VECTOR_RECORD_SIZE)
+            region_data = records[:, 69]
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                regions = torch.from_numpy(region_data)
+            
+            return regions.view(torch.uint8).view(num_vectors).to(self.device, non_blocking=True)
+
+        # Slice numpy array first, then convert and move to GPU
         # Direct slice and return (single bytes don't have alignment issues)
-        return self._full_mmap_tensor[start_idx:start_idx + num_vectors, 69].view(torch.uint8).to(self.device, non_blocking=True)
+        region_bytes = self._numpy_array[start_idx:start_idx + num_vectors, 69]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            regions = torch.from_numpy(region_bytes).clone()
+        
+        return regions.view(torch.uint8).view(num_vectors).to(self.device, non_blocking=True)
 
     def get_total_vectors(self) -> int:
         return self.total_vectors
@@ -207,8 +261,8 @@ class VectorReaderGPU:
         results = []
         for idx in indices:
             # ISRC is at bytes 70-81 (12 bytes)
-            isrc_bytes = self._full_mmap_tensor[idx, 70:82]
-            isrc = isrc_bytes.contiguous().numpy().tobytes().decode('ascii', errors='ignore').rstrip('\0')
+            isrc_bytes = self._numpy_array[idx, 70:82]
+            isrc = isrc_bytes.tobytes().decode('ascii', errors='ignore').rstrip('\0')
             results.append(isrc)
         
         return results
@@ -220,16 +274,16 @@ class VectorReaderGPU:
         
         results = []
         for idx in indices:
-            track_id_bytes = self._full_mmap_tensor[idx, 82:104]
-            track_id = track_id_bytes.contiguous().numpy().tobytes().decode('ascii', errors='ignore').rstrip('\0')
+            track_id_bytes = self._numpy_array[idx, 82:104]
+            track_id = track_id_bytes.tobytes().decode('ascii', errors='ignore').rstrip('\0')
             results.append(track_id)
         
         return results
 
     def close(self):
         """Clean up resources."""
-        if hasattr(self, '_full_mmap_tensor'):
-            del self._full_mmap_tensor
+        if hasattr(self, '_numpy_array'):
+            del self._numpy_array
         if hasattr(self, '_mmap'):
             self._mmap.close()
         if hasattr(self, '_file'):

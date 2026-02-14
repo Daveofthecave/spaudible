@@ -163,17 +163,17 @@ def format_track_display(track_id: str, similarity: float, metadata: Optional[Di
 def format_elapsed_time(seconds: float) -> str:
     """Format elapsed time in a human-readable way."""
     if seconds < 1:
-        return f"{seconds * 1000:.0f}ms      "
+        return f"{seconds * 1000:.0f}ms                  "
     elif seconds < 60:
-        return f"{seconds:.1f}s      "
+        return f"{seconds:.1f}s                  "
     elif seconds < 3600:
         minutes = int(seconds // 60)
         seconds = seconds % 60
-        return f"{minutes}m {seconds:.0f}s      "
+        return f"{minutes}m {seconds:.0f}s                  "
     else:
         hours = int(seconds // 3600)
         minutes = int((seconds % 3600) // 60)
-        return f"{hours}h {minutes}m      "
+        return f"{hours}h {minutes}m                  "
 
 def format_file_size(size_bytes):
     """Convert bytes to human-readable format."""

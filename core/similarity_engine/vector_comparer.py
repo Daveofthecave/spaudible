@@ -56,7 +56,7 @@ class ChunkedSearch:
                     self.gpu_ops = VectorOpsGPU(device=self.device)
                     self.gpu_ops.set_user_weights(config_manager.get_weights())
             except Exception as e:
-                print(f"⚠️  GPU initialization failed: {e}")
+                print(f"⚠️ GPU initialization failed: {e}")
                 self.gpu_ops = None
     
     def sequential_scan(self,

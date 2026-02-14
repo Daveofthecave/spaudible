@@ -13,7 +13,7 @@ def screen_preprocessing():
     enable_profiling = False
     profile_interval = 4_000_000
     
-    print("\n  ⚙️  Performance Profiling Options:")
+    print("\n  ⚙️ Performance Profiling Options:")
     print("     1. No profiling (fastest)")
     print("     2. Full profiling (save at end)")
     print("     3. Periodic profiling (save every N million vectors)")

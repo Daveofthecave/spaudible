@@ -49,17 +49,17 @@ def verify_genre_integrity():
                 stored_verify = GENRE_LUT[h, 2]
                 
                 if meta_idx == -1:
-                    print(f"❌ Genre '{genre}' not found in LUT!")
+                    print(f"❗️ Genre '{genre}' not found in LUT!")
                     errors += 1
                     break
                 
                 if stored_verify == verify_key:
                     # Found it - verify values
                     if meta_idx != expected_meta:
-                        print(f"❌ Meta-genre mismatch for '{genre}': {meta_idx} vs {expected_meta}")
+                        print(f"❗️ Meta-genre mismatch for '{genre}': {meta_idx} vs {expected_meta}")
                         errors += 1
                     if abs(stored_intensity - expected_intensity) > 0.0001:
-                        print(f"❌ Intensity mismatch for '{genre}': {stored_intensity} vs {expected_intensity}")
+                        print(f"❗️ Intensity mismatch for '{genre}': {stored_intensity} vs {expected_intensity}")
                         errors += 1
                     break
                 
@@ -67,14 +67,14 @@ def verify_genre_integrity():
                 probe_count += 1
                 
                 if probe_count > 100:
-                    print(f"❌ Could not find '{genre}' after 100 probes!")
+                    print(f"❗️ Could not find '{genre}' after 100 probes!")
                     errors += 1
                     break
     
     if errors == 0:
         print("✅ All genres verified successfully!")
     else:
-        print(f"❌ {errors} genres failed verification!")
+        print(f"❗️ {errors} genres failed verification!")
     
     return errors == 0
 
@@ -84,7 +84,7 @@ def _init_genre_lut():
     
     csv_path = PathConfig.get_genre_mapping()
     if not csv_path.exists():
-        print(f"⚠️  WARNING: Genre mapping file not found at {csv_path}")
+        print(f"⚠️ Warning: Genre mapping file not found at {csv_path}")
         print("   All tracks will have -1 for genre dimensions")
         return
     
@@ -111,7 +111,7 @@ def _init_genre_lut():
                         print(f"   Skipped invalid row: {row.get('genre', 'unknown')} - {e}")
                     continue
     except Exception as e:
-        print(f"❌ ERROR loading genre mapping: {e}")
+        print(f"❗️ Error loading genre mapping: {e}")
         return
     
     print(f"✅ Loaded {len(genre_map)} unique genres from CSV")
@@ -151,7 +151,7 @@ def _init_genre_lut():
         GENRE_LUT[h, 2] = verification_key
     
     if collision_count > 0:
-        print(f"ℹ️  Resolved {collision_count} hash collisions during LUT creation")
+        print(f"ℹ️ Resolved {collision_count} hash collisions during LUT creation")
     
     if DEBUG_GENRES:
         print(f"✅ GENRE_LUT ready with {MAX_GENRE_HASH} slots and {len(genre_map)} genres")

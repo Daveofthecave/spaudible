@@ -30,7 +30,7 @@ class MetadataManager:
             # self.conn.row_factory = None  # This is the default
             return True
         except Exception as e:
-            print(f"⚠️  Could not connect to metadata database: {e}")
+            print(f"⚠️ Could not connect to metadata database: {e}")
             return False
 
     def get_track_metadata(self, track_id: str) -> Dict[str, Optional[str]]:
@@ -106,7 +106,7 @@ class MetadataManager:
                     }
             
         except Exception as e:
-            print(f"⚠️  Error fetching metadata for {track_id}: {e}")
+            print(f"⚠️ Error fetching metadata for {track_id}: {e}")
         
         return self._default_metadata()
     
@@ -161,7 +161,7 @@ class MetadataManager:
             return [metadata_dict.get(tid, self._default_metadata()) for tid in track_ids]
             
         except Exception as e:
-            print(f"⚠️  Error fetching metadata batch: {e}")
+            print(f"⚠️ Error fetching metadata batch: {e}")
             import traceback
             traceback.print_exc()
             return [self._default_metadata() for _ in track_ids]

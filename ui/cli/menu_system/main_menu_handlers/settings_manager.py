@@ -1,7 +1,7 @@
 # ui/cli/menu_system/main_menu_handlers/settings_manager.py
 import numpy as np
 import time
-from config import VERSION, VRAM_SAFETY_FACTOR
+from config import VERSION, VRAM_SAFETY_FACTOR, FRAME_WIDTH
 from pathlib import Path
 from ui.cli.console_utils import (
     print_header, 
@@ -23,6 +23,7 @@ from core.utilities.gpu_utils import get_gpu_info, print_gpu_info
 from core.similarity_engine.vector_comparer import ChunkedSearch
 from core.utilities.config_manager import config_manager
 from core.similarity_engine.vector_math import VectorOps
+from core.utilities.update_manager import UpdateManager
 
 try:
     import torch
@@ -53,21 +54,22 @@ def handle_settings() -> str:
     region_strength_str = f"{region_strength:.2f}"
     top_k_str = f"{top_k}"
     
-    print("\n  ⚙️  Configuration & Diagnostics")
+    print("\n  ⚙️ Configuration & Diagnostics")
     
     options = [
-        f" ⬅️  Back to Main Menu",
+        f" ⬅️ Back to Main Menu",
         f" 🐌 Force CPU Mode: {cpu_status}",
         f" 🐆 Force GPU Mode: {gpu_status}",
         f" 🧮 Select Similarity Algorithm: {algorithm_name}", 
         f" 🧦 Deduplicate Results: {deduplicate_status}",
         f" 🌎️ Region Filter Strength: {region_strength_str}",
         f" 🔢 Number of Results: {top_k_str}",
-        f" ⚖️  Adjust Feature Weights",
+        f" ⚖️ Adjust Feature Weights",
         f" ❔ Check System Status",
         f"📊 Performance Test",
         f"🔄 Re-run Setup",
-        f"ℹ️  About Spaudible"
+        f"🆕 Check for Updates",
+        f"ℹ️ About Spaudible"
     ]
     
     print_menu(options)
@@ -86,7 +88,8 @@ def handle_settings() -> str:
         9: _handle_system_status,
         10: _handle_performance_test,
         11: _handle_rerun_setup,
-        12: _handle_about
+        12: _handle_check_updates,
+        13: _handle_about
     }
     
     return handlers.get(choice, lambda: "settings")()
@@ -184,9 +187,9 @@ def _adjust_region_strength() -> str:
                 input("\n  Press Enter to continue...")
                 return "settings"
             else:
-                print("  ❌ Value must be between 0.0 and 1.0")
+                print("  ❗️ Value must be between 0.0 and 1.0")
         except ValueError:
-            print("  ❌ Please enter a valid number")
+            print("  ❗️ Please enter a valid number")
 
 def _set_number_of_results() -> str:
     """Set the number of search results to return."""
@@ -209,9 +212,9 @@ def _set_number_of_results() -> str:
                 print(f"\n  ✅ Number of results set to: {new_value}")
                 break
             else:
-                print("  ❌ Value must be between 1 and 1000000")
+                print("  ❗️ Value must be between 1 and 1000000")
         except ValueError:
-            print("  ❌ Please enter a valid number")
+            print("  ❗️ Please enter a valid number")
     
     input("\n  Press Enter to continue...")
     return "settings"
@@ -287,10 +290,10 @@ def _edit_weights(weights, features):
                 print(f"  Updated {features[feature_idx]} weight to {weights[feature_idx]:.2f}")
                 input("\n  Press Enter to continue...")
             else:
-                print("  ❌ Invalid choice")
+                print("  ❗️ Invalid choice")
                 time.sleep(1)
         except ValueError:
-            print("  ❌ Please enter a valid number")
+            print("  ❗️ Please enter a valid number")
             time.sleep(1)       
 
 def _handle_system_status() -> str:
@@ -359,7 +362,7 @@ def _handle_system_status() -> str:
         build_canonical_vector("0eGsygTp906u18L0Oimnem")  # Test track
         print("\n✅ Canonical Track ID Resolver: Ready")
     except Exception as e:
-        print(f"\n⚠️  Canonical Track ID Resolver: Error - {str(e)}")
+        print(f"\n⚠️ Canonical Track ID Resolver: Error - {str(e)}")
     
     input("\n   Press Enter to continue...")
     return "settings"
@@ -374,7 +377,7 @@ def _handle_performance_test() -> str:
     # Check if files exist first
     files_exist, error_msg = check_preprocessed_files()
     if not files_exist:
-        print(f"  ❌ {error_msg}")
+        print(f"  ❗️ {error_msg}")
         input("\n  Press Enter to continue...")
         return "settings"
     
@@ -479,7 +482,7 @@ def _handle_performance_test() -> str:
             print(f"\n  🚀 Fastest GPU batch: {best_batch:,} ({best_speed/1e6:.2f}M vec/sec)")
         gpu_orchestrator.close()
     else:
-        print("  ⚠️  No GPU available - skipping GPU tests")
+        print("  ⚠️ No GPU available - skipping GPU tests")
     
     # Section 3: Track Search Performance
     print_header("🔍 Track Search Performance")
@@ -528,7 +531,7 @@ def _handle_rerun_setup() -> str:
     """Handle re-running the setup process."""
     print_header("Re-run Setup")
     
-    print("\n  ⚠️  This will delete existing processed files.")
+    print("\n  ⚠️ This will delete existing processed files.")
     print("  You will need to re-run preprocessing (several hours).")
     
     confirm = input("\n  Are you sure? (yes/no): ").lower().strip()
@@ -548,6 +551,131 @@ def _handle_rerun_setup() -> str:
         return "exit"
     
     return "settings"
+
+def _handle_check_updates() -> str:
+    """Check for and apply updates from GitHub."""
+    import time
+    
+    clear_screen()
+    print_header("Check for Updates")
+    
+    updater = UpdateManager()
+    local = updater.get_local_version_info()
+    
+    print(f"\n   Current version: {local['version']}")
+    if local['commit']:
+        print(f"   Local commit: {local['commit']}")
+    if local['date']:
+        print(f"   Installed: {local['date']}")
+    
+    print("\n   Checking for updates...")
+    print("   (This may take a few seconds)")
+    
+    try:
+        available, local_info, remote_info = updater.check_for_update()
+        
+        if not remote_info:
+            print("\n❗️ Could not connect to GitHub.")
+            print("   Please check your internet connection.")
+            input("\n   Press Enter to continue...")
+            return "settings"
+        
+        if not available:
+            print(f"\n✅ Spaudible is up to date!\n")
+            print(f"   Latest commit: {remote_info['commit']}")
+            print(f"   Message: {remote_info['message']}")
+            input("\n   Press Enter to continue...")
+            return "settings"
+        
+        # Update available
+        print(f"\n   ❇️  Update available!\n")
+
+        print(f"   Current:  {local_info.get('commit', 'unknown')[:7] if local_info.get('commit') else 'unknown'}")
+        print(f"   Latest:   {remote_info['commit']}")
+        print(f"   Date:     {remote_info['date'][:10]}")
+        print(f"   Message:  {remote_info['message']}\n")
+        
+        print(f"   Update method: {'Git' if updater.is_git_repo else 'Download ZIP'}\n")
+        
+        print("   Would you like to update Spaudible now?")
+        print("   Changes will take effect after you restart the program.\n")
+        
+        confirm = input("   Proceed? (yes/no): ").strip().lower()
+        
+        if confirm != 'yes':
+            print("   Update cancelled.")
+            time.sleep(1)
+            return "settings"
+        
+        # Perform update
+        print("\n" + "─" * FRAME_WIDTH)
+        
+        def progress(msg, pct, total):
+            bar_width = 30
+            filled = int(bar_width * pct / total)
+            bar = '█' * filled + '░' * (bar_width - filled)
+            print(f"\r [{bar}] {pct}% {msg}", end='', flush=True)
+        
+        success = False
+        try:
+            if updater.is_git_repo:
+                print("   Updating via Git...")
+                success = updater.update_via_git()
+            else:
+                print(" Updating via ZIP download...")
+                success = updater.update_via_zip(
+                    progress_callback=progress,
+                    target_commit=remote_info['commit']  # Pass commit to save to config.json
+                )
+                print()  # New line after progress bar
+            
+            if success:
+                # Verify
+                print("\n✅ Update applied successfully!")
+                
+                # Get new version info
+                new_local = updater.get_local_version_info()
+                print(f"   New version: {new_local['version']}")
+                if new_local['commit']:
+                    print(f"   New commit: {new_local['commit']}")
+                
+                # Verify critical files
+                ok, msg = updater.verify_installation()
+                if not ok:
+                    print(f"\n ⚠️ Warning: {msg}")
+                
+                print("\n" + "═" * FRAME_WIDTH)
+                print("   IMPORTANT: Please restart Spaudible to complete the update.")
+                print("   Close this window and relaunch using your original method:")
+                print("     • Windows: Double-click spaudible.bat")
+                print("     • Mac/Linux: Double-click spaudible.command")
+                print("     • Or run: python main.py")
+                print("═" * FRAME_WIDTH)
+                
+                input("\n   Press Enter to exit...")
+                return "exit"  # Signal to exit program
+                
+        except Exception as e:
+            print(f"\n\n❗️ An error occurred: {e}\n")
+           
+            print("   Your data files are safe. You may need to:")
+            print("     - Check your internet connection")
+            print("     - Manually download the latest version from GitHub")
+            print("     - Restore files from the backups/ directory if needed\n")
+            
+            input("   Press Enter to continue...")
+            return "settings"
+            
+    except KeyboardInterrupt:
+        print("\n\n   Update cancelled.")
+        time.sleep(1)
+        return "settings"
+    except Exception as e:
+        print(f"\n❗️ Error: {e}")
+        import traceback
+        traceback.print_exc()
+        input("\n   Press Enter to continue...")
+        return "settings"
 
 def _handle_about() -> str:
     """Display about information."""

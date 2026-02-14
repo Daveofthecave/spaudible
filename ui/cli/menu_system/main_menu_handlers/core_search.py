@@ -87,7 +87,7 @@ def handle_core_search() -> str:
                 return "main_menu"
                 
         except Exception as e:
-            print(f"❌ Error: {e}")
+            print(f"❗️ Error: {e}")
             print("   Please try again.")
             continue
 
@@ -111,7 +111,7 @@ def _search_by_track_id(
     # Check preprocessed files
     files_exist, error_msg = check_preprocessed_files()
     if not files_exist:
-        print(f"❌ {error_msg}")
+        print(f"❗️ {error_msg}")
         input("\n   Press Enter to return...")
         return "main_menu"
     
@@ -128,7 +128,7 @@ def _search_by_track_id(
         '''
         
         if vector is None or all(v == -1.0 for v in vector):
-            print("❌ Could not build vector for this track.")
+            print("❗️ Could not build vector for this track.")
             print("   Make sure the track exists in the database.")
             input("\n    Press Enter to return...")
             return "main_menu"
@@ -181,7 +181,7 @@ def _search_by_track_id(
         # Display results
         print_header("Search Results")
         if not results:
-            print("\n  ❌ No similar tracks found.")
+            print("\n  ❗️ No similar tracks found.")
         else:
             print(f"\n  ✅ Found {len(results)} similar tracks in {format_elapsed_time(search_time).strip()}:")
             print("  " + "─" * (65 - 2))
@@ -222,13 +222,13 @@ def _search_by_track_id(
             elif choice == 3:
                 return "main_menu"
             else:
-                print("❌ Invalid choice, returning to main menu.")
+                print("❗️ Invalid choice, returning to main menu.")
                 return "main_menu"
         
         return "main_menu"
         
     except Exception as e:
-        print(f"❌ Search error: {e}")
+        print(f"❗️ Search error: {e}")
         import traceback
         traceback.print_exc()
         input("\n   Press Enter to return...")
@@ -244,7 +244,7 @@ def _handle_isrc_code(isrc: str) -> str:
     # Check if databases exist
     main_db_path = PathConfig.get_main_db()
     if not main_db_path.exists():
-        print("\n❌ This feature requires Spotify database files.")
+        print("\n❗️ This feature requires Spotify database files.")
         print(f"   Missing: {main_db_path}")
         print("\n   ISRC search needs the database to map ISRC codes to track IDs.")
         print("   Please ensure data/databases/ contains the Spotify databases.")
@@ -259,7 +259,7 @@ def _handle_isrc_code(isrc: str) -> str:
             if input_type in ["spotify_track_url", "track_id"]:
                 return _search_by_track_id(processed_data)
             else:
-                print("\n❌ Invalid track ID format.")
+                print("\n❗️ Invalid track ID format.")
                 print("   Please enter a valid 22-character Spotify track ID or URL.\n")
                 input("   Press Enter to continue...")
                 clear_screen()
@@ -272,7 +272,7 @@ def _handle_isrc_code(isrc: str) -> str:
     track_id = resolver.resolve_isrc(isrc)
     
     if not track_id:
-        print(f"\n❌ No track found with ISRC: {isrc}")
+        print(f"\n❗️ No track found with ISRC: {isrc}")
         print("   Make sure the ISRC is correct and the track exists in the database.")
         input("\n   Press Enter to return...")
         clear_screen()
@@ -299,7 +299,7 @@ def _handle_audio_file(file_path: str) -> str:
     # Check preprocessed files
     files_exist, error_msg = check_preprocessed_files()
     if not files_exist:
-        print(f"\n❌ {error_msg}")
+        print(f"\n❗️ {error_msg}")
         input("\n   Press Enter to return...")
         clear_screen()
         print_header("Find Similar Songs")
@@ -309,7 +309,7 @@ def _handle_audio_file(file_path: str) -> str:
     # Validate file exists
     path = Path(file_path)
     if not path.exists():
-        print(f"\n❌ File not found: {file_path}")
+        print(f"\n❗️ File not found: {file_path}")
         input("\n   Press Enter to return...")
         clear_screen()
         print_header("Find Similar Songs")
@@ -331,7 +331,7 @@ def _handle_audio_file(file_path: str) -> str:
             return "core_search"
 
     except Exception as e:
-        print(f"\n❌ Error processing audio file: {e}")
+        print(f"\n❗️ Error processing audio file: {e}")
         import traceback
         traceback.print_exc()
         input("\n   Press Enter to return...")
@@ -352,7 +352,7 @@ def _handle_text_search(query: str) -> str:
     # Check preprocessed files
     files_exist, error_msg = check_preprocessed_files()
     if not files_exist:
-        print(f"\n❌ {error_msg}")
+        print(f"\n❗️ {error_msg}")
         input("\n   Press Enter to return...")
         clear_screen()
         print_header("Find Similar Songs")

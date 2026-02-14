@@ -69,7 +69,7 @@ def screen_processing_complete():
         if is_valid:
             print(f"  ✅ {validation_msg}")
         else:
-            print(f"  ⚠️  {validation_msg}")
+            print(f"  ⚠️ {validation_msg}")
         
         print("\n     Ready for similarity searching!")
         
@@ -93,7 +93,7 @@ def screen_processing_complete():
             if actual_bytes == expected_bytes:
                 print("  ✅ Vector file size matches expected")
             else:
-                print(f"  ⚠️  Size mismatch: {actual_bytes:,} vs {expected_bytes:,}")
+                print(f"  ⚠️ Size mismatch: {actual_bytes:,} vs {expected_bytes:,}")
             
             input("\n  Press Enter to continue...")
             return "processing_complete"

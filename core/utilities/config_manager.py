@@ -187,7 +187,7 @@ class ConfigManager:
         # Validate structure
         required_keys = ['recommended_device', 'cpu_speed', 'gpu_speed', 'optimal_chunk_size']
         if not all(key in result for key in required_keys):
-            # print("  ⚠️  Cached benchmark result is corrupted, ignoring...")
+            # print("  ⚠️ Cached benchmark result is corrupted, ignoring...")
             return None
         
         return result

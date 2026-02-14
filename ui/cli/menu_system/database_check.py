@@ -124,7 +124,7 @@ def screen_setup_choice() -> str:
     # Insufficient space - show warning with option to proceed anyway
     if available_gb < total_final:
         shortfall = total_final - available_gb
-        print(f"  ⚠️  You have {available_gb:.1f} GB of free space on your disk.")
+        print(f"  ⚠️ You have {available_gb:.1f} GB of free space on your disk.")
         print(f"  Please free up at least {shortfall:.1f} GB before continuing the setup.\n")
 
         print("  Once done, please type 1 to verify that there's enough disk space.")
@@ -254,13 +254,13 @@ def execute_download_all() -> str:
         return "main_menu"
         
     except KeyboardInterrupt:
-        print("\n\n  ⚠️  Download interrupted. Progress has been saved.")
+        print("\n\n  ⚠️ Download interrupted. Progress has been saved.")
         print("  Run the program again to resume downloading.")
         input("\n  Press Enter to exit...")
         return "exit"
     
     except Exception as e:
-        print(f"\n  ❌ Setup failed: {e}")
+        print(f"\n  ❗️ Setup failed: {e}")
         input("\n  Press Enter to return to setup...")
         return "database_check"
 
@@ -292,7 +292,7 @@ def execute_build_locally() -> str:
         extractor.cleanup_archives()
         
         # Step 3: Build vectors
-        print("\n  ⚙️  Step 3/4: Building vector cache from databases...")
+        print("\n  ⚙️ Step 3/4: Building vector cache from databases...")
         print("  This process takes 1-4 hours depending on your hardware.")
         print("  Progress will update automatically. You can leave this running.\n")
         
@@ -325,12 +325,12 @@ def execute_build_locally() -> str:
         return "main_menu"
         
     except KeyboardInterrupt:
-        print("\n\n  ⚠️  Build interrupted. You can resume by running the program again.")
+        print("\n\n  ⚠️ Build interrupted. You can resume by running the program again.")
         print("  The system will continue from where it left off.")
         input("\n  Press Enter to exit...")
         return "exit"
     except Exception as e:
-        print(f"\n  ❌ Build failed: {e}")
+        print(f"\n  ❗️ Build failed: {e}")
         import traceback
         traceback.print_exc()
         input("\n  Press Enter to return to setup...")
@@ -386,11 +386,11 @@ def execute_download_vectors_only() -> str:
         return "main_menu"
         
     except KeyboardInterrupt:
-        print("\n\n  ⚠️  Download interrupted.")
+        print("\n\n  ⚠️ Download interrupted.")
         input("\n  Press Enter...")
         return "database_check"
     except Exception as e:
-        print(f"\n  ❌ Error: {e}")
+        print(f"\n  ❗️ Error: {e}")
         input("\n  Press Enter...")
         return "database_check"
 
@@ -401,7 +401,7 @@ def execute_build_vectors_only() -> str:
     start_time = time.time()
     
     try:
-        print("\n  ⚙️  Building vector cache...")
+        print("\n  ⚙️ Building vector cache...")
         from core.preprocessing.db_to_vectors import PreprocessingEngine
         engine = PreprocessingEngine(
             main_db_path=str(PathConfig.get_main_db()),
@@ -425,11 +425,11 @@ def execute_build_vectors_only() -> str:
         return "main_menu"
         
     except KeyboardInterrupt:
-        print("\n\n  ⚠️  Build interrupted.")
+        print("\n\n  ⚠️ Build interrupted.")
         input("\n  Press Enter...")
         return "database_check"
     except Exception as e:
-        print(f"\n  ❌ Error: {e}")
+        print(f"\n  ❗️ Error: {e}")
         input("\n  Press Enter...")
         return "database_check"
 
@@ -439,7 +439,7 @@ def screen_databases_only_choice() -> str:
     """
     clear_screen()
     print_header("Spaudible - Setup")
-    print("\n  ⚠️  Vector cache found but databases are missing!")
+    print("\n  ⚠️ Vector cache found but databases are missing!")
     print("  The databases are required for metadata lookup and text search.")
     
     options = ["Download databases", "Exit program"]
@@ -476,7 +476,7 @@ def execute_download_databases_only() -> str:
         return "main_menu"
         
     except Exception as e:
-        print(f"\n  ❌ Error: {e}")
+        print(f"\n  ❗️ Error: {e}")
         input("\n  Press Enter...")
         return "database_check"
 
@@ -484,7 +484,7 @@ def screen_query_index_choice() -> str:
     """Shown when everything exists except query index files."""
     clear_screen()
     print_header("Spaudible - Setup")
-    print("\n  ⚠️  Query index files missing! Text search requires these files.")
+    print("\n  ⚠️ Query index files missing! Text search requires these files.")
     
     options = [
         "Download query index files (recommended)", 
@@ -548,11 +548,11 @@ def execute_download_query_index_only() -> str:
         return "main_menu"
         
     except KeyboardInterrupt:
-        print("\n\n  ⚠️  Download interrupted.")
+        print("\n\n  ⚠️ Download interrupted.")
         input("\n  Press Enter...")
         return "database_check"
     except Exception as e:
-        print(f"\n  ❌ Error: {e}")
+        print(f"\n  ❗️ Error: {e}")
         input("\n  Press Enter...")
         return "database_check"
 
@@ -579,7 +579,7 @@ def execute_build_query_index_only() -> str:
         input("\n Press Enter...")
         return "database_check"
     except Exception as e:
-        print(f"\n ❌ Error: {e}")
+        print(f"\n ❗️ Error: {e}")
         input("\n Press Enter...")
         return "database_check"
 
@@ -609,6 +609,6 @@ def screen_extraction_auto() -> str:
         return screen_database_check()
         
     except Exception as e:
-        print(f"\n  ❌ Extraction failed: {e}")
+        print(f"\n  ❗️ Extraction failed: {e}")
         input("\n  Press Enter...")
         return "database_check"
