@@ -23,8 +23,8 @@ fi
 
 # Keep terminal open on error so user can see what failed
 trap 'echo ""; echo "========================================"; echo "Error: Setup failed. See message above."; echo "========================================"; read -p "Press Enter to close..."' ERR
-
 set -e
+
 cd "$(dirname "$0")"
 
 # Fast path: already set up?
@@ -78,7 +78,7 @@ if ! command -v uv &> /dev/null; then
         else
             wget -O uv.tar.gz "$URL"
         fi
-        
+
         tar -xzf uv.tar.gz && rm uv.tar.gz
         
         # UV extracts to a subdirectory (eg. uv-x86_64-unknown-linux-gnu/)
@@ -92,7 +92,6 @@ if ! command -v uv &> /dev/null; then
                 rm -rf "$UVX_DIR" 2>/dev/null || true
             fi
         fi
-        
         chmod +x ./uv
     fi
     UV_CMD="./uv"
@@ -107,12 +106,36 @@ echo "Creating virtual environment..."
 $UV_CMD venv --python 3.12
 
 echo "Installing dependencies (this may take several minutes)..."
+
+# Check for NVIDIA GPU (Linux only) before installing to download correct PyTorch version
+# Note: Macs use Metal, not CUDA, so we skip this check on Darwin
+if [ "$(uname -s)" = "Linux" ] && command -v nvidia-smi &> /dev/null; then
+    echo ""
+    echo "NVIDIA GPU detected; installing CUDA-enabled PyTorch..."
+    $UV_CMD pip install torch==2.9.1 --extra-index-url https://download.pytorch.org/whl/cu128
+else
+    echo ""
+    echo "No NVIDIA GPU detected. Installing CPU-only PyTorch..."
+    $UV_CMD pip install torch==2.9.1
+fi
+
+# Install remaining dependencies (torch already satisfied, will skip)
 $UV_CMD pip install -e .
 
+# Verify CUDA installation on Linux if NVIDIA was detected
+if [ "$(uname -s)" = "Linux" ] && command -v nvidia-smi &> /dev/null; then
+    echo ""
+    echo "Verifying CUDA installation..."
+    .venv/bin/python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')" || echo "Warning: CUDA verification failed, continuing with CPU mode..."
+fi
+
 echo ""
+echo "=========================================="
 echo "Launching Spaudible..."
 echo "=========================================="
-$UV_CMD run main.py
 
-# Success - pause before closing (for GUI users)
+# Direct launch in place of 'uv run' to avoid dependency sync overwriting CUDA
+.venv/bin/python main.py
+
+# Success - pause before closing
 read -p "Press Enter to close..."
