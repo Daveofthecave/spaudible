@@ -10,9 +10,7 @@
 
 Spaudible is an offline search engine for discovering new music that's acoustically similar to your favorite songs. It achieves this by converting your input song into a mathematical vector (i.e. a song "fingerprint"), comparing this vector against a quarter billion other song vectors, and returning a playlist of songs that scored the highest in similarity.
 
-<video width="785" height="582" controls muted loop playsinline>
-  <source src="https://gist.github.com/Daveofthecave/10eee69210abadf7285202fc9b102c1b/raw/7d5ac72975d82a82f8bb60305a45bd7be178c320/spaudible-search-16fps-AV1.mp4" type='video/mp4; codecs="av01.0.08M.08"'>
-</video>
+![Spaudible Search Demo](https://gist.github.com/Daveofthecave/10eee69210abadf7285202fc9b102c1b/raw/eb60733cb1ee58c49453c4496f5991c9f91a0870/spaudible-search-16fps.gif)
 
 On a modern PC with an Nvidia GPU, finding similar songs takes only a few seconds, thanks in part to the GPU acceleration that PyTorch + CUDA provides. Even on systems without an Nvidia GPU, the highly optimized CPU functions from PyTorch ensure that similarity searches complete within a few minutes.
 
