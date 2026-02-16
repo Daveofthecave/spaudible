@@ -11,7 +11,7 @@
 Spaudible is an offline search engine that helps you discover new music acoustically similar to your favorite songs. It achieves this by converting your input song into a mathematical vector (i.e. a song "fingerprint"), comparing this vector against a quarter billion other song vectors, and returning a playlist of songs that scored the highest in similarity.
 
 <p align="center">
-  <img src="https://github.com/Daveofthecave/spaudible/blob/assets/spaudible-search-16fps.gif" height="450">
+  <img src="https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/assets/spaudible-search-16fps.gif" height="450">
 </p>
 
 On a modern PC with an Nvidia GPU, finding similar songs takes only a few seconds. This is possible thanks to the CUDA-accelerated PyTorch library, which rapidly computes vector similarities in parallel across a custom-built vector cache. Even on systems without Nvidia hardware, Spaudible falls back to an efficient Numba-accelerated CPU pipeline that completes similarity searches within minutes.
@@ -49,7 +49,7 @@ Thinking of a list of numbers as a "vector" carries with it certain mathematical
 We can visualize vectors as arrows of varying lengths pointing in particular directions.
 
 <p align="center">
-  <img src="https://github.com/Daveofthecave/spaudible/blob/assets/cosine-demo.gif" height="330">
+  <img src="https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/assets/cosine-demo.gif" height="330">
 </p>
 
 Some vectors point in similar directions, while others point in opposite directions. We can tell how closely aligned two vectors are by calculating their **cosine similarity**. In other words, what is the **cosine** of the angle between them? Cosine behaves like a percentage. It can tell you, for example, that "vector _b_ is 95% aligned with vector _a_."
