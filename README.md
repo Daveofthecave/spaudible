@@ -14,7 +14,7 @@ Spaudible is an offline search engine that helps you discover new music acoustic
   <img src="https://github.com/Daveofthecave/spaudible/blob/assets/spaudible-search-16fps.gif" height="450">
 </p>
 
-On a modern PC with an Nvidia GPU, finding similar songs takes only a few seconds. This is possible thanks to GPU-accelerated PyTorch with CUDA, which rapidly computes vector similarities in parallel across a custom-built vector cache. Even on systems without Nvidia hardware, Spaudible falls back to an efficient Numba-accelerated CPU pipeline that completes similarity searches within minutes.
+On a modern PC with an Nvidia GPU, finding similar songs takes only a few seconds. This is possible thanks to the CUDA-accelerated PyTorch library, which rapidly computes vector similarities in parallel across a custom-built vector cache. Even on systems without Nvidia hardware, Spaudible falls back to an efficient Numba-accelerated CPU pipeline that completes similarity searches within minutes.
 
 ## How It Works
 
@@ -31,24 +31,34 @@ We humans naturally compare songs in a similar way, although these comparisons u
 
 A computer, however, only understands numbers. If we'd want the computer to determine how similar two songs are, we would need to translate the attributes of those songs into its native language – numbers. This translation process is called "encoding".
 
-Some song attributes are easier to encode than others. Tempo and release year, for instance, already exist as numbers, which makes things a lot easier. Genre and key, on the other hand, are usually represented with words, letters, and/or symbols. Translating these attributes to numbers in a meaningful way is slightly trickier. That being said, there are many reasonable ways to do so. 
+Some song attributes are easier to encode than others. Tempo and release year, for instance, already exist as numbers, which makes things a lot easier. Genre and key, on the other hand, are usually represented with words, letters, and/or symbols. Translating these non-numeric attributes to numbers in a meaningful way is slightly trickier. That being said, there are many reasonable ways to do so. 
 
 <details>
 <summary>Example</summary>
 
->In Spaudible's case, for example, it groups keys together by the number of accidentals (sharps or flats), from 0 to 6, and divides by 6 to obtain a normalized value between 0 and 1. This way, keys with fewer sharps or flats get a value closer to 0, and keys with many sharps or flats get a value closer to 1. Of course, there are many other ways to encode a key (eg. chromatically, by circle of fifths, etc.), but Spaudible uses this encoding to avoid overfitting while maintaining enharmonic synergy.
+>In Spaudible's case, for example, it groups musical keys together by the number of accidentals (sharps or flats), from 0 to 6, and then divides by 6 to obtain a normalized value between 0 and 1. This way, keys with fewer sharps or flats get a value closer to 0, and keys with many sharps or flats get a value closer to 1. Of course, there are many other ways to encode a key (eg. chromatically, by circle of fifths, etc.), but Spaudible uses this particular encoding to avoid overfitting while maintaining enharmonic synergy.
 
 </details>
 
 Once we figure out how we want to encode our song attributes, we need an efficient way to store them. One of the most common ways of storing a group of similar items is in a list. Computer scientists often like to use the term "**array**", while mathematicians are more partial to the term "**vector**", but in the end, both terms describe a collection of items.
 
-That being said, while there may be overlap in semantics, there remain subtle (and often not-so-subtle) distinctions among certain terms that may help us in tackling our similarity problem. Thinking of a list of numbers as a "vector" carries with it certain mathematical connotations that turn out to be useful for us. 
+That being said, while there may be overlap in semantics, there remain subtle (and often not-so-subtle) distinctions among certain terms that may help us in tackling our similarity problem. 
 
-In math, a vector is a special list of numbers that has both direction and magnitude (length). Think of it like a container that stores numbers in an organized way. Just like we can perform arithmetic and algebra on individual numbers, we can also do math on vectors – groups of numbers. This is essentially what **linear algebra** is; algebra on a "line" of numbers.
+Thinking of a list of numbers as a "vector" carries with it certain mathematical connotations that turn out to be useful for us. In math, a vector is a special list of numbers that has both direction and magnitude (length). Think of it like a container that stores numbers in an organized way, one after the other. Just like we can perform arithmetic and algebra on individual numbers, we can also do math on vectors – groups of numbers. This is essentially what **linear algebra** is; algebra on a "line" of numbers.
 
-Turns out this is pretty useful for our song comparison problem! Since we've determined that every song can be decomposed into a list of attributes represented by numbers, we can convert each song into a vector, and then apply certain mathematical operations on those vectors that allow us to determine how similar they are.
+We can visualize vectors as arrows of varying lengths pointing in particular directions.
 
-One of the most popular ways of comparing two vectors is by calculating their **cosine similarity**. This formula tells us
+<p align="center">
+  <img src="https://github.com/Daveofthecave/spaudible/blob/assets/cosine-demo.gif" height="330">
+</p>
+
+Some vectors point in similar directions, while others point in opposite directions. We can tell how closely aligned two vectors are by calculating their **cosine similarity**. In other words, what is the **cosine** of the angle between them? Cosine behaves like a percentage. It can tell you, for example, that "vector _b_ is 95% aligned with vector _a_."
+
+Turns out this is pretty useful for our song comparison problem! Since we've determined that we can convert the attributes of any song into a vector, this means we can unlock these powerful mathematical operations on them, which allow us to determine how similar the vectors (i.e. encoded songs) are!
+
+This is exactly what Spaudible does.
+
+
 
 
 
