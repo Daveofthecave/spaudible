@@ -54,62 +54,13 @@ We can visualize vectors as arrows of varying lengths pointing in particular dir
 
 Some vectors point in similar directions, while others point in opposite directions. We can tell how closely aligned two vectors are by calculating their **cosine similarity**. In other words, what is the **cosine** of the angle between them? Cosine behaves like a percentage. It can tell you, for example, that "vector _b_ is 95% aligned with vector _a_."
 
-Turns out this is pretty useful for our song comparison problem! Since we've determined that we can convert the attributes of any song into a vector, this means we can unlock these powerful mathematical operations on them, which allow us to determine how similar the vectors (i.e. encoded songs) are!
+Turns out this is pretty useful for our song comparison problem! Since we've determined that we can convert the attributes of any song into a vector, this means we take advantage of these powerful vector operations to determine how similar two vectorized songs are!
 
-This is exactly what Spaudible does.
+This is exactly what Spaudible does under the hood.
 
-
-
-
+Using a preprocessed binary cache of song vectors, in tandem with Spotify's databases that hold attributes to over 256 million songs, Spaudible takes a song the user provides, converts it into a vector, and then applies cosine similarity (or a related algorithm) between the user's song vector and the quarter billion other vectors sitting in the cache. Rather than going through the entire vector cache one-by-one, Spaudible splits up this job across the CPU's cores, or, better yet, across the GPU's more numerous CUDA cores. Since it doesn't matter in what order we conduct our similarity calculations, we can leverage the power of parallel processing to reach our final result faster.
 
 
 
 
 
-
-
-
-
-.
-
-.
-
-.
-
-.
-
-These similarity calculations are conducted on a custom-built binary cache of 32-dimensional track vectors working in tandem with Spotify's music metadata databases. Each dimension in one of these track vectors encodes a particular attribute of a song; in other words, it represents that song's genre, tempo, key, release year, etc. as a number. If we want to find out how similar two songs are, we compare each pair of these numbers to one another -- genre to genre, tempo to tempo, and so on. If most number pairs are similar, we consider the two songs similar. If most of them are different, then the two songs are different.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-.
-
-.
-
-.
-
-A locally-run song recommendation tool using vector embeddings derived from Spotify's music metadata databases
-
-Spaudible is an offline search engine that helps you discover new music that's acoustically similar to your favorite songs. It achieves this by converting your input song into a mathematical vector (i.e. a song "fingerprint"), comparing this vector against a quarter billion other song vectors, and returning a playlist of songs that yielded the highest similarity scores.
