@@ -16,6 +16,33 @@ Spaudible is an offline search engine that helps you discover new music acoustic
 
 On a modern PC with an Nvidia GPU, finding similar songs takes only a few seconds. This is possible thanks to the CUDA-accelerated PyTorch library, which rapidly computes vector similarities in parallel across a custom-built vector cache. Even on systems without Nvidia hardware, Spaudible falls back to an efficient Numba-accelerated CPU pipeline that completes similarity searches within minutes.
 
+## Recommended System Specs
+
+|Component|Recommended Specs|
+|-|-|
+|**SSD**|≥ 215 GB (270 GB temp free space)*|
+|**RAM**|≥ 8 GB|
+|**CPU**|Multi-core|
+|**GPU**|Nvidia RTX (optional)
+|**OS**|Windows, Linux, or macOS|
+
+>\* In order for Spaudible to perform fast similarity searches completely offline, it needs to store the attributes of over 256 million songs locally. Furthermore, performing a large number of vector comparisons in a short timespan demands fast vector data access, which is why storing the vector files on an SSD is strongly recommended to avoid the considerable bottleneck that an HDD would create.
+
+<details>
+<summary>Full breakdown of storage needs (click to expand)</summary>
+
+- `33.3 GB` for the binary vector cache of song attributes and indexes
+- `166.9 GB` for uncompressed Spotify databases containing song metadata, which are used to interpret the results of the vector-based similarity searches in a human-readable way
+- `54.4 GB` of temporary free space to extract the otherwise compressed Spotify databases
+- `4.9 GB` for a semantic index to enable fast text-based song queries
+- `~8 GB` for Python's virtual environment (eg. CUDA binaries)
+
+</details>
+
+## Installation Guide
+
+.
+
 ## How It Works
 
 Every song has its own set of unique attributes; for example:
@@ -58,7 +85,9 @@ Turns out this is pretty useful for our song comparison problem! Since we've det
 
 This is exactly what Spaudible does under the hood.
 
-Using a preprocessed binary cache of song vectors, in tandem with Spotify's databases that hold attributes to over 256 million songs, Spaudible takes a song the user provides, converts it into a vector, and then applies cosine similarity (or a related algorithm) between the user's song vector and the quarter billion other vectors sitting in the cache. Rather than going through the entire vector cache one-by-one, Spaudible splits up this job across the CPU's cores, or, better yet, across the GPU's more numerous CUDA cores. Since it doesn't matter in what order we conduct our similarity calculations, we can leverage the power of parallel processing to reach our final result faster.
+But rather than using 2-dimensional vectors like in the animation above, where each vector can only encode 2 song attributes, we use 32-dimensional vectors that encode 32 song attributes. This significantly increases the accuracy of our comparisons, since we have more data points to compare.
+
+Using a preprocessed binary cache of 32D song vectors, in tandem with Spotify's databases that hold attributes to over 256 million songs, Spaudible takes a song the user provides, converts it into a vector, and then applies cosine similarity (or a related algorithm) between the user's song vector and the quarter billion other vectors sitting in the cache. Rather than going through the entire vector cache one-by-one, Spaudible splits up this job across the CPU's cores, or, better yet, across the GPU's more numerous CUDA cores. Since it doesn't matter in which order we conduct our similarity calculations, we can leverage the power of parallel processing to reach our final result faster.
 
 
 
