@@ -85,7 +85,7 @@ Turns out this is pretty useful for our song comparison problem! Since we've det
 
 This is exactly what Spaudible does under the hood.
 
-But rather than using 2-dimensional vectors like in the animation above, where each vector can only encode 2 song attributes, we use 32-dimensional vectors that encode 32 song attributes. This significantly increases the accuracy of our comparisons, since we have more data points to compare.
+But rather than using 2-dimensional vectors like in the animation above, where each vector can only encode 2 song attributes, we use 32-dimensional vectors that encode 32 attributes per song. This significantly increases the accuracy of our comparisons, since we have more data points to compare.
 
 Using a preprocessed binary cache of 32D song vectors, in tandem with Spotify's databases that hold attributes to over 256 million songs, Spaudible takes a song the user provides, converts it into a vector, and then applies cosine similarity (or a related algorithm) between the user's song vector and the quarter billion other vectors sitting in the cache. Rather than going through the entire vector cache one-by-one, Spaudible splits up this job across the CPU's cores, or, better yet, across the GPU's more numerous CUDA cores. Since it doesn't matter in which order we conduct our similarity calculations, we can leverage the power of parallel processing to reach our final result faster.
 
