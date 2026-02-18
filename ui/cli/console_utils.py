@@ -2,6 +2,7 @@
 import os
 import sys
 from pathlib import Path
+from wcwidth import wcswidth
 
 def clear_screen():
     """Clear the terminal screen."""
@@ -32,6 +33,37 @@ def get_choice(max_choice):
         except KeyboardInterrupt:
             print("\n\nGoodbye!")
             sys.exit(0)
+
+def pad(s: str, width: int = 2) -> str:
+    """Normalize emoji to fixed display width by right-padding with spaces.
+    Detects variation selectors (6+ byte sequences) that cause width ambiguity
+    across different terminals.
+    
+    Example:
+        f"{icon('🔎')}Find Similar Songs"  # Text always starts at col 2
+        f"  {icon('⚠️')}Warning"          # Text always starts at col 4
+    """
+    
+    encoded = s.encode('utf-8')
+    
+    # If it contains U+FE0F (Variation Selector-16), it's a text symbol 
+    # masquerading as emoji. These render as width 2 on modern terminals 
+    # but width 1 on older ones. We pad conservatively.
+    if b'\xef\xb8\x8f' in encoded:  # U+FE0F in UTF-8
+        # 6+ bytes: Symbol + VS16 (e.g., ⚙️, ⬅️, ⚖️, ℹ️)
+        # Add 2 spaces: ensures alignment whether terminal treats as width 1 or 2
+        return s + '  '
+    
+    # 4 bytes: Native emoji (e.g., 🔎, 🐌, 🧮, 📊) - consistently width 2
+    if len(encoded) == 4:
+        return s + ' '
+    
+    # Fallback to wcwidth
+    w = wcswidth(s)
+    if w is None or w < 0:
+        w = len(s)
+
+    return s + (' ' if w >= 2 else '  ')
 
 def format_elapsed_time(seconds: float) -> str:
     """Format elapsed time in a human-readable way."""
