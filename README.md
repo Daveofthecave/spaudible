@@ -41,7 +41,35 @@ On a modern PC with an Nvidia GPU, finding similar songs takes only a few second
 
 ## Installation Guide
 
-.
+Here's how to get Spaudible running on your computer:
+
+1. Download and extract this repository to a folder on your PC.
+
+    You can use this link (which you can also find by clicking the green `Code` button at the top of this page, and clicking `Download ZIP`):
+
+    - https://github.com/Daveofthecave/spaudible/archive/refs/heads/main.zip
+
+    Alternatively, if you have `git` installed on your system, you can open a terminal in the directory where you want to run Spaudible, and type this command to clone the repo:
+
+    - `git clone https://github.com/Daveofthecave/spaudible.git`
+
+2. Refer to the following platform-specific instructions:
+    
+    - **Windows:** Simply double-click `spaudible.bat`. If you get a Windows SmartScreen prompt, click "More Info" → "Run anyway".
+
+    - **Linux:**
+        1. Right-click on `spaudible.command`, and click `Properties`.
+        2. Click on the `Permissions` tab in the window that pops up.
+        3. Check the box that says `Allow executing file as program`.
+        4. Click `OK` (if applicable) and close the Properties window.
+        - <p align="left">
+                <img src="https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/assets/linux-chmod.png" height="300">
+          </p>
+        5. Double-click `spaudible.command` to set up the environment and launch Spaudible.
+    
+    - **macOS:** Simply double-click `spaudible.command`. If Gatekeeper prompts you about an unidentified developer, right-click the `spaudible.command`, click `Open`, and then confirm.
+
+The `spaudible.bat` and `spaudible.command` launchers automatically download the correct Python environment and required libraries through an open-source package manager called [uv](https://github.com/astral-sh/uv), which simplifies and speeds up the installation process across all platforms.
 
 ## How It Works
 
