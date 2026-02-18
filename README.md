@@ -75,7 +75,9 @@ Here's how to get Spaudible running on your computer:
 
         <details>
         <summary>Note</summary>
-        Spaudible's launcher has not yet been tested on macOS, so results may vary. Given the universality of Python, however, Spaudible itself should have no problem running on macOS, provided its virtual environment is correctly set up. Due to a long-standing rift between Apple and Nvidia, modern versions of macOS lack support for Nvidia GPUs, which means CUDA-accelerated GPU mode won't work for song similarity searches.
+        <blockquote>
+            Spaudible's launcher has not yet been tested on macOS, so results may vary. Given the universality of Python, however, Spaudible itself should have no problem running on macOS, provided its virtual environment is correctly set up. Due to a long-standing rift between Apple and Nvidia, modern versions of macOS lack support for Nvidia GPUs, which means CUDA-accelerated GPU mode won't work for song similarity searches.
+        </blockquote>
         </details>  
         ‎
 
