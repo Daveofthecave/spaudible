@@ -57,7 +57,7 @@ Here's how to get Spaudible running on your computer:
     
     - ## <img src="https://img.shields.io/badge/Windows-0078D6?style=plastic&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+CiAgICA8Zz4KICAgICAgICA8cGF0aCBmaWxsPSJub25lIiBkPSJNMCAwSDI0VjI0SDB6Ii8+CiAgICAgICAgPHBhdGggZD0iTTMgNS40NzlsNy4zNzctMS4wMTZ2Ny4xMjdIM1Y1LjQ4em0wIDEzLjA0Mmw3LjM3NyAxLjAxN3YtNy4wNEgzdjYuMDIzem04LjE4OCAxLjEyNUwyMSAyMXYtOC41MDJoLTkuODEydjcuMTQ4em0wLTE1LjI5MnY3LjIzNkgyMVYzbC05LjgxMiAxLjM1NHoiIGZpbGw9IiNmZmZmZmYiLz4KICAgIDwvZz4KPC9zdmc+&logoColor=white" alt="Windows" style="vertical-align: middle;">
     
-        Simply double-click `spaudible.bat`. If you get a Windows SmartScreen prompt, click "More Info" → "Run anyway".
+        Simply double-click `spaudible.bat`. If you get a Windows SmartScreen prompt, click `More info` and then `Run anyway`.
 
     - ## <img src="https://img.shields.io/badge/Linux-FCC624?style=plastic&logo=data:image/svg%2bxml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiPz4KCjwhLS0gTGludXggU1ZHIC0tPgo8c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIKYXJpYS1sYWJlbD0iTGludXgiIHJvbGU9ImltZyIKdmlld0JveD0iMCAwIDUxMiA1MTIiIGZpbGw9IiMwMDAwMDAiPgoKPGcgdHJhbnNmb3JtPSJtYXRyaXgoMi42NSAwIDAgMi42NSAyNTYgMjc2KSI+Cgo8cGF0aCBkPSJNLTMyLTI1Yy0zIDctMjQgMjktMjIgNTEgOCA5MiAzNiAzMCA3OCA1MyAwIDAgNzUtNDIgMTUtMTEwLTE3LTI0LTItNDMtMTMtNTlzLTMwLTE3LTQ0LTIgNiAzNy0xNCA2NyIvPgoKPHBhdGggZD0iTTQyIDIxczktMTgtOC0zMWMxNiAxNyA2IDMyIDYgMzJoLTNDMzYtMTMgMjcgNiAxNC01NiAyOS03MyAwLTg4IDAtNjBoLTljMS0yNC0yMC0xMi04IDUtMSAzNy0yMyA1Mi0yMyA3OC03LTE4IDYtMzIgNi0zMnMtMTggMTUtNyAzNyAzMSAxNyAxNyAyN2MyMiAxNSA1NiA1IDU1LTI3IDEtOCAyMi01IDI0LTNzLTMtNC0xMy00bS01Ni03OGMtNy0yLTUtMTEtMi0xMXM4IDcgMiAxMW0xOSAxYy01LTctMS0xNCA0LTEzczUgMTMtNCAxMyIgZmlsbD0iI2ZmZiIvPgoKPGcgZmlsbD0iI2U5YzEzMiIgc3Ryb2tlPSIjMzMzIiBzdHJva2Utd2lkdGg9IjEiPgoKPHBhdGggZD0iTS00MSAzMWwyMSAzMGMxMSA3IDUgMzUtMjUgMjEtMTctNS0zMS00LTMzLTEzczQtMTAgMy0xNGMtNC0yMiAxNC0xMSAxOS0yMnM1LTE2IDE1LTJNNzEgNDVjLTQtNiAwLTE3LTE0LTE2LTYgMTItMjMgMjQtMjQgMC0xMCAwLTMgMjQtNyAzNS05IDI3IDE3IDI5IDI4IDE2bDI2LTE4YzItMyA1LTYtOS0xN20tOTItOTJjLTMtNiAxMS0xNCAxNi0xNHMxMiA0IDE5IDYgNCA5IDIgMTBTMy0zNS01LTM1cy0xMC04LTE2LTEyIi8+Cgo8cGF0aCBkPSJNLTIxLTQ4YzggNiAxNyAxMSAzNS0zIi8+Cgo8L2c+Cgo8cGF0aCBkPSJNLTEwLTU0Yy0yIDAgMS0yIDItMW03IDFjMS0xLTEtMi0zLTEiLz4KCjwvZz4KCjwvc3ZnPg==&logoColor=black" alt="Linux" style="vertical-align: middle;">
         1. Right-click on `spaudible.command`, and click `Properties`.
@@ -71,7 +71,12 @@ Here's how to get Spaudible running on your computer:
     
     - ## <img src="https://img.shields.io/badge/macOS-555555?style=plastic&logo=apple&logoColor=white" alt="macOS" style="vertical-align: middle;">
 
-        Simply double-click `spaudible.command`. If Gatekeeper prompts you about an unidentified developer, right-click `spaudible.command`, click `Open`, and then click `Open` again in the confirmation window.  
+        Simply double-click `spaudible.command`. If Gatekeeper prompts you about an unidentified developer, right-click `spaudible.command`, click `Open`, and then click `Open` again in the confirmation window.
+
+        <details>
+        <summary>Note</summary>
+        Spaudible's launcher has not yet been tested on macOS, so results may vary. Given the universality of Python, however, Spaudible itself should have no problem running on macOS, provided its virtual environment is correctly set up. Due to a long-standing rift between Apple and Nvidia, modern versions of macOS lack support for Nvidia GPUs, which means CUDA-accelerated GPU mode won't work for song similarity searches.
+        </details>  
         ‎
 
 The `spaudible.bat` and `spaudible.command` launchers automatically download the correct Python environment and required libraries through an open-source package manager called **[uv](https://github.com/astral-sh/uv)**, which simplifies and speeds up the installation process across all platforms.
