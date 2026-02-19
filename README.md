@@ -125,7 +125,7 @@ Some vectors point in similar directions, while others point in opposite directi
 
 We can tell how closely aligned two vectors are by calculating their **cosine similarity**. In other words, what is the **cosine** of the angle between them? Cosine behaves like a percentage. It can tell you, for example, that "vector _b_ is 95% aligned with vector _a_."
 
-Turns out this is pretty useful for our song comparison problem! Since we've determined that we can convert any song into a vector by treating each song attribute as a vector component, this means we take advantage of these powerful vector operations to determine how similar two songs are!
+Turns out this is pretty useful for our song comparison problem! Since we've determined that we can convert any song into a vector by treating each song attribute as a vector component, this means we can take advantage of these powerful vector operations to determine how similar two songs are!
 
 This is exactly what Spaudible does under the hood.
 
