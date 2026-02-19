@@ -17,6 +17,7 @@ dependencies = [
     "torch==2.9.1",
     "tqdm==4.67.1",
     "Unidecode==1.4.0",
+    "wcwidth==0.5.3",
     "zstandard==0.25.0",
 ]
 
