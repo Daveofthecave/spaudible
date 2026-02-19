@@ -48,6 +48,7 @@ if %errorlevel% equ 0 (
             echo [Error] Failed to download UV.
             echo Please check your internet connection or download UV manually from:
             echo https://github.com/astral-sh/uv/releases
+            echo Then extract and place uv.exe into this directory, and rerun spaudible.bat.
             pause
             exit /b 1
         )

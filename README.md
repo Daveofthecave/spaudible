@@ -1,4 +1,134 @@
 # Spaudible
-A locally-run song recommendation tool using vector embeddings derived from Spotify's music metadata databases
+![Python 3.12](https://img.shields.io/badge/python-3.12-64b128?style=plastic)
+![Lines of Code](https://aschey.tech/tokei/github/Daveofthecave/spaudible?category=lines&style=plastic&color=64b128)
+![File Count](https://aschey.tech/tokei/github/Daveofthecave/spaudible?category=files&style=plastic&color=64b128)
+![Repo Size](https://img.shields.io/github/repo-size/Daveofthecave/spaudible?style=plastic&color=64b128)
+![Windows](https://img.shields.io/badge/Windows-0078D6?style=plastic&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+CiAgICA8Zz4KICAgICAgICA8cGF0aCBmaWxsPSJub25lIiBkPSJNMCAwSDI0VjI0SDB6Ii8+CiAgICAgICAgPHBhdGggZD0iTTMgNS40NzlsNy4zNzctMS4wMTZ2Ny4xMjdIM1Y1LjQ4em0wIDEzLjA0Mmw3LjM3NyAxLjAxN3YtNy4wNEgzdjYuMDIzem04LjE4OCAxLjEyNUwyMSAyMXYtOC41MDJoLTkuODEydjcuMTQ4em0wLTE1LjI5MnY3LjIzNkgyMVYzbC05LjgxMiAxLjM1NHoiIGZpbGw9IiNmZmZmZmYiLz4KICAgIDwvZz4KPC9zdmc+&logoColor=white)
+![Linux](https://img.shields.io/badge/Linux-FCC624?style=plastic&logo=data:image/svg%2bxml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiPz4KCjwhLS0gTGludXggU1ZHIC0tPgo8c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIKYXJpYS1sYWJlbD0iTGludXgiIHJvbGU9ImltZyIKdmlld0JveD0iMCAwIDUxMiA1MTIiIGZpbGw9IiMwMDAwMDAiPgoKPGcgdHJhbnNmb3JtPSJtYXRyaXgoMi42NSAwIDAgMi42NSAyNTYgMjc2KSI+Cgo8cGF0aCBkPSJNLTMyLTI1Yy0zIDctMjQgMjktMjIgNTEgOCA5MiAzNiAzMCA3OCA1MyAwIDAgNzUtNDIgMTUtMTEwLTE3LTI0LTItNDMtMTMtNTlzLTMwLTE3LTQ0LTIgNiAzNy0xNCA2NyIvPgoKPHBhdGggZD0iTTQyIDIxczktMTgtOC0zMWMxNiAxNyA2IDMyIDYgMzJoLTNDMzYtMTMgMjcgNiAxNC01NiAyOS03MyAwLTg4IDAtNjBoLTljMS0yNC0yMC0xMi04IDUtMSAzNy0yMyA1Mi0yMyA3OC03LTE4IDYtMzIgNi0zMnMtMTggMTUtNyAzNyAzMSAxNyAxNyAyN2MyMiAxNSA1NiA1IDU1LTI3IDEtOCAyMi01IDI0LTNzLTMtNC0xMy00bS01Ni03OGMtNy0yLTUtMTEtMi0xMXM4IDcgMiAxMW0xOSAxYy01LTctMS0xNCA0LTEzczUgMTMtNCAxMyIgZmlsbD0iI2ZmZiIvPgoKPGcgZmlsbD0iI2U5YzEzMiIgc3Ryb2tlPSIjMzMzIiBzdHJva2Utd2lkdGg9IjEiPgoKPHBhdGggZD0iTS00MSAzMWwyMSAzMGMxMSA3IDUgMzUtMjUgMjEtMTctNS0zMS00LTMzLTEzczQtMTAgMy0xNGMtNC0yMiAxNC0xMSAxOS0yMnM1LTE2IDE1LTJNNzEgNDVjLTQtNiAwLTE3LTE0LTE2LTYgMTItMjMgMjQtMjQgMC0xMCAwLTMgMjQtNyAzNS05IDI3IDE3IDI5IDI4IDE2bDI2LTE4YzItMyA1LTYtOS0xN20tOTItOTJjLTMtNiAxMS0xNCAxNi0xNHMxMiA0IDE5IDYgNCA5IDIgMTBTMy0zNS01LTM1cy0xMC04LTE2LTEyIi8+Cgo8cGF0aCBkPSJNLTIxLTQ4YzggNiAxNyAxMSAzNS0zIi8+Cgo8L2c+Cgo8cGF0aCBkPSJNLTEwLTU0Yy0yIDAgMS0yIDItMW03IDFjMS0xLTEtMi0zLTEiLz4KCjwvZz4KCjwvc3ZnPg==&logoColor=black)
+![macOS](https://img.shields.io/badge/macOS-555555?style=plastic&logo=apple&logoColor=white)
 
-🏗️ Under Construction... stay tuned! 🚧
+
+Spaudible is an offline search engine that helps you discover new music acoustically similar to your favorite songs. It achieves this by converting your input song into a mathematical vector (i.e. a song "fingerprint"), comparing this vector against a quarter billion other song vectors, and returning a playlist of songs that scored the highest in similarity.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/assets/spaudible-search-16fps.gif" height="450">
+</p>
+
+On a modern PC with an Nvidia GPU, finding similar songs takes only a few seconds. This is possible thanks to the CUDA-accelerated PyTorch library, which rapidly computes vector similarities in parallel across a custom-built vector cache. Even on systems without Nvidia hardware, Spaudible falls back to an efficient Numba-accelerated CPU pipeline that completes similarity searches within minutes.
+
+## Recommended System Specs
+
+|Component|Recommended Specs|
+|-|-|
+|**SSD**|≥ 230 GB free disk space*|
+|**RAM**|≥ 8 GB|
+|**CPU**|Multi-core|
+|**GPU**|Nvidia RTX (optional)
+|**OS**|Windows, Linux, or macOS|
+
+>\* In order for Spaudible to perform similarity searches and deliver well-formatted results completely offline, it needs to store the attributes of over 256 million songs locally. During setup, extracting the compressed attribute databases will temporarily cause the disk usage to peak around 230 GB, after which it'll settle down to 215 GB once the compressed files are automatically deleted and the setup completes.
+>
+>Furthermore, performing a large number of vector comparisons in a short timespan demands fast vector data access, which is why storing the binary vector files on an SSD is strongly recommended to avoid the considerable bottleneck that an HDD would create.
+
+<details>
+<summary>Full breakdown of storage needs (click to expand)</summary>
+
+- `166.9 GB` for uncompressed Spotify databases containing song metadata, which are used to interpret the results of the vector-based similarity searches in a human-readable way
+- `54.4 GB` of temporary free space to extract the otherwise compressed Spotify databases
+- `33.3 GB` for the binary vector cache of song attributes and indexes
+- `4.9 GB` for a semantic index to enable fast text-based song queries
+- `~8 GB` for Python's virtual environment (eg. CUDA binaries)
+
+</details>
+
+## Installation Guide
+
+Here's how to get Spaudible running on your computer:
+
+1. Download and extract this repository to a folder on your PC.
+
+    You can use this link (which you can also find by clicking the green `Code` button at the top of this page, and clicking `Download ZIP`):
+
+    - https://github.com/Daveofthecave/spaudible/archive/refs/heads/main.zip
+
+    Alternatively, if you have `git` installed on your system, you can open a terminal in the directory where you want to run Spaudible, and type this command to clone the repo:
+
+    - `git clone https://github.com/Daveofthecave/spaudible.git`
+
+2. Refer to the following platform-specific instructions:
+    
+    - ## <img src="https://img.shields.io/badge/Windows-0078D6?style=plastic&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+CiAgICA8Zz4KICAgICAgICA8cGF0aCBmaWxsPSJub25lIiBkPSJNMCAwSDI0VjI0SDB6Ii8+CiAgICAgICAgPHBhdGggZD0iTTMgNS40NzlsNy4zNzctMS4wMTZ2Ny4xMjdIM1Y1LjQ4em0wIDEzLjA0Mmw3LjM3NyAxLjAxN3YtNy4wNEgzdjYuMDIzem04LjE4OCAxLjEyNUwyMSAyMXYtOC41MDJoLTkuODEydjcuMTQ4em0wLTE1LjI5MnY3LjIzNkgyMVYzbC05LjgxMiAxLjM1NHoiIGZpbGw9IiNmZmZmZmYiLz4KICAgIDwvZz4KPC9zdmc+&logoColor=white" alt="Windows" style="vertical-align: middle;">
+    
+        Simply double-click `spaudible.bat`. If you get a Windows SmartScreen prompt, click `More info` and then `Run anyway`.
+
+    - ## <img src="https://img.shields.io/badge/Linux-FCC624?style=plastic&logo=data:image/svg%2bxml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiPz4KCjwhLS0gTGludXggU1ZHIC0tPgo8c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIKYXJpYS1sYWJlbD0iTGludXgiIHJvbGU9ImltZyIKdmlld0JveD0iMCAwIDUxMiA1MTIiIGZpbGw9IiMwMDAwMDAiPgoKPGcgdHJhbnNmb3JtPSJtYXRyaXgoMi42NSAwIDAgMi42NSAyNTYgMjc2KSI+Cgo8cGF0aCBkPSJNLTMyLTI1Yy0zIDctMjQgMjktMjIgNTEgOCA5MiAzNiAzMCA3OCA1MyAwIDAgNzUtNDIgMTUtMTEwLTE3LTI0LTItNDMtMTMtNTlzLTMwLTE3LTQ0LTIgNiAzNy0xNCA2NyIvPgoKPHBhdGggZD0iTTQyIDIxczktMTgtOC0zMWMxNiAxNyA2IDMyIDYgMzJoLTNDMzYtMTMgMjcgNiAxNC01NiAyOS03MyAwLTg4IDAtNjBoLTljMS0yNC0yMC0xMi04IDUtMSAzNy0yMyA1Mi0yMyA3OC03LTE4IDYtMzIgNi0zMnMtMTggMTUtNyAzNyAzMSAxNyAxNyAyN2MyMiAxNSA1NiA1IDU1LTI3IDEtOCAyMi01IDI0LTNzLTMtNC0xMy00bS01Ni03OGMtNy0yLTUtMTEtMi0xMXM4IDcgMiAxMW0xOSAxYy01LTctMS0xNCA0LTEzczUgMTMtNCAxMyIgZmlsbD0iI2ZmZiIvPgoKPGcgZmlsbD0iI2U5YzEzMiIgc3Ryb2tlPSIjMzMzIiBzdHJva2Utd2lkdGg9IjEiPgoKPHBhdGggZD0iTS00MSAzMWwyMSAzMGMxMSA3IDUgMzUtMjUgMjEtMTctNS0zMS00LTMzLTEzczQtMTAgMy0xNGMtNC0yMiAxNC0xMSAxOS0yMnM1LTE2IDE1LTJNNzEgNDVjLTQtNiAwLTE3LTE0LTE2LTYgMTItMjMgMjQtMjQgMC0xMCAwLTMgMjQtNyAzNS05IDI3IDE3IDI5IDI4IDE2bDI2LTE4YzItMyA1LTYtOS0xN20tOTItOTJjLTMtNiAxMS0xNCAxNi0xNHMxMiA0IDE5IDYgNCA5IDIgMTBTMy0zNS01LTM1cy0xMC04LTE2LTEyIi8+Cgo8cGF0aCBkPSJNLTIxLTQ4YzggNiAxNyAxMSAzNS0zIi8+Cgo8L2c+Cgo8cGF0aCBkPSJNLTEwLTU0Yy0yIDAgMS0yIDItMW03IDFjMS0xLTEtMi0zLTEiLz4KCjwvZz4KCjwvc3ZnPg==&logoColor=black" alt="Linux" style="vertical-align: middle;">
+        1. Right-click on `spaudible.command`, and click `Properties`.
+        2. Click on the `Permissions` tab in the window that pops up.
+        3. Check the box that says `Allow executing file as program`.
+        4. Click `OK` (if applicable) and close the Properties window.
+        - <p align="left">
+                <img src="https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/assets/linux-chmod.png" height="300">
+          </p>
+        5. Double-click `spaudible.command` to set up the environment and launch Spaudible.
+    
+    - ## <img src="https://img.shields.io/badge/macOS-555555?style=plastic&logo=apple&logoColor=white" alt="macOS" style="vertical-align: middle;">
+
+        Simply double-click `spaudible.command`. If Gatekeeper prompts you about an unidentified developer, right-click `spaudible.command`, click `Open`, and then click `Open` again in the confirmation window.
+
+        <details>
+        <summary>Note</summary>
+        <blockquote>
+            Spaudible's launcher has not yet been tested on macOS, so results may vary. Given the universality of Python, however, Spaudible itself should have no problem running on macOS, provided its virtual environment is correctly set up. Due to a long-standing rift between Apple and Nvidia, modern versions of macOS lack support for Nvidia GPUs, which means CUDA-accelerated GPU mode won't work for song similarity searches.
+        </blockquote>
+        </details>  
+        ‎
+
+The `spaudible.bat` and `spaudible.command` launchers automatically download the correct Python environment and required libraries through an open-source package manager called **[uv](https://github.com/astral-sh/uv)**, which simplifies and speeds up the installation process across all platforms.
+
+## How It Works
+
+Every song has its own set of unique attributes; for example:
+
+- Genre (eg. rock, classical, jazz)
+- Tempo (eg. 120 bpm)
+- Key (eg. C major, F♯ minor)
+- Release year (eg. 2007)
+
+One way to determine how similar two songs are to each other is to compare their attributes. If two songs share similar genres, tempos, keys, release years, and other attributes, we can conclude that those songs are indeed similar. On the contrary, if two songs have completely different genres, tempos, etc., we can conclude that they aren't very similar at all.
+
+We humans naturally compare songs in a similar way, although these comparisons usually happen subconsciously and instantaneously. Hard rock "_feels_" very different from classical music, and a fast tempo "_feels_" more danceable than a slow tempo.
+
+A computer, however, only understands numbers. If we'd want the computer to determine how similar two songs are, we would need to translate the attributes of those songs into its native language – numbers. This translation process is called "encoding".
+
+Some song attributes are easier to encode than others. Tempo and release year, for instance, already exist as numbers, which makes things a lot easier. Genre and key, on the other hand, are usually represented with words, letters, and/or symbols. Translating these non-numeric attributes to numbers in a meaningful way is slightly trickier. That being said, there are many reasonable ways to do so. 
+
+<details>
+<summary>Example</summary>
+
+>In Spaudible's case, for example, it groups musical keys together by the number of accidentals (sharps or flats), from 0 to 6, and then divides by 6 to obtain a normalized value between 0 and 1. This way, keys with fewer sharps or flats get a value closer to 0, and keys with many sharps or flats get a value closer to 1. Of course, there are many other ways to encode a key (eg. chromatically, by circle of fifths, etc.), but Spaudible uses this particular encoding to avoid overfitting while maintaining enharmonic synergy.
+
+</details>
+
+Once we figure out how we want to encode our song attributes, we need an efficient way to store them. One of the most common ways of storing a group of similar items is in a list. Computer scientists often like to use the term "**array**", while mathematicians are more partial to the term "**vector**", but in the end, both terms describe a collection of items.
+
+That being said, while there may be overlap in semantics, there remain subtle (and often not-so-subtle) distinctions among certain terms that may help us in tackling our similarity problem. 
+
+Thinking of a list of numbers as a "vector" carries with it certain mathematical connotations that turn out to be useful for us. In math, a vector is a special list of numbers that has both direction and magnitude (length). Think of it like a container that stores numbers in an organized way, one after the other. Just like we can perform arithmetic and algebra on individual numbers, we can also do math on vectors – groups of numbers. This is essentially what **linear algebra** is; algebra on a "line" of numbers.
+
+We can visualize vectors as arrows of varying lengths pointing in particular directions.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/assets/cosine-demo.gif" height="330">
+</p>
+
+Some vectors point in similar directions, while others point in opposite directions. Where a vector points is defined by its **components** – the individual numbers that make up the vector. A vector's **dimension** (eg. 2D, 3D, ...) is determined by how many components it has.
+
+We can tell how closely aligned two vectors are by calculating their **cosine similarity**. In other words, what is the **cosine** of the angle between them? Cosine behaves like a percentage. It can tell you, for example, that "vector _b_ is 95% aligned with vector _a_."
+
+Turns out this is pretty useful for our song comparison problem! Since we've determined that we can convert any song into a vector by treating each song attribute as a vector component, this means we take advantage of these powerful vector operations to determine how similar two songs are!
+
+This is exactly what Spaudible does under the hood.
+
+But rather than using 2-dimensional vectors like in the animation above, where each vector can only encode 2 song attributes, we use 32-dimensional vectors that encode 32 attributes per song. This significantly increases the accuracy of our comparisons, since we have more data points to compare.
+
+Using a preprocessed binary cache of 32D song vectors, in tandem with Spotify's databases that hold attributes to over 256 million songs, Spaudible takes a song the user provides, converts it into a vector, and then applies cosine similarity (or a related algorithm) between the user's song vector and the quarter billion other vectors sitting in the cache. Rather than going through the entire vector cache one-by-one, Spaudible splits up this job across the CPU's cores, or, better yet, across the GPU's more numerous CUDA cores. Since it doesn't matter in which order we conduct our similarity calculations, we leverage the power of parallel processing to reach our final result faster.

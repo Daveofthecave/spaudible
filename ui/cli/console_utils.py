@@ -2,6 +2,7 @@
 import os
 import sys
 from pathlib import Path
+from wcwidth import wcswidth
 
 def clear_screen():
     """Clear the terminal screen."""
@@ -17,8 +18,12 @@ def print_header(title):
 def print_menu(options):
     """Print numbered menu options."""
     print()
+    # For right-justification of the numbers
+    max_digits = len(str(len(options)))
     for i, option in enumerate(options, 1):
-        print(f"  [{i}] {option}")
+        num_str = str(i)
+        padding = " " * (max_digits - len(num_str))
+        print(f"  {padding}[{num_str}] {option}")
     print()
 
 def get_choice(max_choice):

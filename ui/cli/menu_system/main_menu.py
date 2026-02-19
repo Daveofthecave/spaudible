@@ -4,7 +4,7 @@ from .main_menu_handlers import handle_core_search, handle_settings
 
 def screen_main_menu():
     """Main menu controller - routes to specialized handlers."""
-    print_header("🎵 Spaudible - Song Discovery Tool")
+    print_header("Spaudible - Main Menu")
     
     print()
     print("  Spaudible discovers music similar to any Spotify track")
@@ -13,9 +13,9 @@ def screen_main_menu():
     print("  similar songs from a collection of 256 million tracks.\n")
 
     options = [
-        "🔎 Find Similar Songs",
-        "⚙️ Settings",
-        "🚪 Exit"
+        "Find Similar Songs",
+        "Settings",
+        "Exit"
     ]
     
     print_menu(options)
