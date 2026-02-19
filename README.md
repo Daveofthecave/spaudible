@@ -26,7 +26,7 @@ On a modern PC with an Nvidia GPU, finding similar songs takes only a few second
 |**GPU**|Nvidia RTX (optional)
 |**OS**|Windows, Linux, or macOS|
 
->\* In order for Spaudible to perform similarity searches completely offline, it needs to store the attributes of over 256 million songs locally. During setup, extracting the compressed attribute databases will temporarily hit a peak disk usage of around 230 GB, after which it'll settle down to 215 GB once the compressed files are automatically deleted and the setup completes.
+>\* In order for Spaudible to perform similarity searches and deliver well-formatted results completely offline, it needs to store the attributes of over 256 million songs locally. During setup, extracting the compressed attribute databases will temporarily cause the disk usage to peak around 230 GB, after which it'll settle down to 215 GB once the compressed files are automatically deleted and the setup completes.
 >
 >Furthermore, performing a large number of vector comparisons in a short timespan demands fast vector data access, which is why storing the binary vector files on an SSD is strongly recommended to avoid the considerable bottleneck that an HDD would create.
 
@@ -121,12 +121,14 @@ We can visualize vectors as arrows of varying lengths pointing in particular dir
   <img src="https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/assets/cosine-demo.gif" height="330">
 </p>
 
-Some vectors point in similar directions, while others point in opposite directions. We can tell how closely aligned two vectors are by calculating their **cosine similarity**. In other words, what is the **cosine** of the angle between them? Cosine behaves like a percentage. It can tell you, for example, that "vector _b_ is 95% aligned with vector _a_."
+Some vectors point in similar directions, while others point in opposite directions. Where a vector points is defined by its **components** – the individual numbers that make up the vector. A vector's **dimension** (eg. 2D, 3D, ...) is determined by how many components it has.
 
-Turns out this is pretty useful for our song comparison problem! Since we've determined that we can convert the attributes of any song into a vector, this means we take advantage of these powerful vector operations to determine how similar two vectorized songs are!
+We can tell how closely aligned two vectors are by calculating their **cosine similarity**. In other words, what is the **cosine** of the angle between them? Cosine behaves like a percentage. It can tell you, for example, that "vector _b_ is 95% aligned with vector _a_."
+
+Turns out this is pretty useful for our song comparison problem! Since we've determined that we can convert any song into a vector by treating each song attribute as a vector component, this means we take advantage of these powerful vector operations to determine how similar two songs are!
 
 This is exactly what Spaudible does under the hood.
 
 But rather than using 2-dimensional vectors like in the animation above, where each vector can only encode 2 song attributes, we use 32-dimensional vectors that encode 32 attributes per song. This significantly increases the accuracy of our comparisons, since we have more data points to compare.
 
-Using a preprocessed binary cache of 32D song vectors, in tandem with Spotify's databases that hold attributes to over 256 million songs, Spaudible takes a song the user provides, converts it into a vector, and then applies cosine similarity (or a related algorithm) between the user's song vector and the quarter billion other vectors sitting in the cache. Rather than going through the entire vector cache one-by-one, Spaudible splits up this job across the CPU's cores, or, better yet, across the GPU's more numerous CUDA cores. Since it doesn't matter in which order we conduct our similarity calculations, we can leverage the power of parallel processing to reach our final result faster.
+Using a preprocessed binary cache of 32D song vectors, in tandem with Spotify's databases that hold attributes to over 256 million songs, Spaudible takes a song the user provides, converts it into a vector, and then applies cosine similarity (or a related algorithm) between the user's song vector and the quarter billion other vectors sitting in the cache. Rather than going through the entire vector cache one-by-one, Spaudible splits up this job across the CPU's cores, or, better yet, across the GPU's more numerous CUDA cores. Since it doesn't matter in which order we conduct our similarity calculations, we leverage the power of parallel processing to reach our final result faster.
