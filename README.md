@@ -20,20 +20,22 @@ On a modern PC with an Nvidia GPU, finding similar songs takes only a few second
 
 |Component|Recommended Specs|
 |-|-|
-|**SSD**|≥ 215 GB (270 GB temp free space)*|
+|**SSD**|≥ 230 GB free disk space*|
 |**RAM**|≥ 8 GB|
 |**CPU**|Multi-core|
 |**GPU**|Nvidia RTX (optional)
 |**OS**|Windows, Linux, or macOS|
 
->\* In order for Spaudible to perform fast similarity searches completely offline, it needs to store the attributes of over 256 million songs locally. Furthermore, performing a large number of vector comparisons in a short timespan demands fast vector data access, which is why storing the vector files on an SSD is strongly recommended to avoid the considerable bottleneck that an HDD would create.
+>\* In order for Spaudible to perform similarity searches completely offline, it needs to store the attributes of over 256 million songs locally. During setup, extracting the compressed attribute databases will temporarily hit a peak disk usage of around 230 GB, after which it'll settle down to 215 GB once the compressed files are automatically deleted and the setup completes.
+>
+>Furthermore, performing a large number of vector comparisons in a short timespan demands fast vector data access, which is why storing the binary vector files on an SSD is strongly recommended to avoid the considerable bottleneck that an HDD would create.
 
 <details>
 <summary>Full breakdown of storage needs (click to expand)</summary>
 
-- `33.3 GB` for the binary vector cache of song attributes and indexes
 - `166.9 GB` for uncompressed Spotify databases containing song metadata, which are used to interpret the results of the vector-based similarity searches in a human-readable way
 - `54.4 GB` of temporary free space to extract the otherwise compressed Spotify databases
+- `33.3 GB` for the binary vector cache of song attributes and indexes
 - `4.9 GB` for a semantic index to enable fast text-based song queries
 - `~8 GB` for Python's virtual environment (eg. CUDA binaries)
 

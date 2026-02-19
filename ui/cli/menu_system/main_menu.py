@@ -1,10 +1,10 @@
 # ui/cli/menu_system/main_menu.py
-from ui.cli.console_utils import print_header, print_menu, get_choice, pad
+from ui.cli.console_utils import print_header, print_menu, get_choice
 from .main_menu_handlers import handle_core_search, handle_settings
 
 def screen_main_menu():
     """Main menu controller - routes to specialized handlers."""
-    print_header(f"{pad("🎵")}Spaudible")
+    print_header("Spaudible - Main Menu")
     
     print()
     print("  Spaudible discovers music similar to any Spotify track")
@@ -13,9 +13,9 @@ def screen_main_menu():
     print("  similar songs from a collection of 256 million tracks.\n")
 
     options = [
-        f"{pad("🔎")}Find Similar Songs",
-        f"{pad("⚙️")}Settings",
-        f"{pad("🚪")}Exit"
+        "Find Similar Songs",
+        "Settings",
+        "Exit"
     ]
     
     print_menu(options)

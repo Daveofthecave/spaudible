@@ -57,19 +57,19 @@ def handle_settings() -> str:
     print("\n  ⚙️ Configuration & Diagnostics")
     
     options = [
-        f" ⬅️ Back to Main Menu",
-        f" 🐌 Force CPU Mode: {cpu_status}",
-        f" 🐆 Force GPU Mode: {gpu_status}",
-        f" 🧮 Select Similarity Algorithm: {algorithm_name}", 
-        f" 🧦 Deduplicate Results: {deduplicate_status}",
-        f" 🌎️ Region Filter Strength: {region_strength_str}",
-        f" 🔢 Number of Results: {top_k_str}",
-        f" ⚖️ Adjust Feature Weights",
-        f" ❔ Check System Status",
-        f"📊 Performance Test",
-        f"🔄 Re-run Setup",
-        f"🆕 Check for Updates",
-        f"ℹ️ About Spaudible"
+        f"Back to Main Menu",
+        f"Force CPU Mode: {cpu_status}",
+        f"Force GPU Mode: {gpu_status}",
+        f"Select Similarity Algorithm: {algorithm_name}", 
+        f"Deduplicate Results: {deduplicate_status}",
+        f"Region Filter Strength: {region_strength_str}",
+        f"Number of Results: {top_k_str}",
+        f"Adjust Feature Weights",
+        f"Check System Status",
+        f"Performance Test",
+        f"Re-run Setup",
+        f"Check for Updates",
+        f"About Spaudible"
     ]
     
     print_menu(options)
