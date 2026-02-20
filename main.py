@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import torch
+import argparse
 from config import PathConfig, FRAME_WIDTH
 from pathlib import Path
 from ui.cli.console_utils import clear_screen
@@ -27,6 +28,54 @@ def get_gpu_info():
     return "No GPU detected"
 
 def main():
+    """Main entry point for Spaudible with optional GUI mode."""
+    # Parse command-line arguments to determine UI mode
+    parser = argparse.ArgumentParser(description="Spaudible")
+    parser.add_argument(
+        '--gui', 
+        action='store_true', 
+        help='Launch in GUI mode'
+    )
+    parser.add_argument(
+        '--cli', 
+        action='store_true', 
+        help='Launch in CLI mode'
+    )
+    args = parser.parse_args()
+    
+    # Determine UI mode: CLI if explicitly requested, otherwise GUI
+    # Default to CLI for now to maintain existing behavior until GUI is fully ready
+    use_gui = args.gui and not args.cli
+    
+    if use_gui:
+        # Launch GUI mode
+        try:
+            from ui.gui.main_window import MainWindow
+            # Note: No need to instantiate GUIStateManager here; MainWindow handles it internally
+            
+            print(f"\n  System Info: {get_gpu_info()}")
+            print("  Launching Spaudible GUI...")
+            
+            # Create and run main window without parameters
+            main_window = MainWindow()
+            main_window.run()
+            
+            return  # Exit after GUI closes
+            
+        except ImportError as e:
+            print(f"\n  ❗️ GUI dependencies not available: {e}")
+            print("  Falling back to CLI mode...")
+            use_gui = False
+            time.sleep(7)
+        except Exception as e:
+            print(f"\n  ❗️ Failed to launch GUI: {e}")
+            import traceback
+            traceback.print_exc()
+            print("  Falling back to CLI mode...")
+            use_gui = False
+            time.sleep(7)
+    
+    # Original CLI logic
     print(f"\n  System Info: {get_gpu_info()}")
     
     if is_setup_complete():
