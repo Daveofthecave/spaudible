@@ -28,29 +28,38 @@ set -e
 cd "$(dirname "$0")"
 
 # Download Open Sans font for the GUI if not yet present
-if [ ! -f "data/fonts/OpenSans-Regular.ttf" ]; then
+if [ -f "data/fonts/OpenSans-Regular.ttf" ]; then
+    : # Font exists, skip
+else
     echo "Downloading Open Sans font..."
     mkdir -p data/fonts 2>/dev/null
+
     # Primary: .ttf from GitHub
     curl -L -o "data/fonts/OpenSans-Regular.ttf" "https://github.com/googlefonts/opensans/raw/refs/heads/main/fonts/ttf/OpenSans-Regular.ttf" --silent --fail 2>/dev/null
     # Also grab SemiBold style for headers
     curl -L -o "data/fonts/OpenSans-SemiBold.ttf" "https://github.com/googlefonts/opensans/raw/refs/heads/main/fonts/ttf/OpenSans-SemiBold.ttf" --silent --fail 2>/dev/null
-    
+
+    # Fallback: Query Google Fonts API for direct .ttf URLs
     if [ ! -f "data/fonts/OpenSans-Regular.ttf" ]; then
         echo "Downloading font from fallback URL..."
-        # Fallback: .zip from Google Fonts CDN
-        curl -L -o "data/fonts/opensans_temp.zip" "https://fonts.google.com/download?family=Open+Sans" --silent --fail 2>/dev/null
-        if [ -f "data/fonts/opensans_temp.zip" ]; then
-            unzip -q "data/fonts/opensans_temp.zip" -d "data/fonts/temp" 2>/dev/null
-            # Copy OpenSans-Regular.ttf from static subdirectory
-            cp "data/fonts/temp/static/OpenSans-Regular.ttf" "data/fonts/OpenSans-Regular.ttf" 2>/dev/null
-            # And SemiBold style
-            cp "data/fonts/temp/static/OpenSans-SemiBold.ttf" "data/fonts/OpenSans-SemiBold.ttf" 2>/dev/null
-            # Cleanup
-            rm -rf "data/fonts/temp" "data/fonts/opensans_temp.zip" 2>/dev/null
-        fi
+        
+        download_weight() {
+            local weight=$1
+            local name=$2
+            local css_url="https://fonts.googleapis.com/css2?family=Open+Sans:wght@${weight}"
+            
+            # Extract .ttf URL from CSS response
+            url=$(curl -s "$css_url" | grep -o 'https://fonts\.gstatic\.com/s/opensans/[^)]*\.ttf' | head -1)
+            if [ -n "$url" ]; then
+                curl -L -o "data/fonts/${name}.ttf" "$url" --silent --fail 2>/dev/null
+            fi
+        }
+        
+        # Download Regular (400) and SemiBold (600)
+        download_weight 400 "OpenSans-Regular"
+        download_weight 600 "OpenSans-SemiBold"
     fi
-    
+
     if [ -f "data/fonts/OpenSans-Regular.ttf" ]; then
         echo "Font downloaded."
     else
