@@ -46,6 +46,7 @@ def main():
     # Determine UI mode: CLI if explicitly requested, otherwise GUI
     # Default to CLI for now to maintain existing behavior until GUI is fully ready
     use_gui = args.gui and not args.cli
+    use_gui = True  # REMOVE ME; THIS LINE IS ONLY FOR TESTING
     
     if use_gui:
         # Launch GUI mode

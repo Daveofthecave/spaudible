@@ -21,37 +21,51 @@ class MainWindow:
         self.dpi_scale = 1.0
 
     def _get_dpi_scale(self) -> float:
-        """Detect DPI scale factor for high-DPI displays."""
-        saved_scale = self.state_manager.get('dpi_scale', 0.0)
-        if saved_scale > 0:
-            return saved_scale
+        """Universal display scale detection using tkinter.
         
+        Since DPI reporting is inconsistent across platforms and displays,
+        we use screen height as the primary heuristic for comfortable UI sizing.
+        """
         try:
-            if platform.system() == 'Windows':
-                import ctypes
-                user32 = ctypes.windll.user32
-                try:
-                    user32.SetProcessDpiAwarenessContext(-4)
-                except:
-                    user32.SetProcessDPIAware()
-                dc = user32.GetDC(0)
-                dpi = ctypes.windll.gdi32.GetDeviceCaps(dc, 88)
-                user32.ReleaseDC(0, dc)
-                scale = dpi / 96.0
-            elif platform.system() == 'Darwin':
-                scale = 2.0  # macOS Retina default
-            else:  # Linux
-                try:
-                    import tkinter as tk
-                    root = tk.Tk()
-                    dpi = root.winfo_fpixels('1i')
-                    root.destroy()
-                    scale = dpi / 96.0
-                except:
-                    scale = 1.0
-            return max(0.75, min(3.0, scale))
-        except:
-            return 1.0
+            import tkinter as tk
+            root = tk.Tk()
+            
+            # Get physical screen dimensions (works everywhere tkinter works)
+            screen_height = root.winfo_screenheight()
+            # Alternative: root.winfo_screenmmheight() for physical mm, but pixels are more reliable
+            
+            # Get DPI if available (often returns 96 on many systems regardless of actual DPI)
+            try:
+                dpi = root.winfo_fpixels('1i')  # pixels per inch
+            except Exception:
+                dpi = 96
+            
+            root.destroy()
+            
+            # Heuristic: Scale based on vertical resolution for comfortable reading distance
+            if screen_height >= 2800:      # 8K and above
+                scale = 3
+            elif screen_height >= 2100:    # 4K (UHD)
+                scale = 2.5
+            elif screen_height >= 1600:    # 2K (QHD)
+                scale = 2
+            elif screen_height >= 1000:    # 1080p (FHD)
+                scale = 1.75
+            else:                          # Lower resolutions (720p, etc.)
+                scale = 1
+            
+            # Trust high DPI reports only if they're significantly above 96 (>120)
+            # This catches Windows/macOS high-DPI modes without breaking Linux
+            if dpi > 120:
+                calculated_scale = dpi / 96.0
+                # Use the higher of the two values, but cap at 2.0
+                scale = max(scale, min(2.0, calculated_scale))
+            
+            # Round to nearest 0.25 to avoid rendering artifacts
+            return round(max(0.5, scale) * 4) / 4
+            
+        except Exception:
+            return 1.0  # Safe fallback
 
     def _s(self, value: Union[int, float]) -> int:
         """Scale a pixel value by DPI scale factor."""
@@ -89,47 +103,49 @@ class MainWindow:
         # Create context first (this must happen before any other DPG call)
         dpg.create_context()
         self._is_context_created = True
-
-        # Detect actual screen resolution
-        try:
-            import tkinter as tk
-            root = tk.Tk()
-            screen_width = root.winfo_screenwidth()
-            screen_height = root.winfo_screenheight()
-            root.destroy()
-        except:
-            screen_width, screen_height = 1920, 1080
-
-        # Calculate scale based on 1080p baseline (1.0)
-        # This gives us ~2.0 for 4K monitors
-        self.dpi_scale = min(screen_width / 1920, screen_height / 1080)
-        self.dpi_scale = max(1.0, min(self.dpi_scale, 2.5))  # Clamp 1.0-2.5
-
-        # Load font
+        
+        # Get scale factor (1.0 = 1080p standard, 1.5 = 4K, etc.)
+        self.dpi_scale = self._get_dpi_scale()
+        
+        # Load fonts at physical pixel size
         self._load_hidpi_font()
 
         apply_theme()
-
-        # The UI elements will be scaled via _s() method
-        dpg.set_global_font_scale(self.dpi_scale)
-
-        # Create viewport at native high resolution (80% of screen)
-        # This ensures crisp rendering instead of upscaling a small buffer
-        width = int(screen_width * 0.8)
-        height = int(screen_height * 0.8)
-        x_pos = int((screen_width - width) / 2)
-        y_pos = int((screen_height - height) / 2)
-
+        
+        # Get screen dimensions using tkinter
+        import tkinter as tk
+        root = tk.Tk()
+        screen_width = root.winfo_screenwidth()
+        screen_height = root.winfo_screenheight()
+        root.destroy()
+        
+        # Define comfortable logical window size (same "feel" on all screens)
+        # 1280x800 is large enough for the UI but fits on 1366x768 laptops
+        logical_width = 1280
+        logical_height = 800
+        
+        # Convert to physical pixels
+        phys_width = int(logical_width * self.dpi_scale)
+        phys_height = int(logical_height * self.dpi_scale)
+        
+        # Ensure window fits with padding (handles small screens like 1366x768)
+        phys_width = min(phys_width, screen_width - 80)
+        phys_height = min(phys_height, screen_height - 80)
+        
+        # Center on screen
+        y_pos = (screen_height - phys_height) // 2
+        x_pos = int(y_pos * (16 / 9))
+        
         dpg.create_viewport(
-            title='Spaudible - Music Similarity Search',
-            width=width,
-            height=height,
+            title='Spaudible',
+            width=phys_width,
+            height=phys_height,
             x_pos=x_pos,
             y_pos=y_pos,
-            min_width=self._s(800),
-            min_height=self._s(600)
+            min_width=int(800 * self.dpi_scale),
+            min_height=int(600 * self.dpi_scale)
         )
-
+        
         self._build_ui()
         dpg.setup_dearpygui()
         dpg.show_viewport()
@@ -142,7 +158,7 @@ class MainWindow:
         semibold_path = font_dir / "OpenSans-SemiBold.ttf"
         
         # Calculate font size based on DPI (base 16pt * scale)
-        font_size = int(16 * self.dpi_scale)
+        font_size = int(18 * self.dpi_scale)
         
         with dpg.font_registry():
             # Load Regular as default
@@ -155,7 +171,7 @@ class MainWindow:
                 dpg.set_global_font_scale(self.dpi_scale)
                 print("DEBUG: Open Sans not found, using default font")
             
-            # Load SemiBold for headers (optional - store for later use)
+            # Load SemiBold for headers
             if semibold_path.exists():
                 self.header_font = dpg.add_font(str(semibold_path), font_size)
             else:
@@ -207,7 +223,7 @@ class MainWindow:
         
         # Show current scale indicator
         if self.dpi_scale != 1.0:
-            dpg.add_text(f"Scale: {self.dpi_scale:.2f}x", color=(150, 150, 150))
+            dpg.add_text(f"Scale: {self.dpi_scale}x", color=(150, 150, 150))
             dpg.add_spacer(height=self._s(10))
 
         # Mode selector (Auto/CPU/GPU)
