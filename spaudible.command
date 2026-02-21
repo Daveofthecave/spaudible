@@ -21,10 +21,6 @@ if [ ! -t 0 ] && [ "$(uname -s)" = "Linux" ]; then
     fi
 fi
 
-# Keep terminal open on error so user can see what failed
-trap 'echo ""; echo "========================================"; echo "Error: Setup failed. See message above."; echo "========================================"; read -p "Press Enter to close..."' ERR
-set -e
-
 cd "$(dirname "$0")"
 
 # Download Open Sans font for the GUI if not yet present
@@ -66,6 +62,10 @@ else
         echo "[Warning] Could not download font; will use system default."
     fi
 fi
+
+# Keep terminal open on error so the user can see what failed
+trap 'echo ""; echo "========================================"; echo "Error: Setup failed. See message above."; echo "========================================"; read -p "Press Enter to close..."' ERR
+set -e
 
 # Fast path: already set up?
 if [ -d ".venv" ] && [ -f ".venv/bin/python" ]; then
