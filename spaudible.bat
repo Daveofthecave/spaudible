@@ -43,23 +43,22 @@ if exist ".venv\Scripts\python.exe" (
         )
     )
     
-    :: Check if dependencies need updating by comparing the current pyproject.toml
-    :: with the last pyproject.toml in backups/
-    for /f "delims=" %%i in ('dir /b /ad /o-d backups 2^>nul') do (
-        set "LATEST_BACKUP=%%i"
-        goto :check_backup
-    )
-    
-    :check_backup
-    if defined LATEST_BACKUP (
-        if exist "backups\%LATEST_BACKUP%\pyproject.toml" (
-            fc /b "pyproject.toml" "backups\%LATEST_BACKUP%\pyproject.toml" >nul 2>&1
-            if errorlevel 1 (
-                :: echo Detected dependency changes from update; reinstalling...
-                %UV_CMD% pip install -e . >nul 2>&1
-                if errorlevel 1 (
-                    echo [Warning] Failed to update dependencies; attempting launch anyway...
-                )
+    :: Check if dependencies need updating by comparing current pyproject.toml 
+    :: with the version last used to install dependencies (backed up in .venv)
+    if exist "pyproject.toml" (
+        if not exist ".venv\.pyproject.toml.installed" (
+            goto :do_install
+        )
+        fc /b "pyproject.toml" ".venv\.pyproject.toml.installed" >nul 2>&1
+        if errorlevel 1 (
+            :do_install
+            echo Detected changes to pyproject.toml; reinstalling dependencies...
+            %UV_CMD% pip install -e . >nul 2>&1
+            if errorlevel 0 (
+                :: Update the marker to match current state
+                copy /y "pyproject.toml" ".venv\.pyproject.toml.installed" >nul
+            ) else (
+                echo [Warning] Failed to update dependencies; attempting launch anyway...
             )
         )
     )
