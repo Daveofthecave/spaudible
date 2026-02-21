@@ -5,6 +5,47 @@ setlocal enabledelayedexpansion
 :: Ensure we run from the batch file's directory
 cd /d "%~dp0"
 
+:: Download Open Sans font for the GUI if not yet present
+if not exist "data\fonts\OpenSans-Regular.ttf" (
+    echo Downloading Open Sans font...
+    mkdir "data\fonts" 2>nul
+
+    :: Primary: .ttf from GitHub
+    curl -L -o "data\fonts\OpenSans-Regular.ttf" "https://github.com/googlefonts/opensans/raw/refs/heads/main/fonts/ttf/OpenSans-Regular.ttf" --silent --fail 2>nul
+    :: Also grab SemiBold style for headers
+    curl -L -o "data\fonts\OpenSans-SemiBold.ttf" "https://github.com/googlefonts/opensans/raw/refs/heads/main/fonts/ttf/OpenSans-SemiBold.ttf" --silent --fail 2>nul
+
+    if not exist "data\fonts\OpenSans-Regular.ttf" (
+        echo Font download failed, trying fallback...
+        
+        :: Create temporary PowerShell script to handle extraction
+        (
+            echo try {
+            echo     $zipPath = 'data\fonts\opensans_temp.zip'
+            echo     $extractPath = 'data\fonts\temp'
+            echo     $finalPath = 'data\fonts\OpenSans-Regular.ttf'
+            echo     Invoke-WebRequest -Uri 'https://fonts.google.com/download?family=Open+Sans' -OutFile $zipPath -ErrorAction Stop
+            echo     Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+            echo     Copy-Item "$extractPath\static\OpenSans-Regular.ttf" $finalPath -Force -ErrorAction Stop
+            echo     Copy-Item "$extractPath\static\OpenSans-SemiBold.ttf" 'data\fonts\OpenSans-SemiBold.ttf' -Force -ErrorAction SilentlyContinue
+            echo     Remove-Item $zipPath -Force
+            echo     Remove-Item $extractPath -Recurse -Force
+            echo } catch {
+            echo     Write-Host "Fallback font download failed:" $_.Exception.Message
+            echo }
+        ) > "%TEMP%\spaudible_font_installer.ps1"
+        
+        powershell -ExecutionPolicy Bypass -File "%TEMP%\spaudible_font_installer.ps1"
+        del "%TEMP%\spaudible_font_installer.ps1" 2>nul
+    )
+
+    if exist "data\fonts\OpenSans-Regular.ttf" (
+        echo Font downloaded.
+    ) else (
+        echo [Warning] Could not download font; will use system default.
+    )
+)
+
 :: Run directly if the environment has already been set up
 if exist ".venv\Scripts\python.exe" (
     echo Launching Spaudible...
@@ -76,47 +117,6 @@ if %errorlevel% equ 0 (
         echo UV downloaded successfully.
     )
     set UV_CMD=uv.exe
-)
-
-:: Download Open Sans font for the GUI
-if not exist "data\fonts\OpenSans-Regular.ttf" (
-    echo Downloading Open Sans font...
-    mkdir "data\fonts" 2>nul
-    
-    :: Primary: .ttf from GitHub
-    curl -L -o "data\fonts\OpenSans-Regular.ttf" "https://github.com/googlefonts/opensans/raw/refs/heads/main/fonts/ttf/OpenSans-Regular.ttf" --silent --fail 2>nul
-    :: Also grab SemiBold style for headers
-    curl -L -o "data\fonts\OpenSans-SemiBold.ttf" "https://github.com/googlefonts/opensans/raw/refs/heads/main/fonts/ttf/OpenSans-SemiBold.ttf" --silent --fail 2>nul
-    
-    if not exist "data\fonts\OpenSans-Regular.ttf" (
-        echo Downloading font from fallback URL...
-        
-        :: Fallback: .zip from Google Fonts CDN
-        powershell -Command "try { 
-            $zipPath = 'data\fonts\opensans_temp.zip';
-            $extractPath = 'data\fonts\temp';
-            $finalPath = 'data\fonts\OpenSans-Regular.ttf';
-            
-            Invoke-WebRequest -Uri 'https://fonts.google.com/download?family=Open+Sans' -OutFile $zipPath -ErrorAction Stop;
-            Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force;
-            
-            :: Copy OpenSans-Regular.ttf from static subdirectory
-            Copy-Item '$extractPath\static\OpenSans-Regular.ttf' $finalPath -Force -ErrorAction Stop;
-            :: And SemiBold style
-            Copy-Item '$extractPath\static\OpenSans-SemiBold.ttf' 'data\fonts\OpenSans-SemiBold.ttf' -Force -ErrorAction SilentlyContinue;
-            
-            Remove-Item $zipPath -Force;
-            Remove-Item $extractPath -Recurse -Force;
-        } catch { 
-            Write-Host 'Fallback font download failed: ' $_.Exception.Message;
-        }"
-    )
-    
-    if exist "data\fonts\OpenSans-Regular.ttf" (
-        echo Font downloaded.
-    ) else (
-        echo [Warning] Could not download font; will use system default.
-    )
 )
 
 echo Installing Python 3.12 (this may take a moment)...
