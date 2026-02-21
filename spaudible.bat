@@ -6,45 +6,48 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 :: Download Open Sans font for the GUI if not yet present
-if not exist "data\fonts\OpenSans-Regular.ttf" (
-    echo Downloading Open Sans font...
-    mkdir "data\fonts" 2>nul
+if exist "data\fonts\OpenSans-Regular.ttf" goto :font_done
+echo Downloading Open Sans font...
+mkdir "data\fonts" 2>nul
 
-    :: Primary: .ttf from GitHub
-    curl -L -o "data\fonts\OpenSans-Regular.ttf" "https://github.com/googlefonts/opensans/raw/refs/heads/main/fonts/ttf/OpenSans-Regular.ttf" --silent --fail 2>nul
-    :: Also grab SemiBold style for headers
-    curl -L -o "data\fonts\OpenSans-SemiBold.ttf" "https://github.com/googlefonts/opensans/raw/refs/heads/main/fonts/ttf/OpenSans-SemiBold.ttf" --silent --fail 2>nul
+:: Primary: .ttf from GitHub
+curl -L -o "data\fonts\OpenSans-Regular.ttf" "https://github.com/googlefonts/opensans/raw/refs/heads/main/fonts/ttf/OpenSans-Regular.ttf" --silent --fail 2>nul
+curl -L -o "data\fonts\OpenSans-SemiBold.ttf" "https://github.com/googlefonts/opensans/raw/refs/heads/main/fonts/ttf/OpenSans-SemiBold.ttf" --silent --fail 2>nul
 
-    if not exist "data\fonts\OpenSans-Regular.ttf" (
-        echo Font download failed, trying fallback...
-        
-        :: Create temporary PowerShell script to handle extraction
-        (
-            echo try {
-            echo     $zipPath = 'data\fonts\opensans_temp.zip'
-            echo     $extractPath = 'data\fonts\temp'
-            echo     $finalPath = 'data\fonts\OpenSans-Regular.ttf'
-            echo     Invoke-WebRequest -Uri 'https://fonts.google.com/download?family=Open+Sans' -OutFile $zipPath -ErrorAction Stop
-            echo     Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
-            echo     Copy-Item "$extractPath\static\OpenSans-Regular.ttf" $finalPath -Force -ErrorAction Stop
-            echo     Copy-Item "$extractPath\static\OpenSans-SemiBold.ttf" 'data\fonts\OpenSans-SemiBold.ttf' -Force -ErrorAction SilentlyContinue
-            echo     Remove-Item $zipPath -Force
-            echo     Remove-Item $extractPath -Recurse -Force
-            echo } catch {
-            echo     Write-Host "Fallback font download failed:" $_.Exception.Message
-            echo }
-        ) > "%TEMP%\spaudible_font_installer.ps1"
-        
-        powershell -ExecutionPolicy Bypass -File "%TEMP%\spaudible_font_installer.ps1"
-        del "%TEMP%\spaudible_font_installer.ps1" 2>nul
-    )
+if exist "data\fonts\OpenSans-Regular.ttf" goto :font_success
 
-    if exist "data\fonts\OpenSans-Regular.ttf" (
-        echo Font downloaded.
-    ) else (
-        echo [Warning] Could not download font; will use system default.
-    )
+echo Font download failed, trying fallback...
+
+:: Set temp PowerShell script path variable
+set "FONT_PS1=%TEMP%\spaudible_font_installer.ps1"
+
+:: Fallback: Create a PowerShell font installer script to download a .zip with the fonts
+echo try { > "%FONT_PS1%"
+echo $ErrorActionPreference = 'Stop' >> "%FONT_PS1%"
+echo $zipPath = 'data\fonts\opensans_temp.zip' >> "%FONT_PS1%"
+echo $extractPath = 'data\fonts\temp' >> "%FONT_PS1%"
+echo Invoke-WebRequest -Uri 'https://fonts.google.com/download?family=Open+Sans' -OutFile $zipPath >> "%FONT_PS1%"
+echo Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force >> "%FONT_PS1%"
+echo Copy-Item "$extractPath\static\OpenSans-Regular.ttf" 'data\fonts\OpenSans-Regular.ttf' -Force >> "%FONT_PS1%"
+echo Copy-Item "$extractPath\static\OpenSans-SemiBold.ttf" 'data\fonts\OpenSans-SemiBold.ttf' -Force -ErrorAction SilentlyContinue >> "%FONT_PS1%"
+echo Remove-Item $zipPath -Force >> "%FONT_PS1%"
+echo Remove-Item $extractPath -Recurse -Force >> "%FONT_PS1%"
+echo Write-Host "Font extracted successfully." >> "%FONT_PS1%"
+echo } catch { >> "%FONT_PS1%"
+echo Write-Host "Fallback font download failed:" $_.Exception.Message >> "%FONT_PS1%"
+echo } >> "%FONT_PS1%"
+
+powershell -ExecutionPolicy Bypass -File "%FONT_PS1%"
+del "%FONT_PS1%" 2>nul
+
+:font_success
+if exist "data\fonts\OpenSans-Regular.ttf" (
+    echo Font downloaded.
+) else (
+    echo [Warning] Could not download font; will use system default.
 )
+
+:font_done
 
 :: Run directly if the environment has already been set up
 if exist ".venv\Scripts\python.exe" (
