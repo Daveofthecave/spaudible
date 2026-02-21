@@ -50,7 +50,7 @@ class MainWindow:
             elif screen_height >= 1600:    # 2K (QHD)
                 scale = 2
             elif screen_height >= 1000:    # 1080p (FHD)
-                scale = 1.75
+                scale = 1.5
             else:                          # Lower resolutions (720p, etc.)
                 scale = 1
             
@@ -223,7 +223,7 @@ class MainWindow:
         
         # Show current scale indicator
         if self.dpi_scale != 1.0:
-            dpg.add_text(f"Scale: {self.dpi_scale}x", color=(150, 150, 150))
+            dpg.add_text(f"Scaling: {self.dpi_scale}x", color=(150, 150, 150))
             dpg.add_spacer(height=self._s(10))
 
         # Mode selector (Auto/CPU/GPU)
