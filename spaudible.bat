@@ -18,15 +18,21 @@ if exist "data\fonts\OpenSans-Regular.ttf" goto :font_success
 
 echo Font download failed, trying fallback...
 
-:: Set temp PowerShell script path variable
+:: Set temp script path variable
 set "FONT_PS1=%TEMP%\spaudible_font_installer.ps1"
 
 :: Fallback: Create a PowerShell font installer script to download a .zip with the fonts
-echo try { > "%FONT_PS1%"
+echo [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 > "%FONT_PS1%"
+echo try { >> "%FONT_PS1%"
 echo $ErrorActionPreference = 'Stop' >> "%FONT_PS1%"
 echo $zipPath = 'data\fonts\opensans_temp.zip' >> "%FONT_PS1%"
 echo $extractPath = 'data\fonts\temp' >> "%FONT_PS1%"
-echo Invoke-WebRequest -Uri 'https://fonts.google.com/download?family=Open+Sans' -OutFile $zipPath >> "%FONT_PS1%"
+echo $url = 'https://fonts.google.com/download?family=Open+Sans' >> "%FONT_PS1%"
+echo $wc = New-Object System.Net.WebClient >> "%FONT_PS1%"
+echo $wc.Headers.Add('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36') >> "%FONT_PS1%"
+echo $wc.DownloadFile($url, $zipPath) >> "%FONT_PS1%"
+echo if ((Get-Item $zipPath).Length -lt 1000) { throw "Downloaded file too small, likely not a valid ZIP" } >> "%FONT_PS1%"
+echo Write-Host "Downloaded $([int]((Get-Item $zipPath).Length / 1KB)) KB" >> "%FONT_PS1%"
 echo Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force >> "%FONT_PS1%"
 echo Copy-Item "$extractPath\static\OpenSans-Regular.ttf" 'data\fonts\OpenSans-Regular.ttf' -Force >> "%FONT_PS1%"
 echo Copy-Item "$extractPath\static\OpenSans-SemiBold.ttf" 'data\fonts\OpenSans-SemiBold.ttf' -Force -ErrorAction SilentlyContinue >> "%FONT_PS1%"
@@ -35,6 +41,7 @@ echo Remove-Item $extractPath -Recurse -Force >> "%FONT_PS1%"
 echo Write-Host "Font extracted successfully." >> "%FONT_PS1%"
 echo } catch { >> "%FONT_PS1%"
 echo Write-Host "Fallback font download failed:" $_.Exception.Message >> "%FONT_PS1%"
+echo exit 1 >> "%FONT_PS1%"
 echo } >> "%FONT_PS1%"
 
 powershell -ExecutionPolicy Bypass -File "%FONT_PS1%"
