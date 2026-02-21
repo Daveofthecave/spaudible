@@ -99,6 +99,37 @@ else
     UV_CMD="uv"
 fi
 
+# Download Open Sans font for the GUI
+if [ ! -f "data/fonts/OpenSans-Regular.ttf" ]; then
+    echo "Downloading Open Sans font..."
+    mkdir -p data/fonts 2>/dev/null
+    # Primary: .ttf from GitHub
+    curl -L -o "data/fonts/OpenSans-Regular.ttf" "https://github.com/googlefonts/opensans/raw/refs/heads/main/fonts/ttf/OpenSans-Regular.ttf" --silent --fail 2>/dev/null
+    # Also grab SemiBold style for headers
+    curl -L -o "data/fonts/OpenSans-SemiBold.ttf" "https://github.com/googlefonts/opensans/raw/refs/heads/main/fonts/ttf/OpenSans-SemiBold.ttf" --silent --fail 2>/dev/null
+    
+    if [ ! -f "data/fonts/OpenSans-Regular.ttf" ]; then
+        echo "Downloading font from fallback URL..."
+        # Fallback: .zip from Google Fonts CDN
+        curl -L -o "data/fonts/opensans_temp.zip" "https://fonts.google.com/download?family=Open+Sans" --silent --fail 2>/dev/null
+        if [ -f "data/fonts/opensans_temp.zip" ]; then
+            unzip -q "data/fonts/opensans_temp.zip" -d "data/fonts/temp" 2>/dev/null
+            # Copy OpenSans-Regular.ttf from static subdirectory
+            cp "data/fonts/temp/static/OpenSans-Regular.ttf" "data/fonts/OpenSans-Regular.ttf" 2>/dev/null
+            # And SemiBold style
+            cp "data/fonts/temp/static/OpenSans-SemiBold.ttf" "data/fonts/OpenSans-SemiBold.ttf" 2>/dev/null
+            # Cleanup
+            rm -rf "data/fonts/temp" "data/fonts/opensans_temp.zip" 2>/dev/null
+        fi
+    fi
+    
+    if [ -f "data/fonts/OpenSans-Regular.ttf" ]; then
+        echo "Font downloaded."
+    else
+        echo "[Warning] Could not download font; will use system default."
+    fi
+fi
+
 echo "Installing Python 3.12 (this may take a moment)..."
 $UV_CMD python install 3.12 --quiet
 

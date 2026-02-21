@@ -78,6 +78,47 @@ if %errorlevel% equ 0 (
     set UV_CMD=uv.exe
 )
 
+:: Download Open Sans font for the GUI
+if not exist "data\fonts\OpenSans-Regular.ttf" (
+    echo Downloading Open Sans font...
+    mkdir "data\fonts" 2>nul
+    
+    :: Primary: .ttf from GitHub
+    curl -L -o "data\fonts\OpenSans-Regular.ttf" "https://github.com/googlefonts/opensans/raw/refs/heads/main/fonts/ttf/OpenSans-Regular.ttf" --silent --fail 2>nul
+    :: Also grab SemiBold style for headers
+    curl -L -o "data\fonts\OpenSans-SemiBold.ttf" "https://github.com/googlefonts/opensans/raw/refs/heads/main/fonts/ttf/OpenSans-SemiBold.ttf" --silent --fail 2>nul
+    
+    if not exist "data\fonts\OpenSans-Regular.ttf" (
+        echo Downloading font from fallback URL...
+        
+        :: Fallback: .zip from Google Fonts CDN
+        powershell -Command "try { 
+            $zipPath = 'data\fonts\opensans_temp.zip';
+            $extractPath = 'data\fonts\temp';
+            $finalPath = 'data\fonts\OpenSans-Regular.ttf';
+            
+            Invoke-WebRequest -Uri 'https://fonts.google.com/download?family=Open+Sans' -OutFile $zipPath -ErrorAction Stop;
+            Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force;
+            
+            :: Copy OpenSans-Regular.ttf from static subdirectory
+            Copy-Item '$extractPath\static\OpenSans-Regular.ttf' $finalPath -Force -ErrorAction Stop;
+            :: And SemiBold style
+            Copy-Item '$extractPath\static\OpenSans-SemiBold.ttf' 'data\fonts\OpenSans-SemiBold.ttf' -Force -ErrorAction SilentlyContinue;
+            
+            Remove-Item $zipPath -Force;
+            Remove-Item $extractPath -Recurse -Force;
+        } catch { 
+            Write-Host 'Fallback font download failed: ' $_.Exception.Message;
+        }"
+    )
+    
+    if exist "data\fonts\OpenSans-Regular.ttf" (
+        echo Font downloaded.
+    ) else (
+        echo [Warning] Could not download font; will use system default.
+    )
+)
+
 echo Installing Python 3.12 (this may take a moment)...
 %UV_CMD% python install 3.12 --quiet
 if errorlevel 1 (

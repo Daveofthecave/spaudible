@@ -86,54 +86,50 @@ class MainWindow:
         if self._is_context_created:
             return
 
-        # Create context FIRST (this must happen before any other DPG call)
+        # Create context first (this must happen before any other DPG call)
         dpg.create_context()
         self._is_context_created = True
 
-        # Detect and apply DPI scaling
-        self.dpi_scale = min(self._get_dpi_scale() * 2.0, 3.0)
-        if self.dpi_scale != 1.0:
-            dpg.set_global_font_scale(self.dpi_scale)
+        # Detect actual screen resolution
+        try:
+            import tkinter as tk
+            root = tk.Tk()
+            screen_width = root.winfo_screenwidth()
+            screen_height = root.winfo_screenheight()
+            root.destroy()
+        except:
+            screen_width, screen_height = 1920, 1080
 
-        # Apply theme
+        # Calculate scale based on 1080p baseline (1.0)
+        # This gives us ~2.0 for 4K monitors
+        self.dpi_scale = min(screen_width / 1920, screen_height / 1080)
+        self.dpi_scale = max(1.0, min(self.dpi_scale, 2.5))  # Clamp 1.0-2.5
+
         apply_theme()
 
-        # Get window geometry
-        pos, size, maximized = self.state_manager.get_window_geometry()
+        # The UI elements will be scaled via _s() method
+        dpg.set_global_font_scale(self.dpi_scale)
 
-        # Validate geometry (prevent segfault from invalid sizes)
-        if size[0] < 400 or size[1] < 300:
-            size = [1200, 800]
-            pos = [100, 100]
+        # Create viewport at native high resolution (80% of screen)
+        # This ensures crisp rendering instead of upscaling a small buffer
+        width = int(screen_width * 0.8)
+        height = int(screen_height * 0.8)
+        x_pos = int((screen_width - width) / 2)
+        y_pos = int((screen_height - height) / 2)
 
-        # Scale viewport size for DPI
-        scaled_size = [self._s(size[0]), self._s(size[1])]
-        scaled_pos = [self._s(pos[0]), self._s(pos[1])]
-
-        # Create viewport
         dpg.create_viewport(
-            title='Spaudible',
-            width=scaled_size[0],
-            height=scaled_size[1],
-            x_pos=scaled_pos[0],
-            y_pos=scaled_pos[1],
+            title='Spaudible - Music Similarity Search',
+            width=width,
+            height=height,
+            x_pos=x_pos,
+            y_pos=y_pos,
             min_width=self._s(800),
             min_height=self._s(600)
         )
 
-        # Build the UI
         self._build_ui()
-
-        # Setup and show
         dpg.setup_dearpygui()
         dpg.show_viewport()
-
-        # Handle maximized state (platform-specific)
-        if maximized:
-            # DPG doesn't have direct maximize API, but we can approximate
-            # by setting to screen size. For now, we skip this.
-            pass
-
         dpg.set_primary_window(self.window_tag, True)
 
     def _build_ui(self):
