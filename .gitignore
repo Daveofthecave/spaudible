@@ -50,3 +50,6 @@ services/
 
 # Replaced by pyproject.toml
 requirements.txt
+
+# Fonts folder
+data/fonts/

@@ -105,6 +105,9 @@ class MainWindow:
         self.dpi_scale = min(screen_width / 1920, screen_height / 1080)
         self.dpi_scale = max(1.0, min(self.dpi_scale, 2.5))  # Clamp 1.0-2.5
 
+        # Load font
+        self._load_hidpi_font()
+
         apply_theme()
 
         # The UI elements will be scaled via _s() method
@@ -131,6 +134,32 @@ class MainWindow:
         dpg.setup_dearpygui()
         dpg.show_viewport()
         dpg.set_primary_window(self.window_tag, True)
+
+    def _load_hidpi_font(self):
+        """Load Open Sans fonts with DPI-aware sizing."""
+        font_dir = Path(__file__).parent.parent.parent / "data" / "fonts"
+        regular_path = font_dir / "OpenSans-Regular.ttf"
+        semibold_path = font_dir / "OpenSans-SemiBold.ttf"
+        
+        # Calculate font size based on DPI (base 16pt * scale)
+        font_size = int(16 * self.dpi_scale)
+        
+        with dpg.font_registry():
+            # Load Regular as default
+            if regular_path.exists():
+                default_font = dpg.add_font(str(regular_path), font_size)
+                dpg.bind_font(default_font)
+                print(f"DEBUG: Loaded Open Sans Regular at {font_size}px")
+            else:
+                # Fallback to default font with scale
+                dpg.set_global_font_scale(self.dpi_scale)
+                print("DEBUG: Open Sans not found, using default font")
+            
+            # Load SemiBold for headers (optional - store for later use)
+            if semibold_path.exists():
+                self.header_font = dpg.add_font(str(semibold_path), font_size)
+            else:
+                self.header_font = None
 
     def _build_ui(self):
         """Build the main application UI."""
@@ -468,10 +497,19 @@ class MainWindow:
             height=self._s(300),
             no_resize=True
         ):
-            dpg.add_text("Spaudible v0.3.0")
+            # Add text with a tag so we can bind font to it
+            dpg.add_text("Spaudible v0.3.0", tag="about_title")
+            
+            # Apply header font if available
+            if hasattr(self, 'header_font') and self.header_font:
+                dpg.bind_item_font("about_title", self.header_font)
+            
             dpg.add_separator()
             dpg.add_text("By Daveofthecave")
-            dpg.add_button(label="Close", callback=lambda: dpg.delete_item(dpg.last_container()))
+            dpg.add_button(
+                label="Close",
+                callback=lambda: dpg.delete_item(dpg.last_container())
+            )
 
     def _save_window_geometry(self):
         """Save current window position and size."""
