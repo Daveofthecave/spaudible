@@ -69,12 +69,36 @@ set -e
 
 # Fast path: already set up?
 if [ -d ".venv" ] && [ -f ".venv/bin/python" ]; then
+    # Determine UV command
+    if [ -f "./uv" ]; then
+        UV_CMD="./uv"
+    elif command -v uv &> /dev/null; then
+        UV_CMD="uv"
+    else
+        # UV missing but .venv exists - attempt first-time setup
+        echo "UV not found, attempting setup..."
+        goto :first_time_setup 2>/dev/null || { echo "Please reinstall Spaudible"; exit 1; }
+    fi
+    
+    # Check if dependencies need updating by comparing the current pyproject.toml
+    # with the last pyproject.toml in backups/
+    if [ -d "backups" ]; then
+        latest_backup=$(ls -td backups/*/ 2>/dev/null | head -1)
+        if [ -n "$latest_backup" ] && [ -f "$latest_backup/pyproject.toml" ]; then
+            if ! diff -q "pyproject.toml" "$latest_backup/pyproject.toml" >/dev/null 2>&1; then
+                echo "Detected dependency changes from update; reinstalling..."
+                $UV_CMD pip install -e . >/dev/null 2>&1 || echo "[Warning] Failed to update dependencies; attempting launch anyway..."
+            fi
+        fi
+    fi
+    
     echo "Launching Spaudible..."
     .venv/bin/python main.py
     read -p "Press Enter to close..."
     exit 0
 fi
 
+:first_time_setup
 echo "=========================================="
 echo "Spaudible - First-Time Setup (Mac/Linux)"
 echo "=========================================="

@@ -31,6 +31,40 @@ if exist "data\fonts\OpenSans-Regular.ttf" (
 
 :: Run directly if the environment has already been set up
 if exist ".venv\Scripts\python.exe" (
+    :: Determine UV command (local or global)
+    if exist "uv.exe" (
+        set "UV_CMD=uv.exe"
+    ) else (
+        where uv >nul 2>&1
+        if %errorlevel% equ 0 (
+            set "UV_CMD=uv"
+        ) else (
+            goto :first_time_setup
+        )
+    )
+    
+    :: Check if dependencies need updating by comparing the current pyproject.toml
+    :: with the last pyproject.toml in backups/
+    for /f "delims=" %%i in ('dir /b /ad /o-d backups 2^>nul') do (
+        set "LATEST_BACKUP=%%i"
+        goto :check_backup
+    )
+    
+    :check_backup
+    if defined LATEST_BACKUP (
+        if exist "backups\%LATEST_BACKUP%\pyproject.toml" (
+            fc /b "pyproject.toml" "backups\%LATEST_BACKUP%\pyproject.toml" >nul 2>&1
+            if errorlevel 1 (
+                echo Detected dependency changes from update; reinstalling...
+                %UV_CMD% pip install -e . >nul 2>&1
+                if errorlevel 1 (
+                    echo [Warning] Failed to update dependencies; attempting launch anyway...
+                )
+            )
+        )
+    )
+   
+    :launch
     echo Launching Spaudible...
     call ".venv\Scripts\python.exe" main.py
     if errorlevel 1 (
@@ -46,6 +80,7 @@ if exist ".venv\Scripts\python.exe" (
     exit /b 0
 )
 
+:first_time_setup
 echo ==========================================
 echo Spaudible - First-Time Setup (Windows)
 echo ==========================================
