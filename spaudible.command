@@ -76,23 +76,17 @@ if [ -d ".venv" ] && [ -f ".venv/bin/python" ]; then
         UV_CMD="uv"
     else
         # UV missing but .venv exists - attempt first-time setup
-        echo "UV not found; attempting setup..."
+        echo "UV not found, attempting setup..."
         goto :first_time_setup 2>/dev/null || { echo "Please reinstall Spaudible"; exit 1; }
     fi
     
-    # Check if dependencies need updating by comparing with LATEST backup only
+    # Check if dependencies need updating by comparing the current pyproject.toml
+    # with the last pyproject.toml in backups/
     if [ -d "backups" ]; then
-        # Get the most recently modified backup directory (cross-platform compatible)
         latest_backup=$(ls -td backups/*/ 2>/dev/null | head -1)
-        
-        # Remove trailing slash if present for consistent path construction
-        latest_backup="${latest_backup%/}"
-        
         if [ -n "$latest_backup" ] && [ -f "$latest_backup/pyproject.toml" ]; then
-            # Use cmp -s (silent) - returns 0 if identical, 1 if different
-            # This is more reliable than diff for binary/text file comparison
-            if ! cmp -s "pyproject.toml" "$latest_backup/pyproject.toml" 2>/dev/null; then
-                echo "Detected changes to pyproject.toml; reinstalling dependencies..."
+            if ! diff -q "pyproject.toml" "$latest_backup/pyproject.toml" >/dev/null 2>&1; then
+                # echo "Detected changes to pyproject.toml; reinstalling dependencies..."
                 $UV_CMD pip install -e . >/dev/null 2>&1 || echo "[Warning] Failed to update dependencies; attempting launch anyway..."
             fi
         fi
