@@ -200,16 +200,16 @@ class SpaudibleTheme:
                 dpg.add_theme_color(dpg.mvThemeCol_ResizeGripActive, Colors.ACCENT_CYAN)
                 
                 # --- Rounding ---
-                dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 6)
-                dpg.add_theme_style(dpg.mvStyleVar_WindowRounding, 8)
-                dpg.add_theme_style(dpg.mvStyleVar_ChildRounding, 6)
-                dpg.add_theme_style(dpg.mvStyleVar_PopupRounding, 6)
+                dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 8)
+                dpg.add_theme_style(dpg.mvStyleVar_WindowRounding, 12)
+                dpg.add_theme_style(dpg.mvStyleVar_ChildRounding, 10)
+                dpg.add_theme_style(dpg.mvStyleVar_PopupRounding, 10)
                 dpg.add_theme_style(dpg.mvStyleVar_ScrollbarRounding, 6)
                 dpg.add_theme_style(dpg.mvStyleVar_GrabRounding, 6)
                 dpg.add_theme_style(dpg.mvStyleVar_TabRounding, 6)
                 
                 # --- Borders (The 3D effect) ---
-                dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 3)  # Border for depth
+                dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 3)  # Border for element depth
                 dpg.add_theme_style(dpg.mvStyleVar_WindowBorderSize, 0)  # Clean window edges
                 dpg.add_theme_style(dpg.mvStyleVar_PopupBorderSize, 1)
                 
@@ -219,6 +219,7 @@ class SpaudibleTheme:
                 dpg.add_theme_style(dpg.mvStyleVar_ItemSpacing, 8, 6)
                 dpg.add_theme_style(dpg.mvStyleVar_ItemInnerSpacing, 6, 4)
                 dpg.add_theme_style(dpg.mvStyleVar_ButtonTextAlign, 0.5, 0.5)  # Centered
+                # dpg.mvstylevar_border
                 
     def _create_shadow_theme(self):
         """Theme for shadow layers behind buttons (3D effect)."""
