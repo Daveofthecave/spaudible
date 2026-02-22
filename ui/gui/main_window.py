@@ -5,12 +5,12 @@ import platform
 from pathlib import Path
 from typing import Optional, Union
 from ui.gui.state_manager import gui_state_manager
-from ui.gui.theme import apply_theme
+from ui.gui.theme import initialize_theme, add_3d_button, Colors
 from core.utilities.setup_validator import is_setup_complete
 
 class MainWindow:
     """Main GUI window orchestrator for Spaudible."""
-
+    
     def __init__(self):
         self.state_manager = gui_state_manager
         self.window_tag = "main_window"
@@ -19,6 +19,7 @@ class MainWindow:
         self.settings_panel_tag = "settings_panel"
         self._is_context_created = False
         self.dpi_scale = 1.0
+        self.theme = None  # SpaudibleTheme instance initialized in _initialize_dpg()
 
     def _get_dpi_scale(self) -> float:
         """Universal display scale detection using tkinter.
@@ -43,15 +44,15 @@ class MainWindow:
             root.destroy()
             
             # Heuristic: Scale based on vertical resolution for comfortable reading distance
-            if screen_height >= 2800:      # 8K and above
+            if screen_height >= 2800:    # 8K and above
                 scale = 3
-            elif screen_height >= 2100:    # 4K (UHD)
+            elif screen_height >= 2100:  # 4K (UHD)
                 scale = 2.5
-            elif screen_height >= 1600:    # 2K (QHD)
+            elif screen_height >= 1600:  # 2K (QHD)
                 scale = 2
-            elif screen_height >= 1000:    # 1080p (FHD)
+            elif screen_height >= 1000:  # 1080p (FHD)
                 scale = 1.5
-            else:                          # Lower resolutions (720p, etc.)
+            else:  # Lower resolutions (720p, etc.)
                 scale = 1
             
             # Trust high DPI reports only if they're significantly above 96 (>120)
@@ -72,21 +73,22 @@ class MainWindow:
         return int(value * self.dpi_scale)
 
     def run(self):
-        """
-        Main entry point. Handles setup wizard vs main window logic, initializes DPG, and runs the event loop.
+        """ 
+        Main entry point. Handles setup wizard vs main window logic,
+        initializes DPG, and runs the event loop.
         """
         try:
             # Check if setup is needed first
             if not is_setup_complete():
                 self._run_setup_wizard()
                 return
-
+            
             # Initialize DPG context and create UI
             self._initialize_dpg()
-
+            
             # Run the render loop
             self._main_loop()
-
+            
         except Exception as e:
             print(f"❗ Fatal GUI error: {e}")
             import traceback
@@ -99,7 +101,7 @@ class MainWindow:
         """Initialize Dear PyGui context, viewport, and all UI elements."""
         if self._is_context_created:
             return
-
+        
         # Create context first (this must happen before any other DPG call)
         dpg.create_context()
         self._is_context_created = True
@@ -109,8 +111,9 @@ class MainWindow:
         
         # Load fonts at physical pixel size
         self._load_hidpi_font()
-
-        apply_theme()
+        
+        # Initialize theme (loads background, creates styles)
+        self.theme = initialize_theme()
         
         # Get screen dimensions using tkinter
         import tkinter as tk
@@ -180,6 +183,9 @@ class MainWindow:
     def _build_ui(self):
         """Build the main application UI."""
         with dpg.window(tag=self.window_tag, label="Spaudible"):
+            # Create background image first (behind everything)
+            self.theme.create_background(self.window_tag)
+            
             # Menu bar for tools/about
             with dpg.menu_bar():
                 with dpg.menu(label="Tools"):
@@ -191,9 +197,10 @@ class MainWindow:
                     dpg.add_menu_item(label="UI Scale: 100%", callback=lambda: self._set_dpi_scale(1.0))
                     dpg.add_menu_item(label="UI Scale: 150%", callback=lambda: self._set_dpi_scale(1.5))
                     dpg.add_menu_item(label="UI Scale: 200%", callback=lambda: self._set_dpi_scale(2.0))
+                
                 with dpg.menu(label="Help"):
                     dpg.add_menu_item(label="About", callback=self._show_about)
-
+            
             # Main horizontal layout
             with dpg.group(horizontal=True):
                 # Left sidebar - Settings (300px fixed width)
@@ -205,7 +212,7 @@ class MainWindow:
                     autosize_y=True
                 ):
                     self._build_settings_panel()
-
+                
                 # Right area - Search & Results (flexible width)
                 with dpg.child_window(
                     tag=self.results_panel_tag,
@@ -224,8 +231,9 @@ class MainWindow:
         # Show current scale indicator
         if self.dpi_scale != 1.0:
             dpg.add_text(f"Scaling: {self.dpi_scale}x", color=(150, 150, 150))
-            dpg.add_spacer(height=self._s(10))
-
+        
+        dpg.add_spacer(height=self._s(10))
+        
         # Mode selector (Auto/CPU/GPU)
         dpg.add_text("Processing Mode")
         dpg.add_radio_button(
@@ -233,8 +241,9 @@ class MainWindow:
             default_value="Auto",
             callback=self._on_mode_changed
         )
+        
         dpg.add_spacer(height=self._s(10))
-
+        
         # Algorithm selector
         dpg.add_text("Similarity Algorithm")
         dpg.add_combo(
@@ -243,16 +252,18 @@ class MainWindow:
             callback=self._on_algorithm_changed,
             width=self._s(200)
         )
+        
         dpg.add_spacer(height=self._s(10))
-
+        
         # Deduplication toggle
         dpg.add_checkbox(
             label="Deduplicate Results",
             default_value=True,
             callback=self._on_dedupe_changed
         )
+        
         dpg.add_spacer(height=self._s(10))
-
+        
         # Region filter slider
         dpg.add_text("Region Filter Strength")
         dpg.add_slider_float(
@@ -262,8 +273,9 @@ class MainWindow:
             width=self._s(250),
             callback=self._on_region_changed
         )
+        
         dpg.add_spacer(height=self._s(10))
-
+        
         # Number of results
         dpg.add_text("Number of Results")
         dpg.add_input_int(
@@ -273,12 +285,13 @@ class MainWindow:
             width=self._s(100),
             callback=self._on_topk_changed
         )
+        
         dpg.add_spacer(height=self._s(20))
-
+        
         # Feature weights (collapsible)
         with dpg.tree_node(label="Feature Weights", default_open=False):
             self._build_feature_weights()
-
+        
         dpg.add_separator()
         dpg.add_button(
             label="Reset to Defaults",
@@ -290,8 +303,7 @@ class MainWindow:
         """Build the 32 feature weight sliders."""
         # Simplified version - full implementation would have all 32
         features = [
-            "Acousticness", "Danceability", "Energy", "Valence", 
-            "Tempo", "Popularity"
+            "Acousticness", "Danceability", "Energy", "Valence", "Tempo", "Popularity"
         ]
         for feature in features:
             dpg.add_slider_float(
@@ -306,6 +318,7 @@ class MainWindow:
         """Build the search input section."""
         dpg.add_text("Search", color=(100, 200, 255))
         dpg.add_separator()
+        
         dpg.add_input_text(
             tag="search_input",
             hint="Enter song, artist, track ID, ISRC, or drag audio file...",
@@ -313,6 +326,7 @@ class MainWindow:
             callback=self._on_search_enter,
             on_enter=True
         )
+        
         with dpg.group(horizontal=True):
             dpg.add_button(
                 tag="search_button",
@@ -325,13 +339,14 @@ class MainWindow:
                 width=self._s(80),
                 callback=self._clear_search
             )
+        
         dpg.add_spacer(height=self._s(10))
 
     def _build_results_panel(self):
         """Build the results display section."""
         dpg.add_text("Results", color=(100, 200, 255))
         dpg.add_separator()
-
+        
         # Expand/Collapse all button
         with dpg.group(horizontal=True):
             dpg.add_button(
@@ -349,8 +364,9 @@ class MainWindow:
                 width=self._s(120),
                 callback=self._save_playlist
             )
+        
         dpg.add_spacer(height=self._s(5))
-
+        
         # Results container
         with dpg.child_window(
             tag="results_container",
@@ -367,6 +383,7 @@ class MainWindow:
     def _set_dpi_scale(self, scale: float):
         """Change DPI scale at runtime (requires restart)."""
         self.state_manager.set('dpi_scale', scale)
+        
         with dpg.window(
             label="Restart Required",
             modal=True,
@@ -384,15 +401,19 @@ class MainWindow:
         # Track geometry for save-on-exit
         last_save_time = 0
         save_interval = 5.0  # Save geometry every 5 seconds if changed
-
+        
         # Store initial geometry to detect changes
         prev_pos = dpg.get_viewport_pos()
         prev_size = [dpg.get_viewport_width(), dpg.get_viewport_height()]
-
+        
         while dpg.is_dearpygui_running():
             dpg.render_dearpygui_frame()
-
-            # Periodic geometry save (optional - remove if not needed)
+            
+            # Update background size on viewport changes
+            if self.theme:
+                self.theme.update_background()
+            
+            # Periodic geometry save
             import time
             current_time = time.time()
             if current_time - last_save_time > save_interval:
@@ -404,21 +425,22 @@ class MainWindow:
                     self._save_window_geometry()
                     prev_pos = current_pos
                     prev_size = current_size
+                
                 last_save_time = current_time
-
+        
         print("DEBUG: Render loop exited")
 
     def _cleanup(self):
         """Save state and cleanup DPG resources."""
         if not self._is_context_created:
             return
-
+        
         try:
             # Save window geometry before destroying
             self._save_window_geometry()
         except Exception as e:
             print(f"⚠️ Error saving geometry: {e}")
-
+        
         try:
             dpg.destroy_context()
             self._is_context_created = False
@@ -435,75 +457,76 @@ class MainWindow:
         screen_database_check()
 
     # Callback methods
+    
     def _handle_search(self):
         """Handle search button click."""
         query = dpg.get_value("search_input")
         if not query.strip():
             dpg.set_value("results_placeholder", "Please enter a search query.")
             return
-
+        
         # TODO: Integrate with actual search logic from core.similarity_engine
         dpg.set_value("results_placeholder", f"Searching for: {query}...\n\n(Integration pending)")
-
+    
     def _on_search_enter(self, sender, app_data):
         """Handle Enter key in search box."""
         if app_data:  # Only trigger if there's text
             self._handle_search()
-
+    
     def _clear_search(self, sender=None, app_data=None):
         """Clear the search input."""
         dpg.set_value("search_input", "")
         dpg.focus_item("search_input")
-
+    
     def _on_mode_changed(self, sender, app_data):
         """Handle processing mode change."""
         # Update config manager based on selection
         pass
-
+    
     def _on_algorithm_changed(self, sender, app_data):
         """Handle algorithm selection change."""
         pass
-
+    
     def _on_dedupe_changed(self, sender, app_data):
         """Handle deduplication toggle."""
         pass
-
+    
     def _on_region_changed(self, sender, app_data):
         """Handle region filter slider change."""
         pass
-
+    
     def _on_topk_changed(self, sender, app_data):
         """Handle number of results change."""
         pass
-
+    
     def _reset_settings(self, sender=None, app_data=None):
         """Reset all settings to defaults."""
         pass
-
+    
     def _expand_all_results(self, sender=None, app_data=None):
         """Expand all result rows."""
         pass
-
+    
     def _collapse_all_results(self, sender=None, app_data=None):
         """Collapse all result rows."""
         pass
-
+    
     def _save_playlist(self, sender=None, app_data=None):
         """Save current results as playlist."""
         pass
-
+    
     def _show_system_status(self, sender=None, app_data=None):
         """Show system status modal."""
         pass
-
+    
     def _show_performance_test(self, sender=None, app_data=None):
         """Run/show performance test."""
         pass
-
+    
     def _check_updates(self, sender=None, app_data=None):
         """Check for updates."""
         pass
-
+    
     def _show_about(self, sender=None, app_data=None):
         """Show about dialog."""
         with dpg.window(
@@ -526,7 +549,7 @@ class MainWindow:
                 label="Close",
                 callback=lambda: dpg.delete_item(dpg.last_container())
             )
-
+    
     def _save_window_geometry(self):
         """Save current window position and size."""
         try:
