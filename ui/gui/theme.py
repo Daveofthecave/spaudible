@@ -1,7 +1,8 @@
 # ui/gui/theme.py
+import numpy as np
 import dearpygui.dearpygui as dpg
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, List
 
 # =============================================================================
 # COLOR CONSTANTS
@@ -239,6 +240,335 @@ class SpaudibleTheme:
         """Call this in your render loop or resize handler."""
         self.bg_manager.update_size()
 
+# =============================================================================
+# CUSTOM BUTTONS
+# =============================================================================
+
+class GradientButtonFactory:
+    """ Creates photorealistic embossed buttons with S-curve gradients and proper 3D shading. """
+    
+    def __init__(self):
+        self._texture_cache = {}
+        self._font_path = Path(__file__).parent.parent.parent / "data" / "fonts" / "OpenSans-SemiBold.ttf"
+
+    def _smoothstep(self, t: np.ndarray, edge0: float = 0.0, edge1: float = 1.0) -> np.ndarray:
+        """Standard smoothstep for S-curve: 3t^2 - 2t^3"""
+        t = np.clip((t - edge0) / (edge1 - edge0 + 1e-7), 0.0, 1.0)
+        return t * t * (3.0 - 2.0 * t)
+
+    def _generate_embossed_gradient(self, width: int, height: int, top_color: Tuple[int, int, int], bottom_color: Tuple[int, int, int], label: str = "", corner_radius: int = 8) -> List[float]:
+        """Generate vertical gradient with plastic emboss luminance distribution.
+        
+        Mimics shields.io plastic style:
+        - Top 20%: Aggressive drop (highlight to mid-tone)
+        - Middle 60%: Gentle graduation (mid-tone)
+        - Bottom 20%: Aggressive drop (mid-tone to shadow)
+        """
+        # Ensure Python ints for PIL
+        width = int(width)
+        height = int(height)
+        corner_radius = int(corner_radius)
+        
+        # Create coordinate grid: y=0 is top, y=height-1 is bottom
+        # y_normalized goes from 1.0 (top) to 0.0 (bottom)
+        y_normalized = np.linspace(1.0, 0.0, height)[:, np.newaxis]
+        
+        # Piecewise plastic emboss curve based on your luminance specification:
+        # Top 20%: 78% -> 37% (steep, factor 1.0 -> 0.32)
+        # Middle 60%: 37% -> 25% (gentle, factor 0.32 -> 0.12)  
+        # Bottom 20%: 25% -> 18% (steep, factor 0.12 -> 0.0)
+        s_curve = np.zeros_like(y_normalized)
+        
+        for i, y in enumerate(y_normalized[:, 0]):
+            t = 1.0 - y  # Convert to 0=top, 1=bottom for easier logic
+            
+            if t < 0.2:
+                # Top region: Quadratic ease-in (steep start)
+                # Maps t=[0,0.2] to factor=[1.0,0.32]
+                u = t / 0.2
+                factor = 1.0 - 0.68 * (u ** 2)
+            elif t < 0.8:
+                # Middle region: Linear (gentle slope)
+                # Maps t=[0.2,0.8] to factor=[0.32,0.12]
+                u = (t - 0.2) / 0.6
+                factor = 0.32 - 0.20 * u
+            else:
+                # Bottom region: Quadratic ease-out (steep end)
+                # Maps t=[0.8,1.0] to factor=[0.12,0.0]
+                u = (t - 0.8) / 0.2
+                factor = 0.12 * ((1.0 - u) ** 2)
+                
+            s_curve[i, 0] = factor
+        
+        # Initialize RGBA
+        gradient = np.zeros((height, width, 4), dtype=np.float32)
+        
+        # Interpolate RGB with the plastic curve
+        for i in range(3):
+            top_val = top_color[i] / 255.0
+            bottom_val = bottom_color[i] / 255.0
+            channel = bottom_val + (top_val - bottom_val) * s_curve
+            gradient[:, :, i] = np.tile(channel, (1, width))
+        
+        gradient[:, :, 3] = 1.0
+        
+        # Apply rounded corners via alpha mask...
+        # (rest of the method remains unchanged)
+        if corner_radius > 0:
+            try:
+                from PIL import Image, ImageDraw
+                mask = Image.new('L', (width, height), 0)
+                draw = ImageDraw.Draw(mask)
+                draw.rounded_rectangle((0, 0, width-1, height-1), radius=corner_radius, fill=255)
+                mask_arr = np.array(mask).astype(np.float32) / 255.0
+                gradient[:, :, 3] *= mask_arr
+            except ImportError:
+                pass
+        
+        # Render text if PIL available...
+        if label and self._font_path.exists():
+            try:
+                from PIL import Image, ImageDraw, ImageFont
+                img = Image.fromarray((gradient * 255).astype(np.uint8), 'RGBA')
+                draw = ImageDraw.Draw(img)
+                
+                font_size = max(12, int(height * 0.55))
+                try:
+                    font = ImageFont.truetype(str(self._font_path), font_size)
+                except:
+                    font = ImageFont.load_default()
+                    
+                bbox = draw.textbbox((0, 0), label, font=font)
+                text_w = bbox[2] - bbox[0]
+                text_h = bbox[3] - bbox[1]
+                x = (width - text_w) // 2
+                y = (height - text_h) // 2 - 1
+                
+                # Text shadow
+                draw.text((x+1, y+1), label, font=font, fill=(0, 0, 0, 160))
+                # Text
+                draw.text((x, y), label, font=font, fill=(255, 255, 255, 255))
+                
+                gradient = np.array(img).astype(np.float32) / 255.0
+            except Exception:
+                pass
+        
+        return gradient.flatten().tolist()
+
+    def _get_or_create_texture(self, tag: str, width: int, height: int, 
+                              top_color: Tuple[int, int, int], 
+                              bottom_color: Tuple[int, int, int], 
+                              label: str = "", corner_radius: int = 8) -> str:
+        """Cache textures to avoid regeneration."""
+        # Ensure standard Python ints for DPG
+        width = int(width)
+        height = int(height)
+        corner_radius = int(corner_radius)
+        
+        cache_key = f"{tag}_{width}_{height}_{label}_{corner_radius}"
+        if cache_key in self._texture_cache:
+            return self._texture_cache[cache_key]
+        
+        data = self._generate_embossed_gradient(width, height, top_color, bottom_color, label, corner_radius)
+        
+        with dpg.texture_registry():
+            dpg.add_static_texture(width, height, data, tag=tag)
+        
+        self._texture_cache[cache_key] = tag
+        return tag
+
+    def create_button(self, label: str, callback=None, parent=None, width: int = 150, 
+                     height: int = 40, tag: str = None, corner_radius: int = 8) -> int:
+        """
+        Create an embossed 3D button with proper parent hierarchy.
+        """
+        # CRITICAL: Ensure standard Python ints, not numpy types
+        width = int(width)
+        height = int(height)
+        corner_radius = int(corner_radius)
+        
+        # Color definitions for embossed effect
+        base = Colors.PRIMARY_DARK
+        
+        # Normal: Light from above (top lighter, bottom darker)
+        normal_top = tuple(min(255, int(c * 1.4)) for c in base)
+        normal_bottom = tuple(max(0, int(c * 0.6)) for c in base)
+        
+        # Hover: Brighter version
+        hover_top = tuple(min(255, int(c * 1.6)) for c in base)
+        hover_bottom = tuple(max(0, int(c * 0.8)) for c in base)
+        
+        # Active (pressed): Inverted
+        active_top = tuple(max(0, int(c * 0.7)) for c in base)
+        active_bottom = tuple(min(255, int(c * 1.2)) for c in base)
+        
+        # Generate unique tags
+        import hashlib
+        hash_base = hashlib.md5(f"{label}_{width}_{height}".encode()).hexdigest()[:8]
+        tex_normal = f"btn_norm_{hash_base}"
+        tex_hover = f"btn_hov_{hash_base}"
+        tex_active = f"btn_act_{hash_base}"
+        
+        # Create textures
+        self._get_or_create_texture(tex_normal, width, height, normal_top, normal_bottom, label, corner_radius)
+        self._get_or_create_texture(tex_hover, width, height, hover_top, hover_bottom, label, corner_radius)
+        self._get_or_create_texture(tex_active, width, height, active_top, active_bottom, label, corner_radius)
+        
+        # Create shadow texture
+        shadow_tag = f"shadow_{width}_{height}_{corner_radius}"
+        if shadow_tag not in self._texture_cache:
+            # Create shadow data
+            shadow_data = [20/255.0, 25/255.0, 22/255.0, 0.6] * (width * height)
+            
+            # Apply rounded corners to shadow
+            try:
+                from PIL import Image, ImageDraw
+                mask = Image.new('L', (width, height), 0)
+                draw = ImageDraw.Draw(mask)
+                draw.rounded_rectangle((0, 0, width-1, height-1), radius=corner_radius, fill=153)
+                mask_arr = np.array(mask).astype(np.float32) / 255.0
+                
+                # Replace alpha in shadow_data
+                for i in range(height):
+                    for j in range(width):
+                        idx = (i * width + j) * 4 + 3
+                        if idx < len(shadow_data):
+                            shadow_data[idx] = float(mask_arr[i, j]) * 0.6
+            except:
+                pass
+            
+            with dpg.texture_registry():
+                dpg.add_static_texture(width, height, shadow_data, tag=shadow_tag)
+            self._texture_cache[shadow_tag] = shadow_tag
+        
+        # Build UI with explicit parent handling
+        # If parent is None, DPG uses current context stack
+        group_kwargs = {'horizontal': False}
+        if parent is not None:
+            group_kwargs['parent'] = parent
+        
+        # Create container group
+        container = dpg.add_group(**group_kwargs)
+        
+        # Add shadow (offset)
+        dpg.add_image(shadow_tag, width=width, height=height, pos=(3, 3), parent=container)
+        
+        # Add main button
+        btn_kwargs = {
+            'texture_tag': tex_normal,
+            'width': width,
+            'height': height,
+            'callback': callback,
+            'frame_padding': 0,
+            'background_color': (0, 0, 0, 0),
+            'parent': container
+        }
+        if tag:
+            btn_kwargs['tag'] = tag
+        
+        btn = dpg.add_image_button(**btn_kwargs)
+        
+        # Store state data
+        dpg.set_item_user_data(btn, {
+            'textures': {
+                'normal': tex_normal,
+                'hover': tex_hover,
+                'active': tex_active
+            },
+            'original_pos': (0, 0)
+        })
+        
+        # Bind interaction handlers
+        with dpg.item_handler_registry() as handler:
+            dpg.add_item_hover_handler(callback=lambda s, a, u: self._on_hover(s))
+            dpg.add_item_active_handler(callback=lambda s, a, u: self._on_active(s))
+            dpg.add_item_deactivated_handler(callback=lambda s, a, u: self._on_deactivate(s))
+            dpg.bind_item_handler_registry(btn, handler)
+        
+        return btn
+
+    def _on_hover(self, sender):
+        """Handle hover state."""
+        try:
+            user_data = dpg.get_item_user_data(sender)
+            if user_data and dpg.is_item_hovered(sender):
+                dpg.configure_item(sender, texture_tag=user_data['textures']['hover'])
+        except:
+            pass
+
+    def _on_active(self, sender):
+        """Handle pressed state."""
+        try:
+            user_data = dpg.get_item_user_data(sender)
+            if user_data:
+                dpg.configure_item(sender, texture_tag=user_data['textures']['active'])
+                dpg.configure_item(sender, pos=(1, 1))
+        except:
+            pass
+
+    def _on_deactivate(self, sender):
+        """Handle release state."""
+        try:
+            user_data = dpg.get_item_user_data(sender)
+            if user_data:
+                dpg.configure_item(sender, texture_tag=user_data['textures']['normal'])
+                dpg.configure_item(sender, pos=user_data['original_pos'])
+        except:
+            pass
+
+
+# Global factory
+_gradient_factory = GradientButtonFactory()
+
+def add_gradient_button(label: str, callback=None, parent=None, width: int = 150, 
+                       height: int = 40, tag: str = None, **kwargs) -> int:
+    """
+    Create a gradient button with embossed 3D appearance.
+    
+    Args:
+        label: Button text
+        callback: Click callback
+        parent: Parent container (tag string or int). If None, uses current DPG stack.
+        width: Button width in pixels
+        height: Button height in pixels
+        tag: Optional unique tag for the button
+        **kwargs: Additional arguments (ignored for compatibility)
+    
+    Returns:
+        Integer tag of the created button
+    """
+    # Filter out any problematic kwargs
+    return _gradient_factory.create_button(
+        label=label,
+        callback=callback,
+        parent=parent,
+        width=int(width),    # Ensure Python int
+        height=int(height),  # Ensure Python int
+        tag=tag
+    )
+
+def add_styled_slider(label: str, default_value: float = 1.0, min_value: float = 0.0, 
+                     max_value: float = 10.0, parent=None, **kwargs) -> int:
+    """Create a slider with Spaudible styling."""
+    return dpg.add_slider_float(
+        label=label,
+        default_value=default_value,
+        min_value=min_value,
+        max_value=max_value,
+        parent=parent,
+        width=200,
+        **kwargs
+    )
+
+def add_collapsible_section(label: str, parent=None, default_open: bool = True):
+    """Helper to create a tree node (collapsible section) with proper styling."""
+    return dpg.add_tree_node(
+        label=label,
+        parent=parent,
+        default_open=default_open,
+        bullet=False,
+        span_full_width=True
+    )
 
 # =============================================================================
 # WIDGET UTILITIES

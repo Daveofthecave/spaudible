@@ -5,7 +5,7 @@ import platform
 from pathlib import Path
 from typing import Optional, Union
 from ui.gui.state_manager import gui_state_manager
-from ui.gui.theme import initialize_theme, add_3d_button, Colors
+from ui.gui.theme import initialize_theme, add_gradient_button, Colors
 from core.utilities.setup_validator import is_setup_complete
 
 class MainWindow:
@@ -293,9 +293,10 @@ class MainWindow:
             self._build_feature_weights()
         
         dpg.add_separator()
-        dpg.add_button(
+        add_gradient_button(
             label="Reset to Defaults",
             width=self._s(150),
+            height=self._s(25),
             callback=self._reset_settings
         )
 
@@ -328,15 +329,17 @@ class MainWindow:
         )
         
         with dpg.group(horizontal=True):
-            dpg.add_button(
+            add_gradient_button(
                 tag="search_button",
                 label="Find Similar Songs",
                 width=self._s(150),
+                height=self._s(25),
                 callback=self._handle_search
             )
-            dpg.add_button(
+            add_gradient_button(
                 label="Clear",
                 width=self._s(80),
+                height=self._s(25),
                 callback=self._clear_search
             )
         
@@ -349,19 +352,22 @@ class MainWindow:
         
         # Expand/Collapse all button
         with dpg.group(horizontal=True):
-            dpg.add_button(
+            add_gradient_button(
                 label="Expand All",
                 width=self._s(100),
+                height=self._s(25),
                 callback=self._expand_all_results
             )
-            dpg.add_button(
+            add_gradient_button(
                 label="Collapse All",
                 width=self._s(100),
+                height=self._s(25),
                 callback=self._collapse_all_results
             )
-            dpg.add_button(
+            add_gradient_button(
                 label="Save Playlist",
                 width=self._s(120),
+                height=self._s(25),
                 callback=self._save_playlist
             )
         
@@ -392,7 +398,7 @@ class MainWindow:
             no_resize=True
         ):
             dpg.add_text("UI scale will change on next restart.")
-            dpg.add_button(label="OK", callback=lambda: dpg.delete_item(dpg.last_container()))
+            add_gradient_button(label="OK", callback=lambda: dpg.delete_item(dpg.last_container()))
 
     def _main_loop(self):
         """Run the Dear PyGui render loop."""
@@ -545,7 +551,7 @@ class MainWindow:
             
             dpg.add_separator()
             dpg.add_text("By Daveofthecave")
-            dpg.add_button(
+            add_gradient_button(
                 label="Close",
                 callback=lambda: dpg.delete_item(dpg.last_container())
             )
