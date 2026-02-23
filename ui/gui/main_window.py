@@ -296,7 +296,7 @@ class MainWindow:
         add_gradient_button(
             label="Reset to Defaults",
             width=self._s(150),
-            height=self._s(25),
+            height=self._s(24),
             callback=self._reset_settings
         )
 
@@ -333,13 +333,13 @@ class MainWindow:
                 tag="search_button",
                 label="Find Similar Songs",
                 width=self._s(150),
-                height=self._s(25),
+                height=self._s(24),
                 callback=self._handle_search
             )
             add_gradient_button(
                 label="Clear",
                 width=self._s(80),
-                height=self._s(25),
+                height=self._s(24),
                 callback=self._clear_search
             )
         
@@ -355,19 +355,19 @@ class MainWindow:
             add_gradient_button(
                 label="Expand All",
                 width=self._s(100),
-                height=self._s(25),
+                height=self._s(24),
                 callback=self._expand_all_results
             )
             add_gradient_button(
                 label="Collapse All",
                 width=self._s(100),
-                height=self._s(25),
+                height=self._s(24),
                 callback=self._collapse_all_results
             )
             add_gradient_button(
                 label="Save Playlist",
                 width=self._s(120),
-                height=self._s(25),
+                height=self._s(24),
                 callback=self._save_playlist
             )
         

@@ -249,7 +249,7 @@ class GradientButtonFactory:
     
     def __init__(self):
         self._texture_cache = {}
-        self._font_path = Path(__file__).parent.parent.parent / "data" / "fonts" / "OpenSans-SemiBold.ttf"
+        self._font_path = Path(__file__).parent.parent.parent / "data" / "fonts" / "OpenSans-Regular.ttf"
 
     def _smoothstep(self, t: np.ndarray, edge0: float = 0.0, edge1: float = 1.0) -> np.ndarray:
         """Standard smoothstep for S-curve: 3t^2 - 2t^3"""
@@ -257,13 +257,7 @@ class GradientButtonFactory:
         return t * t * (3.0 - 2.0 * t)
 
     def _generate_embossed_gradient(self, width: int, height: int, top_color: Tuple[int, int, int], bottom_color: Tuple[int, int, int], label: str = "", corner_radius: int = 8) -> List[float]:
-        """Generate vertical gradient with plastic emboss luminance distribution.
-        
-        Mimics shields.io plastic style:
-        - Top 20%: Aggressive drop (highlight to mid-tone)
-        - Middle 60%: Gentle graduation (mid-tone)
-        - Bottom 20%: Aggressive drop (mid-tone to shadow)
-        """
+        """Generate vertical gradient with plastic emboss luminance distribution."""
         # Ensure Python ints for PIL
         width = int(width)
         height = int(height)
@@ -274,9 +268,9 @@ class GradientButtonFactory:
         y_normalized = np.linspace(1.0, 0.0, height)[:, np.newaxis]
         
         # Piecewise plastic emboss curve based on your luminance specification:
-        # Top 20%: 78% -> 37% (steep, factor 1.0 -> 0.32)
-        # Middle 60%: 37% -> 25% (gentle, factor 0.32 -> 0.12)  
-        # Bottom 20%: 25% -> 18% (steep, factor 0.12 -> 0.0)
+        # Top 20%: Aggressive drop from highlights to mid-tones
+        # Middle 60%: Gentle graduation in the mid-tones
+        # Bottom 20%: Aggressive drop from mid-tones to shadows
         s_curve = np.zeros_like(y_normalized)
         
         for i, y in enumerate(y_normalized[:, 0]):
