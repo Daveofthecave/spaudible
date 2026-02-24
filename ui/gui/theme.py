@@ -336,12 +336,19 @@ class GradientButtonFactory:
                 text_w = bbox[2] - bbox[0]
                 text_h = bbox[3] - bbox[1]
                 x = (width - text_w) // 2
-                y = (height - text_h) // 2 - 1
+                
+                # Calculate vertical position relative to baseline
+                # bbox[1] is usually negative (top relative to baseline)
+                # bbox[3] is positive (bottom relative to baseline, includes descent)
+                # We want text center (baseline + bbox[1] + text_h/2) at button center
+                nudge = height * 0.03  # Nudge text down slightly for optical centering
+                y = (height // 2) - (bbox[1] + text_h // 2) + nudge
                 
                 draw.text((x+1, y+1), label, font=font, fill=(0, 0, 0, 160))
                 draw.text((x, y), label, font=font, fill=(255, 255, 255, 255))
                 
                 gradient = np.array(img).astype(np.float32) / 255.0
+
             except Exception:
                 pass
         
