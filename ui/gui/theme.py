@@ -360,18 +360,15 @@ class GradientButtonFactory:
         self._texture_cache[cache_key] = tag
         return tag
 
-    def create_button(self, label: str, callback=None, parent=None, width: int = 150, 
-                     height: int = 40, tag: str = None, corner_radius: int = 8) -> int:
-        """
-        Create an embossed 3D button.
-        """
+    def create_button(self, label: str, callback=None, parent=None, width: int = 150, height: int = 40, tag: str = None, corner_radius: int = 8) -> int:
+        """Create an embossed 3D button with proper layering, hover effects, and transparent background."""
+        # Ensure standard Python ints, not numpy types
         width = int(width)
         height = int(height)
         corner_radius = int(corner_radius)
         
         # Color definitions for embossed effect
         base = Colors.PRIMARY_DARK
-        
         normal_top = tuple(min(255, int(c * 1.4)) for c in base)
         normal_bottom = tuple(max(0, int(c * 0.6)) for c in base)
         hover_top = tuple(min(255, int(c * 1.6)) for c in base)
@@ -379,91 +376,81 @@ class GradientButtonFactory:
         active_top = tuple(max(0, int(c * 0.7)) for c in base)
         active_bottom = tuple(min(255, int(c * 1.2)) for c in base)
         
-        # Generate unique texture tags
+        # Generate unique tags
         import hashlib
-        hash_base = hashlib.md5(f"{label}_{width}_{height}".encode()).hexdigest()[:8]
+        hash_base = hashlib.md5(f"{label}_{width}_{height}_{tag or ''}".encode()).hexdigest()[:8]
         tex_normal = f"btn_norm_{hash_base}"
         tex_hover = f"btn_hov_{hash_base}"
         tex_active = f"btn_act_{hash_base}"
+        shadow_tag = f"btn_shad_{hash_base}"
         
-        # Create textures (these go into texture registry, not parent)
+        # Create textures
         self._get_or_create_texture(tex_normal, width, height, normal_top, normal_bottom, label, corner_radius)
         self._get_or_create_texture(tex_hover, width, height, hover_top, hover_bottom, label, corner_radius)
         self._get_or_create_texture(tex_active, width, height, active_top, active_bottom, label, corner_radius)
         
         # Create shadow texture
-        shadow_tag = f"shadow_{width}_{height}_{corner_radius}"
         if shadow_tag not in self._texture_cache:
-            shadow_data = [20/255.0, 25/255.0, 22/255.0, 0.6] * (width * height)
-            
+            shadow_data = [20/255.0, 25/255.0, 22/255.0, 0.5] * (width * height)
             try:
                 from PIL import Image, ImageDraw
                 mask = Image.new('L', (width, height), 0)
                 draw = ImageDraw.Draw(mask)
-                draw.rounded_rectangle((0, 0, width-1, height-1), radius=corner_radius, fill=153)
+                draw.rounded_rectangle((0, 0, width-1, height-1), radius=corner_radius, fill=128)
                 mask_arr = np.array(mask).astype(np.float32) / 255.0
-                
                 for i in range(height):
                     for j in range(width):
                         idx = (i * width + j) * 4 + 3
                         if idx < len(shadow_data):
-                            shadow_data[idx] = float(mask_arr[i, j]) * 0.6
+                            shadow_data[idx] = float(mask_arr[i, j]) * 0.5
             except:
                 pass
-            
             with dpg.texture_registry():
                 dpg.add_static_texture(width, height, shadow_data, tag=shadow_tag)
             self._texture_cache[shadow_tag] = shadow_tag
         
-        # Build kwargs for parent - only include if not None
-        # REMOVED pos=(3, 3) - this was causing all buttons to stack at same position!
-        image_kwargs = {
-            'width': width,
-            'height': height
+        # Create container as child_window to establish local coordinate system
+        # This allows pos=(0,0) to be relative to this container, not the main window
+        container_kwargs = {
+            'width': width + 3,  # Extra space for shadow offset
+            'height': height + 3,
+            'border': False,
+            'no_scrollbar': True,
+            'no_scroll_with_mouse': True,
+            'autosize_x': False,
+            'autosize_y': False,
         }
         if parent is not None:
-            image_kwargs['parent'] = parent
+            container_kwargs['parent'] = parent
         
-        # Add shadow image (NOT to texture registry) - flows naturally in layout
-        dpg.add_image(shadow_tag, **image_kwargs)
+        container = dpg.add_child_window(**container_kwargs)
         
-        # Create wrapper callback that handles hover/active state
-        def wrapper_callback(sender, app_data, user_data):
-            # On click/release, reset to appropriate state
-            data = dpg.get_item_user_data(sender)
-            if data:
-                if dpg.is_item_hovered(sender):
-                    dpg.configure_item(sender, texture_tag=data['textures']['hover'])
-                else:
-                    dpg.configure_item(sender, texture_tag=data['textures']['normal'])
-            # Call the actual callback (pass sender only if it expects an argument)
-            if callback:
-                try:
-                    callback(sender)
-                except TypeError:
-                    # If callback doesn't take any arguments, call without args
-                    callback()
+        # Add shadow first (behind), positioned at offset (3, 3) relative to container
+        dpg.add_image(
+            shadow_tag,
+            width=width,
+            height=height,
+            pos=(3, 3),
+            parent=container
+        )
         
-        # Build kwargs for image button
-        btn_kwargs = {
-            'texture_tag': tex_normal,
-            'width': width,
-            'height': height,
-            'callback': wrapper_callback,
-            'frame_padding': 0,
-            'background_color': (0, 0, 0, 0),
-            'tint_color': (255, 255, 255, 255)
-        }
-        if parent is not None:
-            btn_kwargs['parent'] = parent
-        
-        # Add main button image
-        btn = dpg.add_image_button(**btn_kwargs)
+        # Create the actual button (image_button) at (0, 0), overlaying the shadow
+        btn = dpg.add_image_button(
+            texture_tag=tex_normal,
+            width=width,
+            height=height,
+            pos=(0, 0),
+            parent=container,
+            callback=callback,
+            frame_padding=0,
+            background_color=(0, 0, 0, 0),
+            tint_color=(255, 255, 255, 255)
+        )
         
         if tag:
             dpg.configure_item(btn, tag=tag)
         
-        # Store state data
+        # Store texture references and original position
         dpg.set_item_user_data(btn, {
             'textures': {
                 'normal': tex_normal,
@@ -472,6 +459,22 @@ class GradientButtonFactory:
             },
             'original_pos': (0, 0)
         })
+        
+        # Create transparent theme for this button to eliminate green background
+        with dpg.theme() as transparent_btn_theme:
+            with dpg.theme_component(dpg.mvImageButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (0, 0, 0, 0))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (0, 0, 0, 0))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (0, 0, 0, 0))
+                dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 0)
+        dpg.bind_item_theme(btn, transparent_btn_theme)
+        
+        # Bind interaction handlers
+        with dpg.item_handler_registry() as handler:
+            dpg.add_item_hover_handler(callback=lambda s, a, u: self._on_hover(s, a, u))
+            dpg.add_item_active_handler(callback=lambda s, a, u: self._on_active(s, a, u))
+            dpg.add_item_deactivated_handler(callback=lambda s, a, u: self._on_deactivate(s, a, u))
+        dpg.bind_item_handler_registry(btn, handler)
         
         return btn
 
