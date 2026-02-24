@@ -243,13 +243,19 @@ class SpaudibleTheme:
 # =============================================================================
 
 class GradientButtonFactory:
-    """Creates photorealistic embossed buttons with S-curve gradients and proper 3D shading."""
+    """Creates embossed buttons with S-curve gradients and proper 3D shading."""
     
     def __init__(self):
         self._texture_cache = {}
         self._font_path = Path(__file__).parent.parent.parent / "data" / "fonts" / "OpenSans-Regular.ttf"
-        self._debug_mode = True
+        self._debug_mode = False  # Set to True for debugging hover/click events
         self._button_states = {}
+        
+        # Preset sizes for convenience
+        self.SIZE_SMALL = (80, 24)
+        self.SIZE_MEDIUM = (150, 24)
+        self.SIZE_LARGE = (200, 32)
+        self.SIZE_XLARGE = (300, 40)
 
     def _generate_embossed_gradient(self, width: int, height: int, top_color: Tuple[int, int, int], 
                                     bottom_color: Tuple[int, int, int], label: str = "", 
@@ -418,6 +424,7 @@ class GradientButtonFactory:
             print(f"\n=== Creating Button: {label} ===")
             print(f"Dimensions: {width}x{height}")
         
+        # Color definitions for embossed effect
         base = Colors.PRIMARY_DARK
         normal_top = tuple(min(255, int(c * 1.4)) for c in base)
         normal_bottom = tuple(max(0, int(c * 0.6)) for c in base)
@@ -426,6 +433,7 @@ class GradientButtonFactory:
         active_top = tuple(max(0, int(c * 0.7)) for c in base)
         active_bottom = tuple(min(255, int(c * 1.2)) for c in base)
         
+        # Generate unique tags
         import hashlib
         hash_base = hashlib.md5(f"{label}_{width}_{height}_{tag or ''}".encode()).hexdigest()[:8]
         tex_normal = f"btn_norm_{hash_base}"
@@ -436,10 +444,12 @@ class GradientButtonFactory:
         if self._debug_mode:
             print(f"Texture tags: normal={tex_normal}")
         
+        # Create textures
         self._get_or_create_texture(tex_normal, width, height, normal_top, normal_bottom, label, corner_radius)
         self._get_or_create_texture(tex_hover, width, height, hover_top, hover_bottom, label, corner_radius)
         self._get_or_create_texture(tex_active, width, height, active_top, active_bottom, label, corner_radius)
         
+        # Create shadow texture
         if shadow_tag not in self._texture_cache:
             shadow_data = [20/255.0, 25/255.0, 22/255.0, 0.5] * (width * height)
             try:
@@ -459,9 +469,9 @@ class GradientButtonFactory:
                 dpg.add_static_texture(width, height, shadow_data, tag=shadow_tag)
             self._texture_cache[shadow_tag] = shadow_tag
         
-        # Use child_window to establish local coordinate system for proper positioning
+        # Create container as child_window to establish local coordinate system for proper positioning
         container_kwargs = {
-            'width': width + 3,
+            'width': width + 3,  # Extra space for shadow offset
             'height': height + 3,
             'border': False,
             'no_scrollbar': True,
@@ -474,10 +484,13 @@ class GradientButtonFactory:
         
         container = dpg.add_child_window(**container_kwargs)
         
-        # Add shadow first (behind), positioned at offset (3, 3)
+        if self._debug_mode:
+            print(f"Container created: {container}")
+        
+        # Add shadow first (behind), positioned at offset (3, 3) relative to container
         dpg.add_image(shadow_tag, width=width, height=height, pos=(3, 3), parent=container)
         
-        # Create the button at (0, 0) relative to the container
+        # Create the actual button (image_button) at (0, 0), overlaying the shadow
         btn = dpg.add_image_button(
             texture_tag=tex_normal,
             width=width,
@@ -496,7 +509,7 @@ class GradientButtonFactory:
         if self._debug_mode:
             print(f"Button created: {btn}")
         
-        # Store button state
+        # Store texture references and original position
         self._button_states[btn] = {
             'textures': {
                 'normal': tex_normal,
@@ -508,7 +521,7 @@ class GradientButtonFactory:
             'current_state': 'normal'
         }
         
-        # Transparent theme for the button
+        # Create transparent theme for this button to eliminate green background
         with dpg.theme() as transparent_btn_theme:
             with dpg.theme_component(dpg.mvImageButton):
                 dpg.add_theme_color(dpg.mvThemeCol_Button, (0, 0, 0, 0))
@@ -522,6 +535,26 @@ class GradientButtonFactory:
         
         return btn
 
+    def create_small(self, label: str, callback=None, parent=None, tag: str = None) -> int:
+        """Create a small button (80x24px)."""
+        return self.create_button(label, callback, parent, self.SIZE_SMALL[0], self.SIZE_SMALL[1], tag)
+
+    def create_medium(self, label: str, callback=None, parent=None, tag: str = None) -> int:
+        """Create a medium button (150x24px)."""
+        return self.create_button(label, callback, parent, self.SIZE_MEDIUM[0], self.SIZE_MEDIUM[1], tag)
+
+    def create_large(self, label: str, callback=None, parent=None, tag: str = None) -> int:
+        """Create a large button (200x32px)."""
+        return self.create_button(label, callback, parent, self.SIZE_LARGE[0], self.SIZE_LARGE[1], tag)
+
+    def create_xlarge(self, label: str, callback=None, parent=None, tag: str = None) -> int:
+        """Create an extra-large button (300x40px)."""
+        return self.create_button(label, callback, parent, self.SIZE_XLARGE[0], self.SIZE_XLARGE[1], tag)
+
+    def cleanup(self):
+        """Clear all tracked buttons. Call when rebuilding UI to prevent memory leaks."""
+        self._button_states.clear()
+
 
 # Global factory
 _gradient_factory = GradientButtonFactory()
@@ -533,7 +566,7 @@ def add_gradient_button(label: str, callback=None, parent=None, width: int = 150
     
     Args:
         label: Button text
-        callback: Click callback
+        callback: Click callback function
         parent: Parent container (tag string or int). If None, uses current DPG stack.
         width: Button width in pixels
         height: Button height in pixels
@@ -551,6 +584,23 @@ def add_gradient_button(label: str, callback=None, parent=None, width: int = 150
         height=int(height),
         tag=tag
     )
+
+def add_small_button(label: str, callback=None, parent=None, tag: str = None) -> int:
+    """Create a small button (80x24px) with embossed 3D appearance."""
+    return _gradient_factory.create_small(label, callback, parent, tag)
+
+def add_medium_button(label: str, callback=None, parent=None, tag: str = None) -> int:
+    """Create a medium button (150x24px) with embossed 3D appearance."""
+    return _gradient_factory.create_medium(label, callback, parent, tag)
+
+def add_large_button(label: str, callback=None, parent=None, tag: str = None) -> int:
+    """Create a large button (200x32px) with embossed 3D appearance."""
+    return _gradient_factory.create_large(label, callback, parent, tag)
+
+def add_xlarge_button(label: str, callback=None, parent=None, tag: str = None) -> int:
+    """Create an extra-large button (300x40px) with embossed 3D appearance."""
+    return _gradient_factory.create_xlarge(label, callback, parent, tag)
+
 
 def add_styled_slider(label: str, default_value: float = 1.0, min_value: float = 0.0, 
                      max_value: float = 10.0, parent=None, **kwargs) -> int:
