@@ -478,38 +478,45 @@ class GradientButtonFactory:
         
         return btn
 
-    def _on_hover(self, sender):
-        """Handle hover state."""
+    def _on_hover(self, sender, app_data, user_data):
+        """Handle hover enter/leave with texture swapping."""
         try:
-            user_data = dpg.get_item_user_data(sender)
-            if user_data and dpg.is_item_hovered(sender):
-                dpg.configure_item(sender, texture_tag=user_data['textures']['hover'])
+            data = dpg.get_item_user_data(sender)
+            if not data:
+                return
+            if dpg.is_item_hovered(sender):
+                dpg.configure_item(sender, texture_tag=data['textures']['hover'])
             else:
-                user_data = dpg.get_item_user_data(sender)
-                if user_data:
-                    dpg.configure_item(sender, texture_tag=user_data['textures']['normal'])
-        except:
+                # Mouse left the button - return to normal
+                dpg.configure_item(sender, texture_tag=data['textures']['normal'])
+        except Exception:
             pass
 
-    def _on_active(self, sender):
-        """Handle pressed state."""
+    def _on_active(self, sender, app_data, user_data):
+        """Handle mouse press (button down) - show pressed state."""
         try:
-            user_data = dpg.get_item_user_data(sender)
-            if user_data:
-                dpg.configure_item(sender, texture_tag=user_data['textures']['active'])
-        except:
+            data = dpg.get_item_user_data(sender)
+            if data:
+                dpg.configure_item(sender, texture_tag=data['textures']['active'])
+                # Move button down-right to simulate depression (offset 2px)
+                dpg.configure_item(sender, pos=(2, 2))
+        except Exception:
             pass
 
-    def _on_deactivate(self, sender):
-        """Handle release state."""
+    def _on_deactivate(self, sender, app_data, user_data):
+        """Handle mouse release - return to appropriate state."""
         try:
-            user_data = dpg.get_item_user_data(sender)
-            if user_data:
-                if dpg.is_item_hovered(sender):
-                    dpg.configure_item(sender, texture_tag=user_data['textures']['hover'])
-                else:
-                    dpg.configure_item(sender, texture_tag=user_data['textures']['normal'])
-        except:
+            data = dpg.get_item_user_data(sender)
+            if not data:
+                return
+            # Restore position first
+            dpg.configure_item(sender, pos=data['original_pos'])
+            # Check if still hovered to determine which texture to show
+            if dpg.is_item_hovered(sender):
+                dpg.configure_item(sender, texture_tag=data['textures']['hover'])
+            else:
+                dpg.configure_item(sender, texture_tag=data['textures']['normal'])
+        except Exception:
             pass
 
 
