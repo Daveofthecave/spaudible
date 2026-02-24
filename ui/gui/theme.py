@@ -459,17 +459,25 @@ class GradientButtonFactory:
                 dpg.add_static_texture(width, height, shadow_data, tag=shadow_tag)
             self._texture_cache[shadow_tag] = shadow_tag
         
-        # Use a simple group instead of child_window to avoid event interception
-        container_kwargs = {}
+        # Use child_window to establish local coordinate system for proper positioning
+        container_kwargs = {
+            'width': width + 3,
+            'height': height + 3,
+            'border': False,
+            'no_scrollbar': True,
+            'no_scroll_with_mouse': True,
+            'autosize_x': False,
+            'autosize_y': False,
+        }
         if parent is not None:
             container_kwargs['parent'] = parent
         
-        container = dpg.add_group(**container_kwargs)
+        container = dpg.add_child_window(**container_kwargs)
         
-        # Add shadow first (behind)
+        # Add shadow first (behind), positioned at offset (3, 3)
         dpg.add_image(shadow_tag, width=width, height=height, pos=(3, 3), parent=container)
         
-        # Create the button
+        # Create the button at (0, 0) relative to the container
         btn = dpg.add_image_button(
             texture_tag=tex_normal,
             width=width,
