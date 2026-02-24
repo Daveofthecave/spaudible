@@ -248,6 +248,8 @@ class GradientButtonFactory:
     def __init__(self):
         self._texture_cache = {}
         self._font_path = Path(__file__).parent.parent.parent / "data" / "fonts" / "OpenSans-Regular.ttf"
+        self._debug_mode = True
+        self._button_states = {}
 
     def _generate_embossed_gradient(self, width: int, height: int, top_color: Tuple[int, int, int], 
                                     bottom_color: Tuple[int, int, int], label: str = "", 
@@ -360,14 +362,62 @@ class GradientButtonFactory:
         self._texture_cache[cache_key] = tag
         return tag
 
+    def update_all_buttons(self):
+        """Update all tracked buttons each frame based on their current state.
+        
+        This should be called once per frame in the main render loop.
+        """
+        try:
+            for btn_id, state in list(self._button_states.items()):
+                if not dpg.does_item_exist(btn_id):
+                    # Button was deleted, remove from tracking
+                    del self._button_states[btn_id]
+                    continue
+                
+                label = state.get('label', 'Unknown')
+                is_hovered = dpg.is_item_hovered(btn_id)
+                is_active = dpg.is_item_active(btn_id)
+                
+                # Determine desired state
+                if is_active:
+                    desired_state = 'active'
+                elif is_hovered:
+                    desired_state = 'hover'
+                else:
+                    desired_state = 'normal'
+                
+                # Only update if state changed
+                if state['current_state'] != desired_state:
+                    old_state = state['current_state']
+                    state['current_state'] = desired_state
+                    
+                    if self._debug_mode:
+                        print(f"[UPDATE] Button '{label}' (id={btn_id}): {old_state} -> {desired_state}")
+                    
+                    if desired_state == 'active':
+                        dpg.configure_item(btn_id, texture_tag=state['textures']['active'])
+                        dpg.configure_item(btn_id, pos=(2, 2))
+                    elif desired_state == 'hover':
+                        dpg.configure_item(btn_id, texture_tag=state['textures']['hover'])
+                        dpg.configure_item(btn_id, pos=state['original_pos'])
+                    else:  # normal
+                        dpg.configure_item(btn_id, texture_tag=state['textures']['normal'])
+                        dpg.configure_item(btn_id, pos=state['original_pos'])
+                        
+        except Exception as e:
+            if self._debug_mode:
+                print(f"[UPDATE] Error: {e}")
+
     def create_button(self, label: str, callback=None, parent=None, width: int = 150, height: int = 40, tag: str = None, corner_radius: int = 8) -> int:
         """Create an embossed 3D button with proper layering, hover effects, and transparent background."""
-        # Ensure standard Python ints, not numpy types
         width = int(width)
         height = int(height)
         corner_radius = int(corner_radius)
         
-        # Color definitions for embossed effect
+        if self._debug_mode:
+            print(f"\n=== Creating Button: {label} ===")
+            print(f"Dimensions: {width}x{height}")
+        
         base = Colors.PRIMARY_DARK
         normal_top = tuple(min(255, int(c * 1.4)) for c in base)
         normal_bottom = tuple(max(0, int(c * 0.6)) for c in base)
@@ -376,7 +426,6 @@ class GradientButtonFactory:
         active_top = tuple(max(0, int(c * 0.7)) for c in base)
         active_bottom = tuple(min(255, int(c * 1.2)) for c in base)
         
-        # Generate unique tags
         import hashlib
         hash_base = hashlib.md5(f"{label}_{width}_{height}_{tag or ''}".encode()).hexdigest()[:8]
         tex_normal = f"btn_norm_{hash_base}"
@@ -384,12 +433,13 @@ class GradientButtonFactory:
         tex_active = f"btn_act_{hash_base}"
         shadow_tag = f"btn_shad_{hash_base}"
         
-        # Create textures
+        if self._debug_mode:
+            print(f"Texture tags: normal={tex_normal}")
+        
         self._get_or_create_texture(tex_normal, width, height, normal_top, normal_bottom, label, corner_radius)
         self._get_or_create_texture(tex_hover, width, height, hover_top, hover_bottom, label, corner_radius)
         self._get_or_create_texture(tex_active, width, height, active_top, active_bottom, label, corner_radius)
         
-        # Create shadow texture
         if shadow_tag not in self._texture_cache:
             shadow_data = [20/255.0, 25/255.0, 22/255.0, 0.5] * (width * height)
             try:
@@ -409,32 +459,17 @@ class GradientButtonFactory:
                 dpg.add_static_texture(width, height, shadow_data, tag=shadow_tag)
             self._texture_cache[shadow_tag] = shadow_tag
         
-        # Create container as child_window to establish local coordinate system
-        # This allows pos=(0,0) to be relative to this container, not the main window
-        container_kwargs = {
-            'width': width + 3,  # Extra space for shadow offset
-            'height': height + 3,
-            'border': False,
-            'no_scrollbar': True,
-            'no_scroll_with_mouse': True,
-            'autosize_x': False,
-            'autosize_y': False,
-        }
+        # Use a simple group instead of child_window to avoid event interception
+        container_kwargs = {}
         if parent is not None:
             container_kwargs['parent'] = parent
         
-        container = dpg.add_child_window(**container_kwargs)
+        container = dpg.add_group(**container_kwargs)
         
-        # Add shadow first (behind), positioned at offset (3, 3) relative to container
-        dpg.add_image(
-            shadow_tag,
-            width=width,
-            height=height,
-            pos=(3, 3),
-            parent=container
-        )
+        # Add shadow first (behind)
+        dpg.add_image(shadow_tag, width=width, height=height, pos=(3, 3), parent=container)
         
-        # Create the actual button (image_button) at (0, 0), overlaying the shadow
+        # Create the button
         btn = dpg.add_image_button(
             texture_tag=tex_normal,
             width=width,
@@ -450,17 +485,22 @@ class GradientButtonFactory:
         if tag:
             dpg.configure_item(btn, tag=tag)
         
-        # Store texture references and original position
-        dpg.set_item_user_data(btn, {
+        if self._debug_mode:
+            print(f"Button created: {btn}")
+        
+        # Store button state
+        self._button_states[btn] = {
             'textures': {
                 'normal': tex_normal,
                 'hover': tex_hover,
                 'active': tex_active
             },
-            'original_pos': (0, 0)
-        })
+            'original_pos': (0, 0),
+            'label': label,
+            'current_state': 'normal'
+        }
         
-        # Create transparent theme for this button to eliminate green background
+        # Transparent theme for the button
         with dpg.theme() as transparent_btn_theme:
             with dpg.theme_component(dpg.mvImageButton):
                 dpg.add_theme_color(dpg.mvThemeCol_Button, (0, 0, 0, 0))
@@ -469,55 +509,10 @@ class GradientButtonFactory:
                 dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 0)
         dpg.bind_item_theme(btn, transparent_btn_theme)
         
-        # Bind interaction handlers
-        with dpg.item_handler_registry() as handler:
-            dpg.add_item_hover_handler(callback=lambda s, a, u: self._on_hover(s, a, u))
-            dpg.add_item_active_handler(callback=lambda s, a, u: self._on_active(s, a, u))
-            dpg.add_item_deactivated_handler(callback=lambda s, a, u: self._on_deactivate(s, a, u))
-        dpg.bind_item_handler_registry(btn, handler)
+        if self._debug_mode:
+            print(f"=== Button creation complete ===\n")
         
         return btn
-
-    def _on_hover(self, sender, app_data, user_data):
-        """Handle hover enter/leave with texture swapping."""
-        try:
-            data = dpg.get_item_user_data(sender)
-            if not data:
-                return
-            if dpg.is_item_hovered(sender):
-                dpg.configure_item(sender, texture_tag=data['textures']['hover'])
-            else:
-                # Mouse left the button - return to normal
-                dpg.configure_item(sender, texture_tag=data['textures']['normal'])
-        except Exception:
-            pass
-
-    def _on_active(self, sender, app_data, user_data):
-        """Handle mouse press (button down) - show pressed state."""
-        try:
-            data = dpg.get_item_user_data(sender)
-            if data:
-                dpg.configure_item(sender, texture_tag=data['textures']['active'])
-                # Move button down-right to simulate depression (offset 2px)
-                dpg.configure_item(sender, pos=(2, 2))
-        except Exception:
-            pass
-
-    def _on_deactivate(self, sender, app_data, user_data):
-        """Handle mouse release - return to appropriate state."""
-        try:
-            data = dpg.get_item_user_data(sender)
-            if not data:
-                return
-            # Restore position first
-            dpg.configure_item(sender, pos=data['original_pos'])
-            # Check if still hovered to determine which texture to show
-            if dpg.is_item_hovered(sender):
-                dpg.configure_item(sender, texture_tag=data['textures']['hover'])
-            else:
-                dpg.configure_item(sender, texture_tag=data['textures']['normal'])
-        except Exception:
-            pass
 
 
 # Global factory

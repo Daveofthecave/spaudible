@@ -5,7 +5,7 @@ import platform
 from pathlib import Path
 from typing import Optional, Union
 from ui.gui.state_manager import gui_state_manager
-from ui.gui.theme import initialize_theme, add_gradient_button, Colors
+from ui.gui.theme import initialize_theme, add_gradient_button, Colors, _gradient_factory
 from core.utilities.setup_validator import is_setup_complete
 
 class MainWindow:
@@ -404,11 +404,9 @@ class MainWindow:
         """Run the Dear PyGui render loop."""
         print("DEBUG: Entering render loop...")
         
-        # Track geometry for save-on-exit
         last_save_time = 0
-        save_interval = 5.0  # Save geometry every 5 seconds if changed
+        save_interval = 5.0
         
-        # Store initial geometry to detect changes
         prev_pos = dpg.get_viewport_pos()
         prev_size = [dpg.get_viewport_width(), dpg.get_viewport_height()]
         
@@ -419,6 +417,9 @@ class MainWindow:
             if self.theme:
                 self.theme.update_background()
             
+            # Update gradient button states each frame
+            _gradient_factory.update_all_buttons()
+            
             # Periodic geometry save
             import time
             current_time = time.time()
@@ -426,7 +427,6 @@ class MainWindow:
                 current_pos = dpg.get_viewport_pos()
                 current_size = [dpg.get_viewport_width(), dpg.get_viewport_height()]
                 
-                # Only save if actually changed
                 if (current_pos != prev_pos or current_size != prev_size):
                     self._save_window_geometry()
                     prev_pos = current_pos
