@@ -136,7 +136,6 @@ class SpaudibleTheme:
             with dpg.theme_component(dpg.mvAll):
                 
                 # --- Window & Container Backgrounds ---
-                # Use middle color as fallback
                 dpg.add_theme_color(dpg.mvThemeCol_WindowBg, Colors.BG_MIDDLE)
                 dpg.add_theme_color(dpg.mvThemeCol_ChildBg, (2, 30, 35, 0))
                 dpg.add_theme_color(dpg.mvThemeCol_PopupBg, (*Colors.BG_BOTTOM_LEFT, 250))
@@ -148,11 +147,10 @@ class SpaudibleTheme:
                 dpg.add_theme_color(dpg.mvThemeCol_TextDisabled, Colors.TEXT_MUTED)
                 dpg.add_theme_color(dpg.mvThemeCol_TextSelectedBg, (*Colors.PRIMARY_DARK, 180))
                 
-                # --- Buttons (Semi-3D Dark Green) ---
+                # --- Buttons ---
                 dpg.add_theme_color(dpg.mvThemeCol_Button, Colors.PRIMARY_DARK)
                 dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, Colors.PRIMARY_HOVER)
                 dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, Colors.PRIMARY_ACTIVE)
-                # Border creates the 3D edge effect
                 dpg.add_theme_color(dpg.mvThemeCol_Border, Colors.BORDER_MID)
                 dpg.add_theme_color(dpg.mvThemeCol_BorderShadow, Colors.BORDER_SHADOW)
                 
@@ -167,7 +165,7 @@ class SpaudibleTheme:
                 dpg.add_theme_color(dpg.mvThemeCol_HeaderHovered, Colors.PRIMARY_HOVER)
                 dpg.add_theme_color(dpg.mvThemeCol_HeaderActive, Colors.PRIMARY_ACTIVE)
                 
-                # --- Tabs (for collapsible settings) ---
+                # --- Tabs ---
                 dpg.add_theme_color(dpg.mvThemeCol_Tab, Colors.BG_ELEMENT)
                 dpg.add_theme_color(dpg.mvThemeCol_TabHovered, Colors.PRIMARY_HOVER)
                 dpg.add_theme_color(dpg.mvThemeCol_TabActive, Colors.PRIMARY_DARK)
@@ -182,7 +180,7 @@ class SpaudibleTheme:
                 dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrabHovered, Colors.PRIMARY_HOVER)
                 dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrabActive, Colors.ACCENT_CYAN)
                 
-                # --- Checkboxes & Radio Buttons ---
+                # --- Checkboxes ---
                 dpg.add_theme_color(dpg.mvThemeCol_CheckMark, Colors.ACCENT_CYAN)
                 
                 # --- Progress Bar & Plot ---
@@ -209,9 +207,9 @@ class SpaudibleTheme:
                 dpg.add_theme_style(dpg.mvStyleVar_GrabRounding, 6)
                 dpg.add_theme_style(dpg.mvStyleVar_TabRounding, 6)
                 
-                # --- Borders (The 3D effect) ---
-                dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 3)  # Border for element depth
-                dpg.add_theme_style(dpg.mvStyleVar_WindowBorderSize, 0)  # Clean window edges
+                # --- Borders ---
+                dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 3)
+                dpg.add_theme_style(dpg.mvStyleVar_WindowBorderSize, 0)
                 dpg.add_theme_style(dpg.mvStyleVar_PopupBorderSize, 1)
                 
                 # --- Spacing & Padding ---
@@ -219,8 +217,7 @@ class SpaudibleTheme:
                 dpg.add_theme_style(dpg.mvStyleVar_WindowPadding, 12, 12)
                 dpg.add_theme_style(dpg.mvStyleVar_ItemSpacing, 8, 6)
                 dpg.add_theme_style(dpg.mvStyleVar_ItemInnerSpacing, 6, 4)
-                dpg.add_theme_style(dpg.mvStyleVar_ButtonTextAlign, 0.5, 0.5)  # Centered
-                # dpg.mvstylevar_border
+                dpg.add_theme_style(dpg.mvStyleVar_ButtonTextAlign, 0.5, 0.5)
                 
     def _create_shadow_theme(self):
         """Theme for shadow layers behind buttons (3D effect)."""
@@ -240,31 +237,27 @@ class SpaudibleTheme:
         """Call this in your render loop or resize handler."""
         self.bg_manager.update_size()
 
+
 # =============================================================================
 # CUSTOM BUTTONS
 # =============================================================================
 
 class GradientButtonFactory:
-    """ Creates photorealistic embossed buttons with S-curve gradients and proper 3D shading. """
+    """Creates photorealistic embossed buttons with S-curve gradients and proper 3D shading."""
     
     def __init__(self):
         self._texture_cache = {}
         self._font_path = Path(__file__).parent.parent.parent / "data" / "fonts" / "OpenSans-Regular.ttf"
 
-    def _smoothstep(self, t: np.ndarray, edge0: float = 0.0, edge1: float = 1.0) -> np.ndarray:
-        """Standard smoothstep for S-curve: 3t^2 - 2t^3"""
-        t = np.clip((t - edge0) / (edge1 - edge0 + 1e-7), 0.0, 1.0)
-        return t * t * (3.0 - 2.0 * t)
-
-    def _generate_embossed_gradient(self, width: int, height: int, top_color: Tuple[int, int, int], bottom_color: Tuple[int, int, int], label: str = "", corner_radius: int = 8) -> List[float]:
+    def _generate_embossed_gradient(self, width: int, height: int, top_color: Tuple[int, int, int], 
+                                    bottom_color: Tuple[int, int, int], label: str = "", 
+                                    corner_radius: int = 8) -> List[float]:
         """Generate vertical gradient with plastic emboss luminance distribution."""
-        # Ensure Python ints for PIL
         width = int(width)
         height = int(height)
         corner_radius = int(corner_radius)
         
-        # Create coordinate grid: y=0 is top, y=height-1 is bottom
-        # y_normalized goes from 1.0 (top) to 0.0 (bottom)
+        # Create coordinate grid
         y_normalized = np.linspace(1.0, 0.0, height)[:, np.newaxis]
         
         # Piecewise plastic emboss curve based on your luminance specification:
@@ -306,8 +299,7 @@ class GradientButtonFactory:
         
         gradient[:, :, 3] = 1.0
         
-        # Apply rounded corners via alpha mask...
-        # (rest of the method remains unchanged)
+        # Apply rounded corners via alpha mask
         if corner_radius > 0:
             try:
                 from PIL import Image, ImageDraw
@@ -319,7 +311,7 @@ class GradientButtonFactory:
             except ImportError:
                 pass
         
-        # Render text if PIL available...
+        # Render text if PIL available
         if label and self._font_path.exists():
             try:
                 from PIL import Image, ImageDraw, ImageFont
@@ -338,9 +330,7 @@ class GradientButtonFactory:
                 x = (width - text_w) // 2
                 y = (height - text_h) // 2 - 1
                 
-                # Text shadow
                 draw.text((x+1, y+1), label, font=font, fill=(0, 0, 0, 160))
-                # Text
                 draw.text((x, y), label, font=font, fill=(255, 255, 255, 255))
                 
                 gradient = np.array(img).astype(np.float32) / 255.0
@@ -354,7 +344,6 @@ class GradientButtonFactory:
                               bottom_color: Tuple[int, int, int], 
                               label: str = "", corner_radius: int = 8) -> str:
         """Cache textures to avoid regeneration."""
-        # Ensure standard Python ints for DPG
         width = int(width)
         height = int(height)
         corner_radius = int(corner_radius)
@@ -374,9 +363,8 @@ class GradientButtonFactory:
     def create_button(self, label: str, callback=None, parent=None, width: int = 150, 
                      height: int = 40, tag: str = None, corner_radius: int = 8) -> int:
         """
-        Create an embossed 3D button with proper parent hierarchy.
+        Create an embossed 3D button.
         """
-        # CRITICAL: Ensure standard Python ints, not numpy types
         width = int(width)
         height = int(height)
         corner_radius = int(corner_radius)
@@ -384,26 +372,21 @@ class GradientButtonFactory:
         # Color definitions for embossed effect
         base = Colors.PRIMARY_DARK
         
-        # Normal: Light from above (top lighter, bottom darker)
         normal_top = tuple(min(255, int(c * 1.4)) for c in base)
         normal_bottom = tuple(max(0, int(c * 0.6)) for c in base)
-        
-        # Hover: Brighter version
         hover_top = tuple(min(255, int(c * 1.6)) for c in base)
         hover_bottom = tuple(max(0, int(c * 0.8)) for c in base)
-        
-        # Active (pressed): Inverted
         active_top = tuple(max(0, int(c * 0.7)) for c in base)
         active_bottom = tuple(min(255, int(c * 1.2)) for c in base)
         
-        # Generate unique tags
+        # Generate unique texture tags
         import hashlib
         hash_base = hashlib.md5(f"{label}_{width}_{height}".encode()).hexdigest()[:8]
         tex_normal = f"btn_norm_{hash_base}"
         tex_hover = f"btn_hov_{hash_base}"
         tex_active = f"btn_act_{hash_base}"
         
-        # Create textures
+        # Create textures (these go into texture registry, not parent)
         self._get_or_create_texture(tex_normal, width, height, normal_top, normal_bottom, label, corner_radius)
         self._get_or_create_texture(tex_hover, width, height, hover_top, hover_bottom, label, corner_radius)
         self._get_or_create_texture(tex_active, width, height, active_top, active_bottom, label, corner_radius)
@@ -411,10 +394,8 @@ class GradientButtonFactory:
         # Create shadow texture
         shadow_tag = f"shadow_{width}_{height}_{corner_radius}"
         if shadow_tag not in self._texture_cache:
-            # Create shadow data
             shadow_data = [20/255.0, 25/255.0, 22/255.0, 0.6] * (width * height)
             
-            # Apply rounded corners to shadow
             try:
                 from PIL import Image, ImageDraw
                 mask = Image.new('L', (width, height), 0)
@@ -422,7 +403,6 @@ class GradientButtonFactory:
                 draw.rounded_rectangle((0, 0, width-1, height-1), radius=corner_radius, fill=153)
                 mask_arr = np.array(mask).astype(np.float32) / 255.0
                 
-                # Replace alpha in shadow_data
                 for i in range(height):
                     for j in range(width):
                         idx = (i * width + j) * 4 + 3
@@ -435,32 +415,53 @@ class GradientButtonFactory:
                 dpg.add_static_texture(width, height, shadow_data, tag=shadow_tag)
             self._texture_cache[shadow_tag] = shadow_tag
         
-        # Build UI with explicit parent handling
-        # If parent is None, DPG uses current context stack
-        group_kwargs = {'horizontal': False}
+        # Build kwargs for parent - only include if not None
+        # REMOVED pos=(3, 3) - this was causing all buttons to stack at same position!
+        image_kwargs = {
+            'width': width,
+            'height': height
+        }
         if parent is not None:
-            group_kwargs['parent'] = parent
+            image_kwargs['parent'] = parent
         
-        # Create container group
-        container = dpg.add_group(**group_kwargs)
+        # Add shadow image (NOT to texture registry) - flows naturally in layout
+        dpg.add_image(shadow_tag, **image_kwargs)
         
-        # Add shadow (offset)
-        dpg.add_image(shadow_tag, width=width, height=height, pos=(3, 3), parent=container)
+        # Create wrapper callback that handles hover/active state
+        def wrapper_callback(sender, app_data, user_data):
+            # On click/release, reset to appropriate state
+            data = dpg.get_item_user_data(sender)
+            if data:
+                if dpg.is_item_hovered(sender):
+                    dpg.configure_item(sender, texture_tag=data['textures']['hover'])
+                else:
+                    dpg.configure_item(sender, texture_tag=data['textures']['normal'])
+            # Call the actual callback (pass sender only if it expects an argument)
+            if callback:
+                try:
+                    callback(sender)
+                except TypeError:
+                    # If callback doesn't take any arguments, call without args
+                    callback()
         
-        # Add main button
+        # Build kwargs for image button
         btn_kwargs = {
             'texture_tag': tex_normal,
             'width': width,
             'height': height,
-            'callback': callback,
+            'callback': wrapper_callback,
             'frame_padding': 0,
             'background_color': (0, 0, 0, 0),
-            'parent': container
+            'tint_color': (255, 255, 255, 255)
         }
-        if tag:
-            btn_kwargs['tag'] = tag
+        if parent is not None:
+            btn_kwargs['parent'] = parent
         
+        # Add main button image
         btn = dpg.add_image_button(**btn_kwargs)
+        
+        if tag:
+            dpg.configure_item(btn, tag=tag)
         
         # Store state data
         dpg.set_item_user_data(btn, {
@@ -472,13 +473,6 @@ class GradientButtonFactory:
             'original_pos': (0, 0)
         })
         
-        # Bind interaction handlers
-        with dpg.item_handler_registry() as handler:
-            dpg.add_item_hover_handler(callback=lambda s, a, u: self._on_hover(s))
-            dpg.add_item_active_handler(callback=lambda s, a, u: self._on_active(s))
-            dpg.add_item_deactivated_handler(callback=lambda s, a, u: self._on_deactivate(s))
-            dpg.bind_item_handler_registry(btn, handler)
-        
         return btn
 
     def _on_hover(self, sender):
@@ -487,6 +481,10 @@ class GradientButtonFactory:
             user_data = dpg.get_item_user_data(sender)
             if user_data and dpg.is_item_hovered(sender):
                 dpg.configure_item(sender, texture_tag=user_data['textures']['hover'])
+            else:
+                user_data = dpg.get_item_user_data(sender)
+                if user_data:
+                    dpg.configure_item(sender, texture_tag=user_data['textures']['normal'])
         except:
             pass
 
@@ -496,7 +494,6 @@ class GradientButtonFactory:
             user_data = dpg.get_item_user_data(sender)
             if user_data:
                 dpg.configure_item(sender, texture_tag=user_data['textures']['active'])
-                dpg.configure_item(sender, pos=(1, 1))
         except:
             pass
 
@@ -505,8 +502,10 @@ class GradientButtonFactory:
         try:
             user_data = dpg.get_item_user_data(sender)
             if user_data:
-                dpg.configure_item(sender, texture_tag=user_data['textures']['normal'])
-                dpg.configure_item(sender, pos=user_data['original_pos'])
+                if dpg.is_item_hovered(sender):
+                    dpg.configure_item(sender, texture_tag=user_data['textures']['hover'])
+                else:
+                    dpg.configure_item(sender, texture_tag=user_data['textures']['normal'])
         except:
             pass
 
@@ -531,13 +530,12 @@ def add_gradient_button(label: str, callback=None, parent=None, width: int = 150
     Returns:
         Integer tag of the created button
     """
-    # Filter out any problematic kwargs
     return _gradient_factory.create_button(
         label=label,
         callback=callback,
         parent=parent,
-        width=int(width),    # Ensure Python int
-        height=int(height),  # Ensure Python int
+        width=int(width),
+        height=int(height),
         tag=tag
     )
 
@@ -569,12 +567,8 @@ def add_collapsible_section(label: str, parent=None, default_open: bool = True):
 # =============================================================================
 
 def add_3d_button(label: str, callback=None, parent=None, width: int = 150, height: int = 34, **kwargs) -> int:
-    """
-    Create a button with semi-3D depth effect using offset shadow layer.
-    Returns the main button ID (the clickable one).
-    """
+    """Create a button with semi-3D depth effect using offset shadow layer."""
     with dpg.group(horizontal=False, parent=parent):
-        # Shadow layer (offset 2px down/right, darker)
         shadow = dpg.add_button(
             label="",
             width=width,
@@ -584,7 +578,6 @@ def add_3d_button(label: str, callback=None, parent=None, width: int = 150, heig
         )
         dpg.bind_item_theme(shadow, "spaudible_shadow_theme")
         
-        # Main button (offset to top-left, overlapping shadow)
         btn = dpg.add_button(
             label=label,
             width=width,
@@ -592,38 +585,8 @@ def add_3d_button(label: str, callback=None, parent=None, width: int = 150, heig
             callback=callback,
             **kwargs
         )
-        # Theme is automatically applied via global theme
     
     return btn
-
-def add_styled_slider(label: str, default_value: float = 1.0, 
-                     min_value: float = 0.0, max_value: float = 10.0,
-                     parent=None, **kwargs) -> int:
-    """Create a slider with Spaudible styling."""
-    slider = dpg.add_slider_float(
-        label=label,
-        default_value=default_value,
-        min_value=min_value,
-        max_value=max_value,
-        parent=parent,
-        width=200,
-        **kwargs
-    )
-    return slider
-
-def add_collapsible_section(label: str, parent=None, default_open: bool = True):
-    """
-    Helper to create a tree node (collapsible section) with proper styling.
-    Returns the tree node tag.
-    """
-    return dpg.add_tree_node(
-        label=label,
-        parent=parent,
-        default_open=default_open,
-        bullet=False,
-        span_full_width=True
-    )
-
 
 # =============================================================================
 # INITIALIZATION
