@@ -257,9 +257,29 @@ class GradientButtonFactory:
         self.SIZE_LARGE = (200, 32)
         self.SIZE_XLARGE = (300, 40)
 
+    def _create_rounded_mask(self, width: int, height: int, corner_radius: int) -> np.ndarray:
+        """Create a rounded corner alpha mask using proper ellipse drawing."""
+        from PIL import Image, ImageDraw
+        
+        mask = Image.new('L', (width, height), 0)
+        draw = ImageDraw.Draw(mask)
+        
+        # For very large radii, just draw a filled ellipse (capsule shape)
+        max_radius = min(width, height) // 2
+        radius = min(corner_radius, max_radius)
+        
+        if radius >= max_radius:
+            # Full capsule/ellipse shape
+            draw.ellipse((0, 0, width-1, height-1), fill=255)
+        else:
+            # Normal rounded rectangle
+            draw.rounded_rectangle((0, 0, width-1, height-1), radius=radius, fill=255)
+        
+        return np.array(mask).astype(np.float32) / 255.0
+
     def _generate_embossed_gradient(self, width: int, height: int, top_color: Tuple[int, int, int], 
                                     bottom_color: Tuple[int, int, int], label: str = "", 
-                                    corner_radius: int = 8) -> List[float]:
+                                    corner_radius: int = 12) -> List[float]:
         """Generate vertical gradient with plastic emboss luminance distribution."""
         width = int(width)
         height = int(height)
@@ -310,11 +330,7 @@ class GradientButtonFactory:
         # Apply rounded corners via alpha mask
         if corner_radius > 0:
             try:
-                from PIL import Image, ImageDraw
-                mask = Image.new('L', (width, height), 0)
-                draw = ImageDraw.Draw(mask)
-                draw.rounded_rectangle((0, 0, width-1, height-1), radius=corner_radius, fill=255)
-                mask_arr = np.array(mask).astype(np.float32) / 255.0
+                mask_arr = self._create_rounded_mask(width, height, corner_radius)
                 gradient[:, :, 3] *= mask_arr
             except ImportError:
                 pass
@@ -349,8 +365,7 @@ class GradientButtonFactory:
                 # We want the text's visual center at button center
                 # text_center = baseline + bbox[1] + text_h/2
                 # For consistent centering, use font's total height instead of per-text bbox
-                nudge = height * 0.00  # Nudge text down slightly for optical centering (was 0.03)
-                y = (height - total_font_height) // 2 + nudge
+                y = (height - total_font_height) // 2
                 
                 draw.text((x+1, y+1), label, font=font, fill=(0, 0, 0, 160))
                 draw.text((x, y), label, font=font, fill=(255, 255, 255, 255))
@@ -365,7 +380,7 @@ class GradientButtonFactory:
     def _get_or_create_texture(self, tag: str, width: int, height: int, 
                               top_color: Tuple[int, int, int], 
                               bottom_color: Tuple[int, int, int], 
-                              label: str = "", corner_radius: int = 8) -> str:
+                              label: str = "", corner_radius: int = 12) -> str:
         """Cache textures to avoid regeneration."""
         width = int(width)
         height = int(height)
@@ -429,8 +444,22 @@ class GradientButtonFactory:
             if self._debug_mode:
                 print(f"[UPDATE] Error: {e}")
 
-    def create_button(self, label: str, callback=None, parent=None, width: int = 150, height: int = 40, tag: str = None, corner_radius: int = 8) -> int:
-        """Create an embossed 3D button with proper layering, hover effects, and transparent background."""
+    def create_button(self, label: str, callback=None, parent=None, width: int = 150, height: int = 40, 
+                      tag: str = None, corner_radius: int = 12) -> int:
+        """Create an embossed 3D button with proper layering, hover effects, and transparent background.
+        
+        Args:
+            label: Button text
+            callback: Click callback function
+            parent: Parent container (tag or int)
+            width: Button width in pixels
+            height: Button height in pixels
+            tag: Optional unique tag for the button
+            corner_radius: Corner radius for rounded edges (default 12)
+            
+        Returns:
+            Integer tag of the created button
+        """
         width = int(width)
         height = int(height)
         corner_radius = int(corner_radius)
@@ -438,6 +467,7 @@ class GradientButtonFactory:
         if self._debug_mode:
             print(f"\n=== Creating Button: {label} ===")
             print(f"Dimensions: {width}x{height}")
+            print(f"Corner radius: {corner_radius}")
         
         # Color definitions for embossed effect
         base = Colors.PRIMARY_DARK
@@ -466,13 +496,9 @@ class GradientButtonFactory:
         
         # Create shadow texture
         if shadow_tag not in self._texture_cache:
-            shadow_data = [20/255.0, 25/255.0, 22/255.0, 0.5] * (width * height)
+            shadow_data = [27/255.0, 32/255.0, 29/255.0, 0.5] * (width * height)
             try:
-                from PIL import Image, ImageDraw
-                mask = Image.new('L', (width, height), 0)
-                draw = ImageDraw.Draw(mask)
-                draw.rounded_rectangle((0, 0, width-1, height-1), radius=corner_radius, fill=128)
-                mask_arr = np.array(mask).astype(np.float32) / 255.0
+                mask_arr = self._create_rounded_mask(width, height, corner_radius)
                 for i in range(height):
                     for j in range(width):
                         idx = (i * width + j) * 4 + 3
@@ -552,19 +578,19 @@ class GradientButtonFactory:
 
     def create_small(self, label: str, callback=None, parent=None, tag: str = None) -> int:
         """Create a small button (80x24px)."""
-        return self.create_button(label, callback, parent, self.SIZE_SMALL[0], self.SIZE_SMALL[1], tag)
+        return self.create_button(label, callback, parent, self.SIZE_SMALL[0], self.SIZE_SMALL[1], tag, corner_radius=8)
 
     def create_medium(self, label: str, callback=None, parent=None, tag: str = None) -> int:
         """Create a medium button (150x24px)."""
-        return self.create_button(label, callback, parent, self.SIZE_MEDIUM[0], self.SIZE_MEDIUM[1], tag)
+        return self.create_button(label, callback, parent, self.SIZE_MEDIUM[0], self.SIZE_MEDIUM[1], tag, corner_radius=10)
 
     def create_large(self, label: str, callback=None, parent=None, tag: str = None) -> int:
         """Create a large button (200x32px)."""
-        return self.create_button(label, callback, parent, self.SIZE_LARGE[0], self.SIZE_LARGE[1], tag)
+        return self.create_button(label, callback, parent, self.SIZE_LARGE[0], self.SIZE_LARGE[1], tag, corner_radius=12)
 
     def create_xlarge(self, label: str, callback=None, parent=None, tag: str = None) -> int:
         """Create an extra-large button (300x40px)."""
-        return self.create_button(label, callback, parent, self.SIZE_XLARGE[0], self.SIZE_XLARGE[1], tag)
+        return self.create_button(label, callback, parent, self.SIZE_XLARGE[0], self.SIZE_XLARGE[1], tag, corner_radius=16)
 
     def cleanup(self):
         """Clear all tracked buttons. Call when rebuilding UI to prevent memory leaks."""
@@ -575,7 +601,7 @@ class GradientButtonFactory:
 _gradient_factory = GradientButtonFactory()
 
 def add_gradient_button(label: str, callback=None, parent=None, width: int = 150, 
-                       height: int = 40, tag: str = None, **kwargs) -> int:
+                       height: int = 40, tag: str = None, corner_radius: int = 12, **kwargs) -> int:
     """
     Create a gradient button with embossed 3D appearance.
     
@@ -586,6 +612,7 @@ def add_gradient_button(label: str, callback=None, parent=None, width: int = 150
         width: Button width in pixels
         height: Button height in pixels
         tag: Optional unique tag for the button
+        corner_radius: Corner radius for rounded edges (default 12)
         **kwargs: Additional arguments (ignored for compatibility)
     
     Returns:
@@ -597,7 +624,8 @@ def add_gradient_button(label: str, callback=None, parent=None, width: int = 150
         parent=parent,
         width=int(width),
         height=int(height),
-        tag=tag
+        tag=tag,
+        corner_radius=corner_radius
     )
 
 def add_small_button(label: str, callback=None, parent=None, tag: str = None) -> int:
