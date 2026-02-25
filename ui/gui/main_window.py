@@ -390,15 +390,38 @@ class MainWindow:
         """Change DPI scale at runtime (requires restart)."""
         self.state_manager.set('dpi_scale', scale)
         
+        if dpg.does_item_exist("restart_dialog"):
+            dpg.delete_item("restart_dialog")
+        
+        # Get main window position and size
+        win_pos = dpg.get_item_pos(self.window_tag)
+        win_size = dpg.get_item_rect_size(self.window_tag)
+        
+        dialog_width = self._s(300)
+        dialog_height = self._s(100)
+        
+        # Center within the main window
+        center_x = int(win_pos[0] + (win_size[0] - dialog_width) // 2)
+        center_y = int(win_pos[1] + (win_size[1] - dialog_height) // 2)
+        
+        def close_restart_dialog():
+            if dpg.does_item_exist("restart_dialog"):
+                dpg.delete_item("restart_dialog")
+        
         with dpg.window(
+            tag="restart_dialog",
             label="Restart Required",
             modal=True,
-            width=self._s(300),
-            height=self._s(100),
+            width=dialog_width,
+            height=dialog_height,
+            pos=[center_x, center_y],
             no_resize=True
         ):
             dpg.add_text("UI scale will change on next restart.")
-            add_gradient_button(label="OK", callback=lambda: dpg.delete_item(dpg.last_container()))
+            add_gradient_button(
+                label="OK",
+                callback=close_restart_dialog
+            )
 
     def _main_loop(self):
         """Run the Dear PyGui render loop."""
@@ -534,26 +557,49 @@ class MainWindow:
         pass
     
     def _show_about(self, sender=None, app_data=None):
-        """Show about dialog."""
+        """Show about dialog centered on the main window."""
+        # Delete existing dialog if it exists
+        if dpg.does_item_exist("about_dialog"):
+            dpg.delete_item("about_dialog")
+        
+        # Get main window position and size (NOT viewport)
+        win_pos = dpg.get_item_pos(self.window_tag)
+        win_size = dpg.get_item_rect_size(self.window_tag)
+        
+        dialog_width = self._s(400)
+        dialog_height = self._s(300)
+        
+        # Center within the MAIN WINDOW, not the viewport
+        center_x = int(win_pos[0] + (win_size[0] - dialog_width) // 2)
+        center_y = int(win_pos[1] + (win_size[1] - dialog_height) // 2)
+        
+        # Debug output
+        print(f"DEBUG: win_pos={win_pos}, win_size={win_size}, dialog_center=[{center_x}, {center_y}]")
+        
         with dpg.window(
+            tag="about_dialog",
             label="About Spaudible",
             modal=True,
-            width=self._s(400),
-            height=self._s(300),
+            width=dialog_width,
+            height=dialog_height,
+            pos=[center_x, center_y],
             no_resize=True
         ):
-            # Add text with a tag so we can bind font to it
             dpg.add_text("Spaudible v0.3.0", tag="about_title")
             
-            # Apply header font if available
             if hasattr(self, 'header_font') and self.header_font:
                 dpg.bind_item_font("about_title", self.header_font)
             
             dpg.add_separator()
             dpg.add_text("By Daveofthecave")
+            
+            def close_about_dialog():
+                if dpg.does_item_exist("about_dialog"):
+                    dpg.delete_item("about_dialog")
+            
             add_gradient_button(
                 label="Close",
-                callback=lambda: dpg.delete_item(dpg.last_container())
+                callback=close_about_dialog
             )
     
     def _save_window_geometry(self):
