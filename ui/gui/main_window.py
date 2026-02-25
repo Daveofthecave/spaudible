@@ -203,13 +203,14 @@ class MainWindow:
             
             # Main horizontal layout
             with dpg.group(horizontal=True):
-                # Left sidebar - Settings (300px fixed width)
+                # Left sidebar - Settings (resizable horizontally)
                 with dpg.child_window(
                     tag=self.settings_panel_tag,
                     width=self._s(300),
                     border=True,
                     autosize_x=False,
-                    autosize_y=True
+                    autosize_y=True,
+                    resizable_x=True  # Enable horizontal resizing
                 ):
                     self._build_settings_panel()
                 
@@ -222,6 +223,22 @@ class MainWindow:
                 ):
                     self._build_search_panel()
                     self._build_results_panel()
+
+    def _on_main_window_resize(self, sender, app_data):
+        """Handle main window resize to keep right panel filling remaining space."""
+        if not dpg.does_item_exist(self.settings_panel_tag):
+            return
+        
+        # Get current panel widths
+        left_width = dpg.get_item_rect_size(self.settings_panel_tag)[0]
+        window_width = dpg.get_item_rect_size(self.window_tag)[0]
+        
+        # Calculate right panel width (window - left panel - borders)
+        # The borders take up a few pixels on each side
+        right_width = window_width - left_width - 2  # -2 for borders
+        
+        if right_width > 0:
+            dpg.configure_item(self.results_panel_tag, width=right_width)
 
     def _build_settings_panel(self):
         """Build the left sidebar with all settings controls."""
@@ -432,6 +449,7 @@ class MainWindow:
         
         prev_pos = dpg.get_viewport_pos()
         prev_size = [dpg.get_viewport_width(), dpg.get_viewport_height()]
+        prev_left_width = None
         
         while dpg.is_dearpygui_running():
             dpg.render_dearpygui_frame()
@@ -442,6 +460,19 @@ class MainWindow:
             
             # Update gradient button states each frame
             _gradient_factory.update_all_buttons()
+            
+            # Sync right panel when settings panel is resized by user
+            try:
+                if dpg.does_item_exist(self.settings_panel_tag):
+                    current_left_width = dpg.get_item_rect_size(self.settings_panel_tag)[0]
+                    if current_left_width != prev_left_width:
+                        window_width = dpg.get_item_rect_size(self.window_tag)[0]
+                        right_width = window_width - current_left_width - 2  # -2 for borders
+                        if right_width > 0:
+                            dpg.configure_item(self.results_panel_tag, width=right_width)
+                        prev_left_width = current_left_width
+            except Exception:
+                pass  # Handle any errors gracefully during render loop
             
             # Periodic geometry save
             import time
