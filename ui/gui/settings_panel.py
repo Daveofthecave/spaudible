@@ -1,36 +1,32 @@
 # ui/gui/settings_panel.py
 import dearpygui.dearpygui as dpg
-from typing import Callable, Optional
-from config import FRAME_WIDTH
+from ui.gui.theme import add_gradient_button
 from core.utilities.config_manager import config_manager
 from core.similarity_engine.orchestrator import SearchOrchestrator
-from ui.gui.theme import add_gradient_button, Colors
 
 class SettingsPanel:
     """Left sidebar containing all configuration controls."""
     
     def __init__(self, dpi_scale: float = 1.0):
-        self.dpi_scale = dpi_scale
+        self.dpi_scale = float(dpi_scale)
         self.tag = "settings_panel"
-        self._gradient_factory = None  # Will be set if needed
-        
+
     def _s(self, value) -> int:
         """Scale a pixel value by DPI scale factor."""
-        return int(value * self.dpi_scale)
-    
-    def build(self, parent: Optional[str] = None):
+        return int(float(value) * self.dpi_scale)
+
+    def build(self):
         """Build the left sidebar with all settings controls."""
         dpg.add_text("Settings", color=(100, 200, 255))
         dpg.add_separator()
         
-        # Show current scale indicator
         if self.dpi_scale != 1.0:
             dpg.add_text(f"Scaling: {self.dpi_scale}x", color=(150, 150, 150))
+        
         dpg.add_spacer(height=self._s(10))
         
-        # Mode selector (Auto/CPU/GPU)
+        # Mode selector
         dpg.add_text("Processing Mode")
-        # Get current mode for default value
         force_cpu = config_manager.get_force_cpu()
         force_gpu = config_manager.get_force_gpu()
         if force_cpu:
@@ -45,6 +41,7 @@ class SettingsPanel:
             default_value=current_mode,
             callback=self._on_mode_changed
         )
+        
         dpg.add_spacer(height=self._s(10))
         
         # Algorithm selector
@@ -56,6 +53,7 @@ class SettingsPanel:
             callback=self._on_algorithm_changed,
             width=self._s(200)
         )
+        
         dpg.add_spacer(height=self._s(10))
         
         # Deduplication toggle
@@ -65,6 +63,7 @@ class SettingsPanel:
             default_value=current_dedupe,
             callback=self._on_dedupe_changed
         )
+        
         dpg.add_spacer(height=self._s(10))
         
         # Region filter slider
@@ -77,6 +76,7 @@ class SettingsPanel:
             width=self._s(250),
             callback=self._on_region_changed
         )
+        
         dpg.add_spacer(height=self._s(10))
         
         # Number of results
@@ -89,6 +89,7 @@ class SettingsPanel:
             width=self._s(100),
             callback=self._on_topk_changed
         )
+        
         dpg.add_spacer(height=self._s(20))
         
         # Feature weights (collapsible)
@@ -102,10 +103,9 @@ class SettingsPanel:
             height=self._s(24),
             callback=self._reset_settings
         )
-    
+
     def _build_feature_weights(self):
-        """Build the 32 feature weight sliders."""
-        # Simplified version - full implementation would have all 32
+        """Build the feature weight sliders."""
         features = [
             "Acousticness", "Danceability", "Energy", "Valence", 
             "Tempo", "Popularity"
@@ -113,39 +113,32 @@ class SettingsPanel:
         current_weights = config_manager.get_weights()
         
         for i, feature in enumerate(features):
-            if i < len(current_weights):
-                default_val = current_weights[i]
-            else:
-                default_val = 1.0
-                
+            default_val = current_weights[i] if i < len(current_weights) else 1.0
             dpg.add_slider_float(
                 label=feature,
                 default_value=default_val,
                 min_value=0.0,
                 max_value=10.0,
                 width=self._s(220),
-                # Store feature index in user_data for callback
-                user_data=i
+                user_data=i,
+                callback=self._on_weight_changed
             )
-    
+
     def _on_mode_changed(self, sender, app_data):
         """Handle processing mode change."""
-        # Update config manager based on selection
         if app_data == "CPU Only":
             config_manager.set_force_cpu(True)
             config_manager.set_force_gpu(False)
         elif app_data == "GPU Only":
             config_manager.set_force_cpu(False)
             config_manager.set_force_gpu(True)
-        else:  # Auto
+        else:
             config_manager.set_force_cpu(False)
             config_manager.set_force_gpu(False)
-            # Clear benchmark cache when entering auto mode
-            SearchOrchestrator.clear_benchmark_cache()
-    
+        SearchOrchestrator.clear_benchmark_cache()
+
     def _on_algorithm_changed(self, sender, app_data):
         """Handle algorithm selection change."""
-        # Map display name to config key
         algo_map = {
             "Cosine-Euclidean": "cosine-euclidean",
             "Cosine": "cosine",
@@ -153,22 +146,28 @@ class SettingsPanel:
         }
         if app_data in algo_map:
             config_manager.set_algorithm(algo_map[app_data])
-    
+
     def _on_dedupe_changed(self, sender, app_data):
         """Handle deduplication toggle."""
         config_manager.set_deduplicate(bool(app_data))
-    
+
     def _on_region_changed(self, sender, app_data):
         """Handle region filter slider change."""
         config_manager.set_region_strength(float(app_data))
-    
+
     def _on_topk_changed(self, sender, app_data):
         """Handle number of results change."""
         config_manager.set_top_k(int(app_data))
-    
+
+    def _on_weight_changed(self, sender, app_data, user_data):
+        """Handle weight slider change."""
+        weights = config_manager.get_weights()
+        if user_data is not None and 0 <= user_data < len(weights):
+            weights[user_data] = float(app_data)
+            config_manager.set_weights(weights)
+
     def _reset_settings(self, sender=None, app_data=None):
         """Reset all settings to defaults."""
-        # Reset config manager to defaults
         config_manager.reset_weights()
         config_manager.set_force_cpu(False)
         config_manager.set_force_gpu(False)
@@ -176,4 +175,3 @@ class SettingsPanel:
         config_manager.set_deduplicate(True)
         config_manager.set_region_strength(1.0)
         config_manager.set_top_k(25)
-        # TODO: Refresh UI to reflect reset values
