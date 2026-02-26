@@ -3,6 +3,8 @@ import dearpygui.dearpygui as dpg
 import sys
 import platform
 import time
+import threading
+import numpy as np
 from pathlib import Path
 from typing import Optional, Union
 
@@ -11,8 +13,15 @@ from ui.gui.theme import initialize_theme, add_gradient_button, Colors, _gradien
 from ui.gui.settings_panel import SettingsPanel
 from ui.gui.search_panel import SearchPanel
 from ui.gui.results_view import ResultsView
-
 from core.utilities.setup_validator import is_setup_complete
+
+# Similarity search imports
+from core.utilities.text_search_utils import SearchResult
+from core.similarity_engine.orchestrator import SearchOrchestrator
+from core.vectorization.canonical_track_resolver import build_canonical_vector
+from config import PathConfig
+from core.utilities.config_manager import config_manager
+
 
 class MainWindow:
     """Main GUI window orchestrator for Spaudible."""
@@ -26,22 +35,30 @@ class MainWindow:
         self.settings_panel: Optional[SettingsPanel] = None
         self.search_panel: Optional[SearchPanel] = None
         self.results_view: Optional[ResultsView] = None
-        
         self._is_context_created = False
         self.theme = None  # SpaudibleTheme instance initialized in _initialize_dpg()
         
-        # Search worker reference (for threading)
-        self._search_worker = None
+        # Similarity search threading
+        self._similarity_thread: Optional[threading.Thread] = None
+        self._orchestrator: Optional[SearchOrchestrator] = None
+        self._cancel_event = threading.Event()
+        
+        # Thread-safe result marshalling
+        self._search_results = None
+        self._search_complete = False
+        self._search_error = None
+        self._search_error_flag = False
 
     def _get_dpi_scale(self) -> float:
         """Universal display scale detection using tkinter.
         
-        Since DPI reporting is inconsistent across platforms and displays, 
-        we use screen height as the primary heuristic for comfortable UI sizing.
+        Since DPI reporting is inconsistent across platforms and displays, we use 
+        screen height as the primary heuristic for comfortable UI sizing.
         """
         try:
             import tkinter as tk
             root = tk.Tk()
+            
             # Get physical screen dimensions (works everywhere tkinter works)
             screen_height = root.winfo_screenheight()
             # Alternative: root.winfo_screenmmheight() for physical mm, but pixels are more reliable
@@ -74,7 +91,6 @@ class MainWindow:
             
             # Round to nearest 0.25 to avoid rendering artifacts
             return round(max(0.5, scale) * 4) / 4
-            
         except Exception:
             return 1.0  # Safe fallback
 
@@ -84,8 +100,8 @@ class MainWindow:
 
     def run(self):
         """
-        Main entry point. Handles setup wizard vs main window logic, 
-        initializes DPG, and runs the event loop.
+        Main entry point. Handles setup wizard vs main window logic, initializes 
+        DPG, and runs the event loop.
         """
         try:
             # Check if setup is needed first
@@ -121,7 +137,11 @@ class MainWindow:
         
         # Initialize panels with scale
         self.settings_panel = SettingsPanel(self.dpi_scale)
-        self.search_panel = SearchPanel(self.dpi_scale, on_search=self._execute_search)
+        self.search_panel = SearchPanel(
+            self.dpi_scale,
+            on_suggestion_selected=self._on_suggestion_selected,
+            on_cancel=self._on_search_cancelled
+        )
         self.results_view = ResultsView(self.dpi_scale)
         
         # Load fonts at physical pixel size
@@ -251,43 +271,144 @@ class MainWindow:
         # Calculate right panel width (window - left panel - borders)
         # The borders take up a few pixels on each side
         right_width = window_width - left_width - 2  # -2 for borders
+        
         if right_width > 0:
             dpg.configure_item(self.results_view.tag, width=right_width)
 
-    def _execute_search(self, query: str):
-        """Execute similarity search based on query.
+    def _on_suggestion_selected(self, result: SearchResult):
+        """Handle user selecting a song from the suggestion list.
         
-        This is the bridge between SearchPanel and ResultsView.
-        TODO: Implement threading for actual search.
+        Starts the heavy similarity search in a background thread.
         """
-        print(f"DEBUG: Executing search for: {query}")
+        print(f"DEBUG: Selected track {result.track_id}: {result.track_name}")
         
-        # Show loading state
-        self.results_view.show_loading(f"Searching for '{query}'...")
+        # Transition UI to similarity search mode
+        self.search_panel.set_similarity_mode()
         
-        # TODO: Implement actual search logic with threading
-        # For now, just a stub
-        # This should:
-        # 1. Parse input type (track ID, URL, text, etc.)
-        # 2. Build canonical vector
-        # 3. Run SearchOrchestrator
-        # 4. Update results view
+        # Clear previous results and show loading
+        self.results_view.clear_results()
+        self.results_view.show_loading(f"Finding songs similar to {result.track_name}...")
         
-        # Example of what the real implementation would look like:
-        # self.results_view.update_results(results_list)
+        # Start similarity search in background thread
+        self._cancel_event.clear()
+        self._similarity_thread = threading.Thread(
+            target=self._run_similarity_search,
+            args=(result.track_id, result.track_name),
+            daemon=True
+        )
+        self._similarity_thread.start()
+
+    def _run_similarity_search(self, track_id: str, track_name: str):
+        """Run the heavy similarity search in a background thread.
+        
+        This performs the actual vector comparison against 256M tracks.
+        """
+        try:
+            # Build vector for the selected track
+            vector, track_data = build_canonical_vector(track_id)
+            
+            if vector is None or self._cancel_event.is_set():
+                return
+            
+            # Initialize orchestrator with current settings from config
+            use_gpu = not config_manager.get_force_cpu()
+            force_cpu = config_manager.get_force_cpu()
+            force_gpu = config_manager.get_force_gpu()
+            
+            self._orchestrator = SearchOrchestrator(
+                vectors_path=str(PathConfig.get_vector_file()),
+                index_path=str(PathConfig.get_index_file()),
+                metadata_db=str(PathConfig.get_main_db()),
+                use_gpu=use_gpu,
+                force_cpu=force_cpu,
+                force_gpu=force_gpu,
+                skip_benchmark=True  # Skip auto-benchmark for quicker response
+            )
+            
+            # Run the similarity search
+            results = self._orchestrator.search(
+                np.array(vector, dtype=np.float32),
+                top_k=config_manager.get_top_k(),
+                with_metadata=True,
+                deduplicate=config_manager.get_deduplicate(),
+                query_track_id=track_id,
+                region_strength=config_manager.get_region_strength()
+            )
+            
+            if not self._cancel_event.is_set():
+                # Signal completion to main thread via flags
+                self._search_results = results
+                self._search_complete = True
+                
+        except Exception as e:
+            print(f"Similarity search error: {e}")
+            import traceback
+            traceback.print_exc()
+            if not self._cancel_event.is_set():
+                self._search_error = str(e)
+                self._search_error_flag = True
+        finally:
+            if self._orchestrator:
+                try:
+                    self._orchestrator.close()
+                except Exception:
+                    pass
+                self._orchestrator = None
+
+    def _on_similarity_complete(self, results):
+        """Called on main thread when similarity search completes successfully."""
+        self.results_view.update_results(results)
+        self.search_panel.reset_to_idle()
+
+    def _on_similarity_error(self, error_msg: str):
+        """Called on main thread if similarity search fails."""
+        self.results_view.show_loading(f"Search failed: {error_msg}")
+        # Brief delay so user sees error before clearing
+        import time
+        time.sleep(0.1)
+        self.results_view.hide_loading()
+        self.search_panel.reset_to_idle()
+
+    def _on_search_cancelled(self):
+        """Handle user cancelling the search (from SearchPanel)."""
+        print("DEBUG: Search cancelled by user")
+        self._cancel_event.set()
+        
+        # Clean up orchestrator if running
+        if self._orchestrator:
+            try:
+                self._orchestrator.close()
+            except Exception:
+                pass
+            self._orchestrator = None
+        
+        # Clear results and reset UI
+        self.results_view.clear_results()
+        self.search_panel.reset_to_idle()
 
     def _main_loop(self):
         """Run the Dear PyGui render loop."""
         print("DEBUG: Entering render loop...")
         last_save_time = 0
         save_interval = 5.0
-        
         prev_pos = dpg.get_viewport_pos()
         prev_size = [dpg.get_viewport_width(), dpg.get_viewport_height()]
         prev_left_width = None
         
         while dpg.is_dearpygui_running():
             dpg.render_dearpygui_frame()
+            
+            # Check for completed search results from background thread
+            if self._search_complete:
+                self._on_similarity_complete(self._search_results)
+                self._search_complete = False
+                self._search_results = None
+            
+            # Check for search errors
+            if self._search_error_flag:
+                self._on_similarity_error(self._search_error)
+                self._search_error_flag = False
+                self._search_error = None
             
             # Update background size on viewport changes
             if self.theme:
@@ -310,7 +431,6 @@ class MainWindow:
                 pass  # Handle any errors gracefully during render loop
             
             # Periodic geometry save
-            import time
             current_time = time.time()
             if current_time - last_save_time > save_interval:
                 current_pos = dpg.get_viewport_pos()
@@ -328,11 +448,18 @@ class MainWindow:
         if not self._is_context_created:
             return
         
+        # Signal any running search to cancel
+        self._cancel_event.set()
+        
         try:
             # Save window geometry before destroying
             self._save_window_geometry()
         except Exception as e:
             print(f"⚠️ Error saving geometry: {e}")
+        
+        # Wait for search thread to finish if running
+        if self._similarity_thread and self._similarity_thread.is_alive():
+            self._similarity_thread.join(timeout=2.0)  # Wait up to 2 seconds
         
         try:
             dpg.destroy_context()
@@ -345,6 +472,7 @@ class MainWindow:
         """Launch setup wizard (placeholder for future implementation)."""
         # For now, fall back to CLI setup
         print("Setup required. Falling back to CLI setup...")
+        
         # In full implementation, this would show a DPG-based wizard
         from ui.cli.menu_system.database_check import screen_database_check
         screen_database_check()
@@ -359,6 +487,7 @@ class MainWindow:
         # Get main window position and size
         win_pos = dpg.get_item_pos(self.window_tag)
         win_size = dpg.get_item_rect_size(self.window_tag)
+        
         dialog_width = self._s(300)
         dialog_height = self._s(100)
         
@@ -411,6 +540,7 @@ class MainWindow:
         # Get main window position and size (NOT viewport)
         win_pos = dpg.get_item_pos(self.window_tag)
         win_size = dpg.get_item_rect_size(self.window_tag)
+        
         dialog_width = self._s(400)
         dialog_height = self._s(300)
         
