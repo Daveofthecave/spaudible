@@ -2,10 +2,16 @@
 import dearpygui.dearpygui as dpg
 import sys
 import platform
+import time
 from pathlib import Path
 from typing import Optional, Union
+
 from ui.gui.state_manager import gui_state_manager
 from ui.gui.theme import initialize_theme, add_gradient_button, Colors, _gradient_factory
+from ui.gui.settings_panel import SettingsPanel
+from ui.gui.search_panel import SearchPanel
+from ui.gui.results_view import ResultsView
+
 from core.utilities.setup_validator import is_setup_complete
 
 class MainWindow:
@@ -14,23 +20,28 @@ class MainWindow:
     def __init__(self):
         self.state_manager = gui_state_manager
         self.window_tag = "main_window"
-        self.search_panel_tag = "search_panel"
-        self.results_panel_tag = "results_panel"
-        self.settings_panel_tag = "settings_panel"
-        self._is_context_created = False
+        
+        # Initialize sub-panels
         self.dpi_scale = 1.0
+        self.settings_panel: Optional[SettingsPanel] = None
+        self.search_panel: Optional[SearchPanel] = None
+        self.results_view: Optional[ResultsView] = None
+        
+        self._is_context_created = False
         self.theme = None  # SpaudibleTheme instance initialized in _initialize_dpg()
+        
+        # Search worker reference (for threading)
+        self._search_worker = None
 
     def _get_dpi_scale(self) -> float:
         """Universal display scale detection using tkinter.
         
-        Since DPI reporting is inconsistent across platforms and displays,
+        Since DPI reporting is inconsistent across platforms and displays, 
         we use screen height as the primary heuristic for comfortable UI sizing.
         """
         try:
             import tkinter as tk
             root = tk.Tk()
-            
             # Get physical screen dimensions (works everywhere tkinter works)
             screen_height = root.winfo_screenheight()
             # Alternative: root.winfo_screenmmheight() for physical mm, but pixels are more reliable
@@ -40,19 +51,18 @@ class MainWindow:
                 dpi = root.winfo_fpixels('1i')  # pixels per inch
             except Exception:
                 dpi = 96
-            
             root.destroy()
             
             # Heuristic: Scale based on vertical resolution for comfortable reading distance
-            if screen_height >= 2800:    # 8K and above
+            if screen_height >= 2800:      # 8K and above
                 scale = 3
-            elif screen_height >= 2100:  # 4K (UHD)
+            elif screen_height >= 2100:    # 4K (UHD)
                 scale = 2.5
-            elif screen_height >= 1600:  # 2K (QHD)
+            elif screen_height >= 1600:    # 2K (QHD)
                 scale = 2
-            elif screen_height >= 1000:  # 1080p (FHD)
+            elif screen_height >= 1000:    # 1080p (FHD)
                 scale = 1.5
-            else:  # Lower resolutions (720p, etc.)
+            else:                          # Lower resolutions (720p, etc.)
                 scale = 1
             
             # Trust high DPI reports only if they're significantly above 96 (>120)
@@ -73,8 +83,8 @@ class MainWindow:
         return int(value * self.dpi_scale)
 
     def run(self):
-        """ 
-        Main entry point. Handles setup wizard vs main window logic,
+        """
+        Main entry point. Handles setup wizard vs main window logic, 
         initializes DPG, and runs the event loop.
         """
         try:
@@ -108,6 +118,11 @@ class MainWindow:
         
         # Get scale factor (1.0 = 1080p standard, 1.5 = 4K, etc.)
         self.dpi_scale = self._get_dpi_scale()
+        
+        # Initialize panels with scale
+        self.settings_panel = SettingsPanel(self.dpi_scale)
+        self.search_panel = SearchPanel(self.dpi_scale, on_search=self._execute_search)
+        self.results_view = ResultsView(self.dpi_scale)
         
         # Load fonts at physical pixel size
         self._load_hidpi_font()
@@ -205,245 +220,65 @@ class MainWindow:
             with dpg.group(horizontal=True):
                 # Left sidebar - Settings (resizable horizontally)
                 with dpg.child_window(
-                    tag=self.settings_panel_tag,
+                    tag=self.settings_panel.tag,
                     width=self._s(300),
                     border=True,
                     autosize_x=False,
                     autosize_y=True,
                     resizable_x=True  # Enable horizontal resizing
                 ):
-                    self._build_settings_panel()
+                    self.settings_panel.build()
                 
                 # Right area - Search & Results (flexible width)
                 with dpg.child_window(
-                    tag=self.results_panel_tag,
+                    tag=self.results_view.tag,
                     border=True,
                     autosize_x=True,
                     autosize_y=True
                 ):
-                    self._build_search_panel()
-                    self._build_results_panel()
+                    self.search_panel.build()
+                    self.results_view.build()
 
     def _on_main_window_resize(self, sender, app_data):
         """Handle main window resize to keep right panel filling remaining space."""
-        if not dpg.does_item_exist(self.settings_panel_tag):
+        if not dpg.does_item_exist(self.settings_panel.tag):
             return
         
         # Get current panel widths
-        left_width = dpg.get_item_rect_size(self.settings_panel_tag)[0]
+        left_width = dpg.get_item_rect_size(self.settings_panel.tag)[0]
         window_width = dpg.get_item_rect_size(self.window_tag)[0]
         
         # Calculate right panel width (window - left panel - borders)
         # The borders take up a few pixels on each side
         right_width = window_width - left_width - 2  # -2 for borders
-        
         if right_width > 0:
-            dpg.configure_item(self.results_panel_tag, width=right_width)
+            dpg.configure_item(self.results_view.tag, width=right_width)
 
-    def _build_settings_panel(self):
-        """Build the left sidebar with all settings controls."""
-        dpg.add_text("Settings", color=(100, 200, 255))
-        dpg.add_separator()
+    def _execute_search(self, query: str):
+        """Execute similarity search based on query.
         
-        # Show current scale indicator
-        if self.dpi_scale != 1.0:
-            dpg.add_text(f"Scaling: {self.dpi_scale}x", color=(150, 150, 150))
+        This is the bridge between SearchPanel and ResultsView.
+        TODO: Implement threading for actual search.
+        """
+        print(f"DEBUG: Executing search for: {query}")
         
-        dpg.add_spacer(height=self._s(10))
+        # Show loading state
+        self.results_view.show_loading(f"Searching for '{query}'...")
         
-        # Mode selector (Auto/CPU/GPU)
-        dpg.add_text("Processing Mode")
-        dpg.add_radio_button(
-            items=["Auto", "CPU Only", "GPU Only"],
-            default_value="Auto",
-            callback=self._on_mode_changed
-        )
+        # TODO: Implement actual search logic with threading
+        # For now, just a stub
+        # This should:
+        # 1. Parse input type (track ID, URL, text, etc.)
+        # 2. Build canonical vector
+        # 3. Run SearchOrchestrator
+        # 4. Update results view
         
-        dpg.add_spacer(height=self._s(10))
-        
-        # Algorithm selector
-        dpg.add_text("Similarity Algorithm")
-        dpg.add_combo(
-            items=["Cosine-Euclidean", "Cosine", "Euclidean"],
-            default_value="Cosine-Euclidean",
-            callback=self._on_algorithm_changed,
-            width=self._s(200)
-        )
-        
-        dpg.add_spacer(height=self._s(10))
-        
-        # Deduplication toggle
-        dpg.add_checkbox(
-            label="Deduplicate Results",
-            default_value=True,
-            callback=self._on_dedupe_changed
-        )
-        
-        dpg.add_spacer(height=self._s(10))
-        
-        # Region filter slider
-        dpg.add_text("Region Filter Strength")
-        dpg.add_slider_float(
-            default_value=1.0,
-            min_value=0.0,
-            max_value=1.0,
-            width=self._s(250),
-            callback=self._on_region_changed
-        )
-        
-        dpg.add_spacer(height=self._s(10))
-        
-        # Number of results
-        dpg.add_text("Number of Results")
-        dpg.add_input_int(
-            default_value=25,
-            min_value=1,
-            max_value=1000,
-            width=self._s(100),
-            callback=self._on_topk_changed
-        )
-        
-        dpg.add_spacer(height=self._s(20))
-        
-        # Feature weights (collapsible)
-        with dpg.tree_node(label="Feature Weights", default_open=False):
-            self._build_feature_weights()
-        
-        dpg.add_separator()
-        add_gradient_button(
-            label="Reset to Defaults",
-            width=self._s(150),
-            height=self._s(24),
-            callback=self._reset_settings
-        )
-
-    def _build_feature_weights(self):
-        """Build the 32 feature weight sliders."""
-        # Simplified version - full implementation would have all 32
-        features = [
-            "Acousticness", "Danceability", "Energy", "Valence", "Tempo", "Popularity"
-        ]
-        for feature in features:
-            dpg.add_slider_float(
-                label=feature,
-                default_value=1.0,
-                min_value=0.0,
-                max_value=10.0,
-                width=self._s(220)
-            )
-
-    def _build_search_panel(self):
-        """Build the search input section."""
-        dpg.add_text("Search", color=(100, 200, 255))
-        dpg.add_separator()
-        
-        dpg.add_input_text(
-            tag="search_input",
-            hint="Enter song, artist, track ID, ISRC, or drag audio file...",
-            width=-1,
-            callback=self._on_search_enter,
-            on_enter=True
-        )
-        
-        with dpg.group(horizontal=True):
-            add_gradient_button(
-                tag="search_button",
-                label="Find Similar Songs",
-                width=self._s(150),
-                height=self._s(24),
-                callback=self._handle_search
-            )
-            add_gradient_button(
-                label="Clear",
-                width=self._s(80),
-                height=self._s(24),
-                callback=self._clear_search
-            )
-        
-        dpg.add_spacer(height=self._s(10))
-
-    def _build_results_panel(self):
-        """Build the results display section."""
-        dpg.add_text("Results", color=(100, 200, 255))
-        dpg.add_separator()
-        
-        # Expand/Collapse all button
-        with dpg.group(horizontal=True):
-            add_gradient_button(
-                label="Expand All",
-                width=self._s(100),
-                height=self._s(24),
-                callback=self._expand_all_results
-            )
-            add_gradient_button(
-                label="Collapse All",
-                width=self._s(100),
-                height=self._s(24),
-                callback=self._collapse_all_results
-            )
-            add_gradient_button(
-                label="Save Playlist",
-                width=self._s(120),
-                height=self._s(24),
-                callback=self._save_playlist
-            )
-        
-        dpg.add_spacer(height=self._s(5))
-        
-        # Results container
-        with dpg.child_window(
-            tag="results_container",
-            autosize_x=True,
-            autosize_y=True,
-            border=False
-        ):
-            dpg.add_text(
-                tag="results_placeholder",
-                default_value="Enter a search query above to find similar songs.",
-                color=(150, 150, 150)
-            )
-
-    def _set_dpi_scale(self, scale: float):
-        """Change DPI scale at runtime (requires restart)."""
-        self.state_manager.set('dpi_scale', scale)
-        
-        if dpg.does_item_exist("restart_dialog"):
-            dpg.delete_item("restart_dialog")
-        
-        # Get main window position and size
-        win_pos = dpg.get_item_pos(self.window_tag)
-        win_size = dpg.get_item_rect_size(self.window_tag)
-        
-        dialog_width = self._s(300)
-        dialog_height = self._s(100)
-        
-        # Center within the main window
-        center_x = int(win_pos[0] + (win_size[0] - dialog_width) // 2)
-        center_y = int(win_pos[1] + (win_size[1] - dialog_height) // 2)
-        
-        def close_restart_dialog():
-            if dpg.does_item_exist("restart_dialog"):
-                dpg.delete_item("restart_dialog")
-        
-        with dpg.window(
-            tag="restart_dialog",
-            label="Restart Required",
-            modal=True,
-            width=dialog_width,
-            height=dialog_height,
-            pos=[center_x, center_y],
-            no_resize=True
-        ):
-            dpg.add_text("UI scale will change on next restart.")
-            add_gradient_button(
-                label="OK",
-                callback=close_restart_dialog
-            )
+        # Example of what the real implementation would look like:
+        # self.results_view.update_results(results_list)
 
     def _main_loop(self):
         """Run the Dear PyGui render loop."""
         print("DEBUG: Entering render loop...")
-        
         last_save_time = 0
         save_interval = 5.0
         
@@ -463,13 +298,13 @@ class MainWindow:
             
             # Sync right panel when settings panel is resized by user
             try:
-                if dpg.does_item_exist(self.settings_panel_tag):
-                    current_left_width = dpg.get_item_rect_size(self.settings_panel_tag)[0]
+                if dpg.does_item_exist(self.settings_panel.tag):
+                    current_left_width = dpg.get_item_rect_size(self.settings_panel.tag)[0]
                     if current_left_width != prev_left_width:
                         window_width = dpg.get_item_rect_size(self.window_tag)[0]
                         right_width = window_width - current_left_width - 2  # -2 for borders
                         if right_width > 0:
-                            dpg.configure_item(self.results_panel_tag, width=right_width)
+                            dpg.configure_item(self.results_view.tag, width=right_width)
                         prev_left_width = current_left_width
             except Exception:
                 pass  # Handle any errors gracefully during render loop
@@ -480,12 +315,10 @@ class MainWindow:
             if current_time - last_save_time > save_interval:
                 current_pos = dpg.get_viewport_pos()
                 current_size = [dpg.get_viewport_width(), dpg.get_viewport_height()]
-                
                 if (current_pos != prev_pos or current_size != prev_size):
                     self._save_window_geometry()
                     prev_pos = current_pos
                     prev_size = current_size
-                
                 last_save_time = current_time
         
         print("DEBUG: Render loop exited")
@@ -516,77 +349,59 @@ class MainWindow:
         from ui.cli.menu_system.database_check import screen_database_check
         screen_database_check()
 
-    # Callback methods
-    
-    def _handle_search(self):
-        """Handle search button click."""
-        query = dpg.get_value("search_input")
-        if not query.strip():
-            dpg.set_value("results_placeholder", "Please enter a search query.")
-            return
+    def _set_dpi_scale(self, scale: float):
+        """Change DPI scale at runtime (requires restart)."""
+        self.state_manager.set('dpi_scale', scale)
         
-        # TODO: Integrate with actual search logic from core.similarity_engine
-        dpg.set_value("results_placeholder", f"Searching for: {query}...\n\n(Integration pending)")
-    
-    def _on_search_enter(self, sender, app_data):
-        """Handle Enter key in search box."""
-        if app_data:  # Only trigger if there's text
-            self._handle_search()
-    
-    def _clear_search(self, sender=None, app_data=None):
-        """Clear the search input."""
-        dpg.set_value("search_input", "")
-        dpg.focus_item("search_input")
-    
-    def _on_mode_changed(self, sender, app_data):
-        """Handle processing mode change."""
-        # Update config manager based on selection
-        pass
-    
-    def _on_algorithm_changed(self, sender, app_data):
-        """Handle algorithm selection change."""
-        pass
-    
-    def _on_dedupe_changed(self, sender, app_data):
-        """Handle deduplication toggle."""
-        pass
-    
-    def _on_region_changed(self, sender, app_data):
-        """Handle region filter slider change."""
-        pass
-    
-    def _on_topk_changed(self, sender, app_data):
-        """Handle number of results change."""
-        pass
-    
-    def _reset_settings(self, sender=None, app_data=None):
-        """Reset all settings to defaults."""
-        pass
-    
-    def _expand_all_results(self, sender=None, app_data=None):
-        """Expand all result rows."""
-        pass
-    
-    def _collapse_all_results(self, sender=None, app_data=None):
-        """Collapse all result rows."""
-        pass
-    
-    def _save_playlist(self, sender=None, app_data=None):
-        """Save current results as playlist."""
-        pass
-    
+        if dpg.does_item_exist("restart_dialog"):
+            dpg.delete_item("restart_dialog")
+        
+        # Get main window position and size
+        win_pos = dpg.get_item_pos(self.window_tag)
+        win_size = dpg.get_item_rect_size(self.window_tag)
+        dialog_width = self._s(300)
+        dialog_height = self._s(100)
+        
+        # Center within the main window
+        center_x = int(win_pos[0] + (win_size[0] - dialog_width) // 2)
+        center_y = int(win_pos[1] + (win_size[1] - dialog_height) // 2)
+        
+        def close_restart_dialog():
+            if dpg.does_item_exist("restart_dialog"):
+                dpg.delete_item("restart_dialog")
+        
+        with dpg.window(
+            tag="restart_dialog",
+            label="Restart Required",
+            modal=True,
+            width=dialog_width,
+            height=dialog_height,
+            pos=[center_x, center_y],
+            no_resize=True
+        ):
+            dpg.add_text("UI scale will change on next restart.")
+            add_gradient_button(
+                label="OK",
+                callback=close_restart_dialog
+            )
+
     def _show_system_status(self, sender=None, app_data=None):
         """Show system status modal."""
+        # TODO: Implement system status modal
+        # This should port the CLI's _handle_system_status to GUI
         pass
-    
+
     def _show_performance_test(self, sender=None, app_data=None):
         """Run/show performance test."""
+        # TODO: Implement performance test modal
+        # This should port the CLI's performance test to GUI
         pass
-    
+
     def _check_updates(self, sender=None, app_data=None):
         """Check for updates."""
+        # TODO: Implement update check
         pass
-    
+
     def _show_about(self, sender=None, app_data=None):
         """Show about dialog centered on the main window."""
         # Delete existing dialog if it exists
@@ -596,7 +411,6 @@ class MainWindow:
         # Get main window position and size (NOT viewport)
         win_pos = dpg.get_item_pos(self.window_tag)
         win_size = dpg.get_item_rect_size(self.window_tag)
-        
         dialog_width = self._s(400)
         dialog_height = self._s(300)
         
@@ -617,10 +431,8 @@ class MainWindow:
             no_resize=True
         ):
             dpg.add_text("Spaudible v0.3.0", tag="about_title")
-            
             if hasattr(self, 'header_font') and self.header_font:
                 dpg.bind_item_font("about_title", self.header_font)
-            
             dpg.add_separator()
             dpg.add_text("By Daveofthecave")
             
@@ -632,7 +444,7 @@ class MainWindow:
                 label="Close",
                 callback=close_about_dialog
             )
-    
+
     def _save_window_geometry(self):
         """Save current window position and size."""
         try:
