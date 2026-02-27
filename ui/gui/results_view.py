@@ -90,7 +90,6 @@ class ResultsView:
     def update_results(self, results: List[Tuple]):
         self.results = results
         self._clear_results_container()
-        
         if dpg.does_item_exist(self.container_tag):
             dpg.configure_item(self.container_tag, show=True)
         
@@ -98,25 +97,33 @@ class ResultsView:
             dpg.add_text("No similar songs found.", parent=self.container_tag)
             return
         
-        # Header row with Expand/Collapse button
-        with dpg.group(horizontal=True, parent=self.container_tag):
+        # Found count above the header
+        dpg.add_text(
+            f"Found {len(results)} similar songs:",
+            color=(200, 200, 200),
+            parent=self.container_tag,
+        )
+        dpg.add_separator(parent=self.container_tag)
+        
+        # Header row with proper right-justified button
+        header_row = dpg.add_group(horizontal=True, parent=self.container_tag)
+        
+        # Left section: Rank, Score, Song headers
+        with dpg.group(horizontal=True, parent=header_row):
             # Rank column header (right-aligned)
             with dpg.group(width=self._s(self._w_rank)):
                 dpg.add_spacer(width=-1)
-                dpg.add_text("Rank")
-            
-            # Score column header (right-aligned)
+                dpg.add_text("Rank", color=(255, 255, 255))
+            # Score column header (right-aligned)  
             with dpg.group(width=self._s(self._w_score)):
                 dpg.add_spacer(width=-1)
-                dpg.add_text("Score")
-            
-            # Song column header (left-aligned, flexible)
-            dpg.add_text("Song")
-            
-            # Push button to right
-            dpg.add_spacer(width=-1)
-            
-            # Toggle button
+                dpg.add_text("Score", color=(255, 255, 255))
+            # Song column header (left-aligned)
+            dpg.add_text("Song", color=(255, 255, 255))
+        
+        # Right section: Expand/Collapse button - pushed to far right
+        with dpg.group(horizontal=True, parent=header_row):
+            dpg.add_spacer(width=-1)  # Push to right
             add_gradient_button(
                 label="Collapse All" if self._all_expanded else "Expand All",
                 tag=self._toggle_button_tag,
@@ -127,15 +134,7 @@ class ResultsView:
         
         dpg.add_separator(parent=self.container_tag)
         
-        # Found count text
-        dpg.add_text(
-            f"Found {len(results)} similar songs:",
-            color=(200, 200, 200),
-            parent=self.container_tag,
-        )
-        dpg.add_separator(parent=self.container_tag)
-        
-        # Populate rows
+        # Populate rows with visible text
         for i, result in enumerate(results, 1):
             if len(result) == 3:
                 track_id, similarity, metadata = result
@@ -159,36 +158,37 @@ class ResultsView:
             detail_tag = dpg.generate_uuid()
             arrow_tag = dpg.generate_uuid()
             
-            # Main row (selectable for clickability) - add_selectable returns a tag
+            # Build song text
+            song_text = f"{track_name} - {artist_name}"
+            if album:
+                song_text += f" - {album}"
+            if year:
+                song_text += f" ({year})"
+            if len(song_text) > 50:
+                song_text = song_text[:47] + "..."
+            
+            # Main row (selectable) - spans full width for clickability
             selectable_tag = dpg.add_selectable(
                 parent=row_container,
                 callback=self._toggle_row,
                 user_data=(detail_tag, arrow_tag),
-                width=self._s(2000),  # Wide enough to fill container
                 height=self._s(24),
-                label=""
+                label=""  # We add custom content as children
             )
             
-            # Content inside the selectable
+            # Content inside the selectable - explicit white colors for visibility
             with dpg.group(horizontal=True, parent=selectable_tag):
-                # Rank (right-aligned)
+                # Rank (right-aligned, white color)
                 with dpg.group(width=self._s(self._w_rank)):
                     dpg.add_spacer(width=-1)
-                    dpg.add_text(str(i))
+                    dpg.add_text(str(i), color=(255, 255, 255))
                 
-                # Score (right-aligned)
+                # Score (right-aligned, white color)
                 with dpg.group(width=self._s(self._w_score)):
                     dpg.add_spacer(width=-1)
-                    dpg.add_text(f"{similarity:.4f}")
+                    dpg.add_text(f"{similarity:.4f}", color=(255, 255, 255))
                 
-                # Song (left-aligned, colored)
-                song_text = f"{track_name} - {artist_name}"
-                if album:
-                    song_text += f" - {album}"
-                if year:
-                    song_text += f" ({year})"
-                if len(song_text) > 50:
-                    song_text = song_text[:47] + "..."
+                # Song (left-aligned, colored by similarity score)
                 dpg.add_text(song_text, color=song_color)
                 
                 # Push arrow to right
@@ -196,7 +196,7 @@ class ResultsView:
                 
                 # Arrow indicator (text, not button)
                 arrow_symbol = "▼" if self._all_expanded else "▶"
-                dpg.add_text(arrow_symbol, tag=arrow_tag)
+                dpg.add_text(arrow_symbol, tag=arrow_tag, color=(255, 255, 255))
             
             # Detail row (expandable, outside selectable so clicks don't collapse)
             with dpg.group(
