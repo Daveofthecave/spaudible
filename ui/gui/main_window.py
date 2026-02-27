@@ -397,6 +397,9 @@ class MainWindow:
         
         while dpg.is_dearpygui_running():
             dpg.render_dearpygui_frame()
+
+            # Check for text search completion from SearchPanel
+            self.search_panel.update()
             
             # Check for completed search results from background thread
             if self._search_complete:
