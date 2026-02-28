@@ -142,7 +142,7 @@ class MainWindow:
             on_suggestion_selected=self._on_suggestion_selected,
             on_cancel=self._on_search_cancelled
         )
-        self.results_view = ResultsView(self.dpi_scale)
+        self.results_view = ResultsView(self.dpi_scale, header_font=getattr(self, 'header_font', None))
         
         # Load fonts at physical pixel size
         self._load_hidpi_font()
