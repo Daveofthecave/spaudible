@@ -234,13 +234,13 @@ class ResultsView:
                 dpg.bind_item_theme(arrow_btn, arrow_theme)
                 self._arrow_tags.append(arrow_tag)
             
-            # Detail section - CRITICAL: Use add_group with explicit parent, not context manager with tag
+            # Detail section - use the same tag we generated earlier
             detail_group = dpg.add_group(
+                tag=detail_tag,  # Use the UUID we generated at the start of the loop
                 horizontal=True,
                 show=self._all_expanded,
                 parent=self.container_tag
             )
-            detail_tag = detail_group  # Use the returned tag
             
             # Indent using spacer
             spacer_width = self._s(self._w_rank + self._col_spacing + self._w_score + self._col_spacing)
