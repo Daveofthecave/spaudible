@@ -394,10 +394,11 @@ class MainWindow:
         prev_pos = dpg.get_viewport_pos()
         prev_size = [dpg.get_viewport_width(), dpg.get_viewport_height()]
         prev_left_width = None
+        last_center_time = 0  # Track last centering update
         
         while dpg.is_dearpygui_running():
             dpg.render_dearpygui_frame()
-
+            
             # Check for text search completion from SearchPanel
             self.search_panel.update()
             
@@ -406,17 +407,17 @@ class MainWindow:
                 self._on_similarity_complete(self._search_results)
                 self._search_complete = False
                 self._search_results = None
-            
+                
             # Check for search errors
             if self._search_error_flag:
                 self._on_similarity_error(self._search_error)
                 self._search_error_flag = False
                 self._search_error = None
-            
+                
             # Update background size on viewport changes
             if self.theme:
                 self.theme.update_background()
-            
+                
             # Update gradient button states each frame
             _gradient_factory.update_all_buttons()
             
@@ -430,20 +431,31 @@ class MainWindow:
                         if right_width > 0:
                             dpg.configure_item(self.results_view.tag, width=right_width)
                         prev_left_width = current_left_width
+                        # Recenter results when panel resizes
+                        if self.results_view:
+                            self.results_view.update_centering()
             except Exception:
                 pass  # Handle any errors gracefully during render loop
-            
-            # Periodic geometry save
+                
+            # Check for window resize every frame (for centering), but save geometry only periodically
             current_time = time.time()
-            if current_time - last_save_time > save_interval:
-                current_pos = dpg.get_viewport_pos()
-                current_size = [dpg.get_viewport_width(), dpg.get_viewport_height()]
-                if (current_pos != prev_pos or current_size != prev_size):
+            current_pos = dpg.get_viewport_pos()
+            current_size = [dpg.get_viewport_width(), dpg.get_viewport_height()]
+            
+            # Update centering immediately if window changed (throttle to ~30fps for performance)
+            if (current_pos != prev_pos or current_size != prev_size):
+                if current_time - last_center_time > 0.033:  # ~30fps max
+                    if self.results_view:
+                        self.results_view.update_centering()
+                    last_center_time = current_time
+                    
+                # Save geometry only every 5 seconds
+                if current_time - last_save_time > save_interval:
                     self._save_window_geometry()
                     prev_pos = current_pos
                     prev_size = current_size
-                last_save_time = current_time
-        
+                    last_save_time = current_time
+                    
         print("DEBUG: Render loop exited")
 
     def _cleanup(self):
