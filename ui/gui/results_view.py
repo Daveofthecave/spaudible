@@ -33,8 +33,8 @@ class ResultsView:
         self._all_expanded = False
 
         # Column widths (logical pixels) - Rank, Score, and Arrow are fixed
-        self._w_rank = 45
-        self._w_score = 75
+        self._w_rank = 35
+        self._w_score = 50
         self._w_arrow = 100  # Expand All button / row arrows
         self._w_song = 480  # Base width, will be dynamically adjusted
 
@@ -42,7 +42,7 @@ class ResultsView:
         self._sep_width = 2
 
         # Fixed margins on each side (logical pixels) - creates the "floating" effect
-        self._fixed_margin = 20
+        self._fixed_margin = 40
 
         # Create alignment themes
         self._right_align_theme = None
@@ -217,7 +217,7 @@ class ResultsView:
         for tag in self._song_btn_tags:
             if dpg.does_item_exist(tag):
                 dpg.configure_item(tag, width=new_song_width)
-
+    
     def _clear_results_container(self):
         """Remove all children from content group and clear stored tags."""
 
@@ -309,7 +309,7 @@ class ResultsView:
                 width=col_score_w,
                 height=self._s(22)
             )
-            dpg.bind_item_theme(score_hdr, self._right_align_theme)
+            dpg.bind_item_theme(score_hdr, self._center_align_theme)
             if self.header_font:
                 dpg.bind_item_font(score_hdr, self.header_font)
 
@@ -412,7 +412,7 @@ class ResultsView:
                 dpg.add_spacer(width=sep_w)
 
                 # Arrow button (centered)
-                arrow_symbol = "v" if self._all_expanded else ">"
+                arrow_symbol = "v" if self._all_expanded else "<"
                 arrow_btn = dpg.add_button(
                     label=arrow_symbol,
                     tag=arrow_tag,
@@ -464,7 +464,7 @@ class ResultsView:
         dpg.configure_item(detail_tag, show=new_state)
 
         if dpg.does_item_exist(arrow_tag):
-            dpg.configure_item(arrow_tag, label="v" if new_state else ">")
+            dpg.configure_item(arrow_tag, label="v" if new_state else "<")
 
     def _toggle_all(self):
         """Toggle all rows and update button text."""
@@ -480,7 +480,7 @@ class ResultsView:
         for arrow_tag in self._arrow_tags:
             if dpg.does_item_exist(arrow_tag):
                 dpg.configure_item(
-                    arrow_tag, label="v" if self._all_expanded else ">"
+                    arrow_tag, label="v" if self._all_expanded else "<"
                 )
 
         # Show/hide all detail groups
