@@ -30,7 +30,7 @@ mkdir -p data/gui/fonts 2>/dev/null
 # Download background.png if not present
 if [ ! -f "data/gui/background.png" ]; then
     echo "Downloading GUI background image..."
-    curl -L -o "data/gui/background.png" "https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/gui/background.png" --silent --fail 2>/dev/null
+    curl -L -o "data/gui/background.png" "https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/assets/gui/background.png" --silent --fail 2>/dev/null
     if [ -f "data/gui/background.png" ]; then
         echo "background.png downloaded."
     else
@@ -41,8 +41,8 @@ fi
 # Download Spaudible Sans + Instrument Sans fonts if not present
 if [ ! -f "data/gui/fonts/SpaudibleSans-Regular.ttf" ]; then
     echo "Downloading GUI fonts..."
-    curl -L -o "data/gui/fonts/SpaudibleSans-Regular.ttf" "https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/gui/fonts/SpaudibleSans-Regular.ttf" --silent --fail 2>/dev/null
-    curl -L -o "data/gui/fonts/InstrumentSans-SemiBold.ttf" "https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/gui/fonts/InstrumentSans-SemiBold.ttf" --silent --fail 2>/dev/null
+    curl -L -o "data/gui/fonts/SpaudibleSans-Regular.ttf" "https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/assets/gui/fonts/SpaudibleSans-Regular.ttf" --silent --fail 2>/dev/null
+    curl -L -o "data/gui/fonts/InstrumentSans-SemiBold.ttf" "https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/assets/gui/fonts/InstrumentSans-SemiBold.ttf" --silent --fail 2>/dev/null
     
     if [ -f "data/gui/fonts/SpaudibleSans-Regular.ttf" ]; then
         echo "Fonts downloaded."
@@ -65,28 +65,32 @@ if [ -d ".venv" ] && [ -f ".venv/bin/python" ]; then
     else
         # UV missing but .venv exists - attempt first-time setup
         echo "UV not found, attempting setup..."
-        goto :first_time_setup 2>/dev/null || { echo "Please reinstall Spaudible"; exit 1; }
+        # Fall through to first_time_setup
+        : # Placeholder, will continue to setup section below
     fi
     
-    # Check if dependencies need updating by comparing current pyproject.toml 
-    # with the version last used to install dependencies (backed up in .venv)
-    if [ -f "pyproject.toml" ]; then
-        if [ ! -f ".venv/.pyproject.toml.installed" ] || ! cmp -s "pyproject.toml" ".venv/.pyproject.toml.installed"; then
-            echo "Detected changes to pyproject.toml; reinstalling dependencies..."
-            $UV_CMD pip install -e . >/dev/null 2>&1
-            if [ $? -eq 0 ]; then
-                # Update the marker to match current state
-                cp "pyproject.toml" ".venv/.pyproject.toml.installed"
-            else
-                echo "[Warning] Failed to update dependencies; attempting launch anyway..."
+    # Only proceed with fast launch if UV_CMD was set
+    if [ -n "$UV_CMD" ]; then
+        # Check if dependencies need updating by comparing current pyproject.toml 
+        # with the version last used to install dependencies (backed up in .venv)
+        if [ -f "pyproject.toml" ]; then
+            if [ ! -f ".venv/.pyproject.toml.installed" ] || ! cmp -s "pyproject.toml" ".venv/.pyproject.toml.installed"; then
+                echo "Detected changes to pyproject.toml; reinstalling dependencies..."
+                $UV_CMD pip install -e . >/dev/null 2>&1
+                if [ $? -eq 0 ]; then
+                    # Update the marker to match current state
+                    cp "pyproject.toml" ".venv/.pyproject.toml.installed"
+                else
+                    echo "[Warning] Failed to update dependencies; attempting launch anyway..."
+                fi
             fi
         fi
-    fi
 
-    echo "Launching Spaudible..."
-    .venv/bin/python main.py
-    read -p "Press Enter to close..."
-    exit 0
+        echo "Launching Spaudible..."
+        .venv/bin/python main.py
+        read -p "Press Enter to close..."
+        exit 0
+    fi
 fi
 
 :first_time_setup

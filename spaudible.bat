@@ -11,27 +11,29 @@ if not exist "data\gui\fonts" mkdir "data\gui\fonts" 2>nul
 :: Download background.png if not present
 if not exist "data\gui\background.png" (
     echo Downloading GUI background image...
-    curl -L -o "data\gui\background.png" "https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/gui/background.png" --silent --fail 2>nul
+    curl -L -o "data\gui\background.png" "https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/assets/gui/background.png" --silent --fail 2>nul
     if exist "data\gui\background.png" (
         echo background.png downloaded.
     ) else (
-        echo [Warning] Could not download background.png
+        echo [Warning] Could not download background.png.
     )
 )
 
 :: Download Spaudible Sans + Instrument Sans fonts if not present
 if not exist "data\gui\fonts\SpaudibleSans-Regular.ttf" (
     echo Downloading fonts...
-    curl -L -o "data\gui\fonts\SpaudibleSans-Regular.ttf" "https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/gui/fonts/SpaudibleSans-Regular.ttf" --silent --fail 2>nul
-    curl -L -o "data\gui\fonts\InstrumentSans-SemiBold.ttf" "https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/gui/fonts/InstrumentSans-SemiBold.ttf" --silent --fail 2>nul
-    
+    curl -L -o "data\gui\fonts\SpaudibleSans-Regular.ttf" "https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/assets/gui/fonts/SpaudibleSans-Regular.ttf" --silent --fail 2>nul
+    curl -L -o "data\gui\fonts\InstrumentSans-SemiBold.ttf" "https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/assets/gui/fonts/InstrumentSans-SemiBold.ttf" --silent --fail 2>nul
     if exist "data\gui\fonts\SpaudibleSans-Regular.ttf" (
-        echo Fonts downloaded.
+        if exist "data\gui\fonts\InstrumentSans-SemiBold.ttf" (
+            echo Fonts downloaded.
+        ) else (
+            echo [Warning] Downloaded Regular but not SemiBold.
+        )
     ) else (
-        echo [Warning] Could not download Spaudible Sans fonts; UI text may not render correctly.
+        echo [Warning] Could not download fonts; UI text may not render correctly.
     )
 )
-:font_done
 
 :: Run directly if the environment has already been set up
 if exist ".venv\Scripts\python.exe" (
