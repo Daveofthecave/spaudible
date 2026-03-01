@@ -3,7 +3,6 @@ import dearpygui.dearpygui as dpg
 from typing import List, Tuple, Optional, Any
 from ui.gui.theme import add_gradient_button, Colors
 
-
 class ResultsView:
     """Results display with clean table layout and expandable rows."""
     
@@ -14,49 +13,44 @@ class ResultsView:
         self.container_tag = "results_container"
         self._toggle_button_tag = "results_toggle_all_btn"
         
-        # Tags for centering spacers
+        # Tags for centering spacers (now used for fixed margins)
         self._left_spacer_tag = None
         self._right_spacer_tag = None
         self._content_group_tag = None
+        
+        # Store song column tags for dynamic resizing
+        self._song_btn_tags: List[int] = []
+        self._header_song_tag: Optional[int] = None
         
         self.results = []
         self._detail_groups: List[int] = []
         self._arrow_tags: List[int] = []
         self._all_expanded = False
         
-        # Column widths (logical pixels) - reduced for tighter layout
-        self._w_rank = 45  # Reduced from 60
-        self._w_score = 75  # Reduced from 90
-        self._w_song = 480  # Slightly increased to compensate
-        self._w_arrow = 100
+        # Column widths (logical pixels) - Rank, Score, and Arrow are fixed
+        self._w_rank = 45
+        self._w_score = 75
+        self._w_arrow = 100  # Expand All button / row arrows
+        self._w_song = 480   # Base width, will be dynamically adjusted
         
         # Thin separator between columns
         self._sep_width = 2
+        
+        # Fixed margins on each side (logical pixels)
+        self._fixed_margin = 20
         
         # Create alignment themes (will be initialized in build)
         self._right_align_theme = None
         self._left_align_theme = None
         self._center_align_theme = None
         self._header_theme = None
-    
+
     def _s(self, value) -> int:
         """Scale value."""
         return int(float(value) * self.dpi_scale)
-    
-    def _get_content_width(self) -> int:
-        """Calculate total width of content (columns + separators)."""
-        col_rank_w = self._s(self._w_rank)
-        col_score_w = self._s(self._w_score)
-        col_song_w = self._s(self._w_song)
-        col_arrow_w = self._s(self._w_arrow)
-        sep_w = self._s(self._sep_width)
-        
-        # rank + sep + score + sep + song + sep + arrow
-        return col_rank_w + col_score_w + col_song_w + col_arrow_w + (3 * sep_w)
-    
+
     def _init_themes(self):
         """Initialize button alignment themes."""
-        
         # Right-aligned text (for Rank, Score) - completely transparent
         with dpg.theme() as self._right_align_theme:
             with dpg.theme_component(dpg.mvButton):
@@ -66,7 +60,7 @@ class ResultsView:
                 dpg.add_theme_style(dpg.mvStyleVar_ButtonTextAlign, 1.0, 0.5)  # Right, Center
                 dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 0)
                 dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 0, 4)
-        
+
         # Left-aligned text (for Song)
         with dpg.theme() as self._left_align_theme:
             with dpg.theme_component(dpg.mvButton):
@@ -76,7 +70,7 @@ class ResultsView:
                 dpg.add_theme_style(dpg.mvStyleVar_ButtonTextAlign, 0.0, 0.5)  # Left, Center
                 dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 0)
                 dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 0, 4)
-        
+
         # Center-aligned text (for arrows)
         with dpg.theme() as self._center_align_theme:
             with dpg.theme_component(dpg.mvButton):
@@ -86,7 +80,7 @@ class ResultsView:
                 dpg.add_theme_style(dpg.mvStyleVar_ButtonTextAlign, 0.5, 0.5)  # Center, Center
                 dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 0)
                 dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 0, 4)
-        
+
         # Header theme (right/left align will be applied per column)
         with dpg.theme() as self._header_theme:
             with dpg.theme_component(dpg.mvButton):
@@ -95,7 +89,7 @@ class ResultsView:
                 dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (0, 0, 0, 0))
                 dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 0)
                 dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 0, 4)
-    
+
     def _get_song_color(self, similarity: float) -> Tuple[int, int, int]:
         """Map similarity score to color gradient."""
         stops = [
@@ -127,7 +121,7 @@ class ResultsView:
                 return (r, g, b)
         
         return stops[-1][1]
-    
+
     def build(self):
         """Build results container with dynamic centering support."""
         self._init_themes()
@@ -145,42 +139,65 @@ class ResultsView:
             self._right_spacer_tag = dpg.generate_uuid()
             
             with dpg.group(horizontal=True):
-                # Left padding spacer
+                # Left padding spacer (fixed width, set in update_centering)
                 dpg.add_spacer(width=0, tag=self._left_spacer_tag)
                 
-                # Actual content container (fixed width)
+                # Actual content container
                 with dpg.group(tag=self._content_group_tag):
-                    pass  # Content populated in update_results
+                    pass
                 
-                # Right padding spacer
+                # Right padding spacer (fixed width, set in update_centering)
                 dpg.add_spacer(width=0, tag=self._right_spacer_tag)
-    
+
     def update_centering(self):
         """
-        Recalculate left/right padding to keep content centered.
-        Call this from main_window when the window resizes.
+        Update column widths to fill available space with fixed margins.
+        The Song column expands/contracts to fill space while other columns remain fixed.
         """
         if not dpg.does_item_exist(self.container_tag):
             return
         
         # Get container width
         container_width = dpg.get_item_rect_size(self.container_tag)[0]
+        if container_width == 0:
+            return  # Not yet rendered
         
-        # Calculate content width
-        content_width = self._get_content_width()
+        # Calculate fixed widths in physical pixels
+        col_rank_w = self._s(self._w_rank)
+        col_score_w = self._s(self._w_score)
+        col_arrow_w = self._s(self._w_arrow)
+        sep_w = self._s(self._sep_width)
+        margin = self._s(self._fixed_margin)
         
-        # Calculate available space (subtract border/padding ~20px)
-        available = max(0, container_width - content_width - 20)
-        padding = available // 2
+        # Calculate available width for Song column
+        # Layout: [margin][rank][sep][score][sep][song][sep][arrow][margin]
+        fixed_total = (
+            margin + 
+            col_rank_w + sep_w + 
+            col_score_w + sep_w + 
+            sep_w + col_arrow_w + 
+            margin
+        )
         
-        # Update spacers
+        new_song_width = max(self._s(200), container_width - fixed_total)
+        
+        # Update margins (fixed)
         if dpg.does_item_exist(self._left_spacer_tag):
-            dpg.configure_item(self._left_spacer_tag, width=padding)
+            dpg.configure_item(self._left_spacer_tag, width=margin)
         if dpg.does_item_exist(self._right_spacer_tag):
-            dpg.configure_item(self._right_spacer_tag, width=padding)
-    
+            dpg.configure_item(self._right_spacer_tag, width=margin)
+        
+        # Update header song button width
+        if self._header_song_tag and dpg.does_item_exist(self._header_song_tag):
+            dpg.configure_item(self._header_song_tag, width=new_song_width)
+        
+        # Update all data row song buttons
+        for tag in self._song_btn_tags:
+            if dpg.does_item_exist(tag):
+                dpg.configure_item(tag, width=new_song_width)
+
     def _clear_results_container(self):
-        """Remove all children from content group."""
+        """Remove all children from content group and clear stored tags."""
         if dpg.does_item_exist(self._content_group_tag):
             children = dpg.get_item_children(self._content_group_tag)
             if children:
@@ -193,11 +210,14 @@ class ResultsView:
                         for child in slot:
                             if dpg.does_item_exist(child):
                                 dpg.delete_item(child)
+        
         self._detail_groups.clear()
         self._arrow_tags.clear()
-    
+        self._song_btn_tags.clear()  # Clear stored song tags
+        self._header_song_tag = None  # Clear header tag
+
     def update_results(self, results: List[Tuple]):
-        """Populate results table with aligned columns."""
+        """Populate results table with aligned columns and dynamic song width."""
         self.results = results
         self._clear_results_container()
         
@@ -216,9 +236,31 @@ class ResultsView:
             self.update_centering()
             return
         
-        # Add content to the centered group
+        # Calculate initial song column width based on current container size
+        container_width = dpg.get_item_rect_size(self.container_tag)[0]
+        col_rank_w = self._s(self._w_rank)
+        col_score_w = self._s(self._w_score)
+        col_arrow_w = self._s(self._w_arrow)
+        sep_w = self._s(self._sep_width)
+        margin = self._s(self._fixed_margin)
+        
+        if container_width > 0:
+            # Calculate available width for Song column
+            fixed_total = (
+                margin + 
+                col_rank_w + sep_w + 
+                col_score_w + sep_w + 
+                sep_w + col_arrow_w + 
+                margin
+            )
+            col_song_w = max(self._s(200), container_width - fixed_total)
+        else:
+            # Fallback to default if container not yet sized
+            col_song_w = self._s(self._w_song)
+        
         parent = self._content_group_tag
         
+        # Title
         dpg.add_text(
             f"Found {len(results)} similar songs:",
             color=(200, 200, 200),
@@ -227,33 +269,21 @@ class ResultsView:
         dpg.add_separator(parent=parent)
         dpg.add_spacer(height=self._s(5), parent=parent)
         
-        # Scaled dimensions
-        col_rank_w = self._s(self._w_rank)
-        col_score_w = self._s(self._w_score)
-        col_song_w = self._s(self._w_song)
-        col_arrow_w = self._s(self._w_arrow)
-        sep_w = self._s(self._sep_width)
-        
         # Header row with proper alignment
         with dpg.group(horizontal=True, parent=parent):
             # Rank header (right-aligned)
             rank_hdr = dpg.add_button(
-                label="Rank",
-                width=col_rank_w,
-                height=self._s(22)
+                label="Rank", width=col_rank_w, height=self._s(22)
             )
             dpg.bind_item_theme(rank_hdr, self._right_align_theme)
             if self.header_font:
                 dpg.bind_item_font(rank_hdr, self.header_font)
             
-            # Thin vertical separator
             dpg.add_spacer(width=sep_w)
             
             # Score header (right-aligned)
             score_hdr = dpg.add_button(
-                label="Score",
-                width=col_score_w,
-                height=self._s(22)
+                label="Score", width=col_score_w, height=self._s(22)
             )
             dpg.bind_item_theme(score_hdr, self._right_align_theme)
             if self.header_font:
@@ -263,13 +293,12 @@ class ResultsView:
             
             # Song header (left-aligned)
             song_hdr = dpg.add_button(
-                label="Song",
-                width=col_song_w,
-                height=self._s(22)
+                label="Song", width=col_song_w, height=self._s(22)
             )
             dpg.bind_item_theme(song_hdr, self._left_align_theme)
             if self.header_font:
                 dpg.bind_item_font(song_hdr, self.header_font)
+            self._header_song_tag = song_hdr  # Store for resize updates
             
             dpg.add_spacer(width=sep_w)
             
@@ -304,12 +333,9 @@ class ResultsView:
             if year:
                 song_text += f" ({year})"
             
-            # Truncate if needed (approximate)
-            # max_chars = int(self._w_song / 7)
-            # if len(song_text) > max_chars:
-            #     song_text = song_text[:max_chars-3] + "..."
-            
+            # Get color based on similarity
             song_color = self._get_song_color(similarity)
+            
             detail_tag = dpg.generate_uuid()
             arrow_tag = dpg.generate_uuid()
             
@@ -320,27 +346,23 @@ class ResultsView:
                     dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (50, 70, 60, 100))
                     dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (40, 60, 50, 150))
                     dpg.add_theme_color(dpg.mvThemeCol_Text, song_color)
-                    dpg.add_theme_style(dpg.mvStyleVar_ButtonTextAlign, 0.0, 0.5)
+                    dpg.add_theme_style(dpg.mvStyleVar_ButtonTextAlign, 0.0, 0.5)  # Left align
                     dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 0)
                     dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 0, 4)
             
             # Main row with aligned columns
             with dpg.group(horizontal=True, parent=parent):
-                # Rank (right-aligned, no button chrome - removed enabled=False)
+                # Rank (right-aligned)
                 rank_btn = dpg.add_button(
-                    label=f"{i}",
-                    width=col_rank_w,
-                    height=self._s(22)
+                    label=f"{i}", width=col_rank_w, height=self._s(22)
                 )
                 dpg.bind_item_theme(rank_btn, self._right_align_theme)
                 
                 dpg.add_spacer(width=sep_w)
                 
-                # Score (right-aligned, no button chrome - removed enabled=False)
+                # Score (right-aligned)
                 score_btn = dpg.add_button(
-                    label=f"{similarity:.4f}",
-                    width=col_score_w,
-                    height=self._s(22)
+                    label=f"{similarity:.4f}", width=col_score_w, height=self._s(22)
                 )
                 dpg.bind_item_theme(score_btn, self._right_align_theme)
                 
@@ -355,6 +377,7 @@ class ResultsView:
                     user_data=(detail_tag, arrow_tag)
                 )
                 dpg.bind_item_theme(song_btn, song_theme)
+                self._song_btn_tags.append(song_btn)  # Store for resize updates
                 
                 dpg.add_spacer(width=sep_w)
                 
@@ -397,9 +420,9 @@ class ResultsView:
             
             self._detail_groups.append(detail_tag)
         
-        # Initial centering calculation
+        # Initial centering to set correct widths
         self.update_centering()
-    
+
     def _toggle_row(self, detail_tag: int, arrow_tag: int):
         """Toggle individual row expansion."""
         if not dpg.does_item_exist(detail_tag):
@@ -411,7 +434,7 @@ class ResultsView:
         
         if dpg.does_item_exist(arrow_tag):
             dpg.configure_item(arrow_tag, label="v" if new_state else ">")
-    
+
     def _toggle_all(self):
         """Toggle all rows and update button text."""
         self._all_expanded = not self._all_expanded
@@ -432,13 +455,15 @@ class ResultsView:
         for detail_tag in self._detail_groups:
             if dpg.does_item_exist(detail_tag):
                 dpg.configure_item(detail_tag, show=self._all_expanded)
-    
+
     def clear_results(self):
         """Clear all results and reset expansion state."""
         self.results = []
         self._all_expanded = False
         self._detail_groups.clear()
         self._arrow_tags.clear()
+        self._song_btn_tags.clear()
+        self._header_song_tag = None
         self._clear_results_container()
         
         # Reset button text
@@ -447,7 +472,7 @@ class ResultsView:
         
         if dpg.does_item_exist(self.container_tag):
             dpg.configure_item(self.container_tag, show=False)
-    
+
     def show_loading(self, message: str = "Searching..."):
         """Show loading message."""
         self._clear_results_container()
@@ -455,12 +480,10 @@ class ResultsView:
         if dpg.does_item_exist(self._content_group_tag):
             dpg.configure_item(self.container_tag, show=True)
             dpg.add_text(
-                message,
-                color=(150, 255, 150),
-                parent=self._content_group_tag
+                message, color=(150, 255, 150), parent=self._content_group_tag
             )
             self.update_centering()
-    
+
     def hide_loading(self):
         """Hide loading."""
         pass
