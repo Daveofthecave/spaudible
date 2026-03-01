@@ -3,7 +3,6 @@ import dearpygui.dearpygui as dpg
 from typing import List, Tuple, Optional, Any
 from ui.gui.theme import add_gradient_button, Colors
 
-
 class ResultsView:
     """Results display with clean table layout and expandable rows."""
     
@@ -18,18 +17,65 @@ class ResultsView:
         self._arrow_tags: List[int] = []
         self._all_expanded = False
         
-        # Column widths (logical pixels)
-        self._w_rank = 80
-        self._w_score = 100
-        self._w_song = 480
-        self._w_arrow = 40
+        # Column widths (logical pixels) - reduced for tighter layout
+        self._w_rank = 45      # Reduced from 60
+        self._w_score = 75     # Reduced from 90  
+        self._w_song = 480     # Slightly increased to compensate
+        self._w_arrow = 100
         
-        # Spacing between columns
-        self._col_spacing = 20
-    
+        # Thin separator between columns
+        self._sep_width = 2
+        
+        # Create alignment themes (will be initialized in build)
+        self._right_align_theme = None
+        self._left_align_theme = None
+        self._center_align_theme = None
+        self._header_theme = None
+        
     def _s(self, value) -> int:
         """Scale value."""
         return int(float(value) * self.dpi_scale)
+    
+    def _init_themes(self):
+        """Initialize button alignment themes."""
+        # Right-aligned text (for Rank, Score) - completely transparent
+        with dpg.theme() as self._right_align_theme:
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (0, 0, 0, 0))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (0, 0, 0, 0))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (0, 0, 0, 0))
+                dpg.add_theme_style(dpg.mvStyleVar_ButtonTextAlign, 1.0, 0.5)  # Right, Center
+                dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 0)
+                dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 0, 4)
+        
+        # Left-aligned text (for Song)
+        with dpg.theme() as self._left_align_theme:
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (0, 0, 0, 0))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (50, 70, 60, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (40, 60, 50, 150))
+                dpg.add_theme_style(dpg.mvStyleVar_ButtonTextAlign, 0.0, 0.5)  # Left, Center
+                dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 0)
+                dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 0, 4)
+        
+        # Center-aligned text (for arrows)
+        with dpg.theme() as self._center_align_theme:
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (0, 0, 0, 0))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (50, 70, 60, 100))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (40, 60, 50, 150))
+                dpg.add_theme_style(dpg.mvStyleVar_ButtonTextAlign, 0.5, 0.5)  # Center, Center
+                dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 0)
+                dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 0, 4)
+        
+        # Header theme (right/left align will be applied per column)
+        with dpg.theme() as self._header_theme:
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button, (0, 0, 0, 0))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (0, 0, 0, 0))
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (0, 0, 0, 0))
+                dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 0)
+                dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 0, 4)
     
     def _get_song_color(self, similarity: float) -> Tuple[int, int, int]:
         """Map similarity score to color gradient."""
@@ -61,18 +107,19 @@ class ResultsView:
                 return (r, g, b)
         
         return stops[-1][1]
-    
+
     def build(self):
         """Build results container."""
+        self._init_themes()
         with dpg.child_window(
             tag=self.container_tag,
             autosize_x=True,
             autosize_y=True,
-            border=False,
+            border=True,
             show=False,
         ):
             pass
-    
+
     def _clear_results_container(self):
         """Remove all children."""
         if dpg.does_item_exist(self.container_tag):
@@ -89,15 +136,15 @@ class ResultsView:
                                 dpg.delete_item(child)
         self._detail_groups.clear()
         self._arrow_tags.clear()
-    
+
     def update_results(self, results: List[Tuple]):
-        """Populate results table."""
+        """Populate results table with aligned columns."""
         self.results = results
         self._clear_results_container()
         
         if not dpg.does_item_exist(self.container_tag):
             return
-        
+            
         dpg.configure_item(self.container_tag, show=True)
         
         if not results:
@@ -115,38 +162,60 @@ class ResultsView:
             parent=self.container_tag
         )
         dpg.add_separator(parent=self.container_tag)
+        dpg.add_spacer(height=self._s(5), parent=self.container_tag)
         
-        # Header row
+        # Scaled dimensions
+        col_rank_w = self._s(self._w_rank)
+        col_score_w = self._s(self._w_score)
+        col_song_w = self._s(self._w_song)
+        col_arrow_w = self._s(self._w_arrow)
+        sep_w = self._s(self._sep_width)
+        
+        # Header row with proper alignment
         with dpg.group(horizontal=True, parent=self.container_tag):
-            # Rank header
-            dpg.add_text("Rank", color=Colors.TEXT_PRIMARY)
+            # Rank header (right-aligned)
+            rank_hdr = dpg.add_button(
+                label="Rank",
+                width=col_rank_w,
+                height=self._s(22)
+            )
+            dpg.bind_item_theme(rank_hdr, self._right_align_theme)
             if self.header_font:
-                dpg.bind_item_font(dpg.last_item(), self.header_font)
-            dpg.add_spacer(width=self._s(self._w_rank - 40))
+                dpg.bind_item_font(rank_hdr, self.header_font)
             
-            # Score header
-            dpg.add_spacer(width=self._s(self._col_spacing))
-            dpg.add_text("Score", color=Colors.TEXT_PRIMARY)
+            # Thin vertical separator
+            dpg.add_spacer(width=sep_w)
+            
+            # Score header (right-aligned)
+            score_hdr = dpg.add_button(
+                label="Score",
+                width=col_score_w,
+                height=self._s(22)
+            )
+            dpg.bind_item_theme(score_hdr, self._right_align_theme)
             if self.header_font:
-                dpg.bind_item_font(dpg.last_item(), self.header_font)
-            dpg.add_spacer(width=self._s(self._w_score - 50))
+                dpg.bind_item_font(score_hdr, self.header_font)
             
-            # Song header
-            dpg.add_spacer(width=self._s(self._col_spacing))
-            dpg.add_text("Song", color=Colors.TEXT_PRIMARY)
+            dpg.add_spacer(width=sep_w)
+            
+            # Song header (left-aligned)
+            song_hdr = dpg.add_button(
+                label="Song",
+                width=col_song_w,
+                height=self._s(22)
+            )
+            dpg.bind_item_theme(song_hdr, self._left_align_theme)
             if self.header_font:
-                dpg.bind_item_font(dpg.last_item(), self.header_font)
-            dpg.add_spacer(width=self._s(self._w_song - 40))
+                dpg.bind_item_font(song_hdr, self.header_font)
             
-            # Arrow spacer + Expand button
-            dpg.add_spacer(width=self._s(self._col_spacing))
-            dpg.add_spacer(width=self._s(self._w_arrow))
-            dpg.add_spacer(width=self._s(10))
+            dpg.add_spacer(width=sep_w)
             
+            # Expand All / Collapse All button
+            btn_label = "Collapse All ▲" if self._all_expanded else "Expand All ▼"
             add_gradient_button(
-                label="Collapse All" if self._all_expanded else "Expand All",
+                label=btn_label,
                 tag=self._toggle_button_tag,
-                width=self._s(100),
+                width=col_arrow_w,
                 height=self._s(24),
                 callback=self._toggle_all,
             )
@@ -172,83 +241,91 @@ class ResultsView:
             if year:
                 song_text += f" ({year})"
             
-            # Truncate if needed
-            max_chars = self._w_song // 7
+            # Truncate if needed (approximate)
+            max_chars = int(self._w_song / 7)
             if len(song_text) > max_chars:
-                song_text = song_text[:max_chars-1] + "..."
+                song_text = song_text[:max_chars-3] + "..."
             
             song_color = self._get_song_color(similarity)
             detail_tag = dpg.generate_uuid()
             arrow_tag = dpg.generate_uuid()
             
-            # Main row
+            # Create colored theme for this specific song
+            with dpg.theme() as song_theme:
+                with dpg.theme_component(dpg.mvButton):
+                    dpg.add_theme_color(dpg.mvThemeCol_Button, (0, 0, 0, 0))
+                    dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (50, 70, 60, 100))
+                    dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (40, 60, 50, 150))
+                    dpg.add_theme_color(dpg.mvThemeCol_Text, song_color)
+                    dpg.add_theme_style(dpg.mvStyleVar_ButtonTextAlign, 0.0, 0.5)
+                    dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 0)
+                    dpg.add_theme_style(dpg.mvStyleVar_FramePadding, 0, 4)
+            
+            # Main row with aligned columns
             with dpg.group(horizontal=True, parent=self.container_tag):
-                # Rank
-                dpg.add_text(f"{i:>2d}", color=Colors.TEXT_PRIMARY)
-                dpg.add_spacer(width=self._s(self._w_rank - 25))
+                # Rank (right-aligned, no button chrome - removed enabled=False)
+                rank_btn = dpg.add_button(
+                    label=f"{i}",
+                    width=col_rank_w,
+                    height=self._s(22)
+                )
+                dpg.bind_item_theme(rank_btn, self._right_align_theme)
                 
-                # Score
-                dpg.add_spacer(width=self._s(self._col_spacing))
-                dpg.add_text(f"{similarity:.4f}", color=Colors.TEXT_PRIMARY)
-                dpg.add_spacer(width=self._s(self._w_score - 60))
+                dpg.add_spacer(width=sep_w)
                 
-                # Song (colored, clickable)
-                dpg.add_spacer(width=self._s(self._col_spacing))
+                # Score (right-aligned, no button chrome - removed enabled=False)
+                score_btn = dpg.add_button(
+                    label=f"{similarity:.4f}",
+                    width=col_score_w,
+                    height=self._s(22)
+                )
+                dpg.bind_item_theme(score_btn, self._right_align_theme)
+                
+                dpg.add_spacer(width=sep_w)
+                
+                # Song (left-aligned, colored, clickable)
                 song_btn = dpg.add_button(
                     label=song_text,
-                    width=self._s(self._w_song),
-                    height=self._s(24),
+                    width=col_song_w,
+                    height=self._s(22),
                     callback=lambda s, a, u: self._toggle_row(u[0], u[1]),
                     user_data=(detail_tag, arrow_tag)
                 )
-                
-                with dpg.theme() as song_theme:
-                    with dpg.theme_component(dpg.mvButton):
-                        dpg.add_theme_color(dpg.mvThemeCol_Button, (0, 0, 0, 0))
-                        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (50, 70, 60, 100))
-                        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (40, 60, 50, 150))
-                        dpg.add_theme_color(dpg.mvThemeCol_Text, song_color)
-                        dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 0)
-                        dpg.add_theme_style(dpg.mvStyleVar_ButtonTextAlign, 0.0, 0.5)
                 dpg.bind_item_theme(song_btn, song_theme)
                 
-                # Arrow
-                dpg.add_spacer(width=self._s(self._col_spacing))
+                dpg.add_spacer(width=sep_w)
+                
+                # Arrow button (centered)
                 arrow_symbol = "v" if self._all_expanded else ">"
                 arrow_btn = dpg.add_button(
                     label=arrow_symbol,
                     tag=arrow_tag,
-                    width=self._s(self._w_arrow),
-                    height=self._s(24),
+                    width=col_arrow_w,
+                    height=self._s(22),
                     callback=lambda s, a, u: self._toggle_row(u[0], u[1]),
                     user_data=(detail_tag, arrow_tag)
                 )
-                
-                with dpg.theme() as arrow_theme:
-                    with dpg.theme_component(dpg.mvButton):
-                        dpg.add_theme_color(dpg.mvThemeCol_Button, (0, 0, 0, 0))
-                        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (50, 70, 60, 100))
-                        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (40, 60, 50, 150))
-                        dpg.add_theme_color(dpg.mvThemeCol_Text, (180, 180, 180))
-                        dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 0)
-                dpg.bind_item_theme(arrow_btn, arrow_theme)
+                dpg.bind_item_theme(arrow_btn, self._center_align_theme)
                 self._arrow_tags.append(arrow_tag)
             
-            # Detail section - use the same tag we generated earlier
+            # Detail section (expandable)
             detail_group = dpg.add_group(
-                tag=detail_tag,  # Use the UUID we generated at the start of the loop
+                tag=detail_tag,
                 horizontal=True,
                 show=self._all_expanded,
                 parent=self.container_tag
             )
             
-            # Indent using spacer
-            spacer_width = self._s(self._w_rank + self._col_spacing + self._w_score + self._col_spacing)
-            dpg.add_spacer(width=spacer_width, parent=detail_tag)
+            # Indent to align with Song column
+            indent_width = col_rank_w + sep_w + col_score_w + sep_w
+            dpg.add_spacer(width=indent_width, parent=detail_group)
             
-            # Content
-            with dpg.group(parent=detail_tag):
-                dpg.add_text(f"Spotify URL: https://open.spotify.com/track/{track_id}", color=(150, 150, 150))
+            # Metadata content
+            with dpg.group(parent=detail_group):
+                dpg.add_text(
+                    f"Spotify URL: https://open.spotify.com/track/{track_id}",
+                    color=(150, 150, 150)
+                )
                 if album:
                     dpg.add_text(f"Album: {album}", color=(150, 150, 150))
                 if year:
@@ -256,58 +333,64 @@ class ResultsView:
                 dpg.add_text("—" * 40, color=(80, 80, 80))
             
             self._detail_groups.append(detail_tag)
-    
+
     def _toggle_row(self, detail_tag: int, arrow_tag: int):
         """Toggle individual row expansion."""
         if not dpg.does_item_exist(detail_tag):
             return
-        
         current = dpg.get_item_configuration(detail_tag).get("show", False)
         new_state = not current
         dpg.configure_item(detail_tag, show=new_state)
-        
         if dpg.does_item_exist(arrow_tag):
             dpg.configure_item(arrow_tag, label="v" if new_state else ">")
-    
+
     def _toggle_all(self):
-        """Toggle all rows."""
+        """Toggle all rows and update button text."""
         self._all_expanded = not self._all_expanded
         
+        # Update button text
         if dpg.does_item_exist(self._toggle_button_tag):
-            dpg.configure_item(
-                self._toggle_button_tag,
-                label="Collapse All" if self._all_expanded else "Expand All"
-            )
+            new_label = "Collapse All ▲" if self._all_expanded else "Expand All ▼"
+            dpg.configure_item(self._toggle_button_tag, label=new_label)
         
+        # Update all arrows
         for arrow_tag in self._arrow_tags:
             if dpg.does_item_exist(arrow_tag):
-                dpg.configure_item(arrow_tag, label="v" if self._all_expanded else ">")
+                dpg.configure_item(
+                    arrow_tag, label="v" if self._all_expanded else ">"
+                )
         
+        # Show/hide all detail groups
         for detail_tag in self._detail_groups:
             if dpg.does_item_exist(detail_tag):
                 dpg.configure_item(detail_tag, show=self._all_expanded)
-    
+
     def clear_results(self):
-        """Clear all results."""
+        """Clear all results and reset expansion state."""
         self.results = []
         self._all_expanded = False
         self._detail_groups.clear()
         self._arrow_tags.clear()
         self._clear_results_container()
         
+        # Reset button text
         if dpg.does_item_exist(self._toggle_button_tag):
-            dpg.configure_item(self._toggle_button_tag, label="Expand All")
+            dpg.configure_item(self._toggle_button_tag, label="Expand All ▼")
         
         if dpg.does_item_exist(self.container_tag):
             dpg.configure_item(self.container_tag, show=False)
-    
+
     def show_loading(self, message: str = "Searching..."):
         """Show loading message."""
         self._clear_results_container()
         if dpg.does_item_exist(self.container_tag):
             dpg.configure_item(self.container_tag, show=True)
-            dpg.add_text(message, color=(150, 255, 150), parent=self.container_tag)
-    
+            dpg.add_text(
+                message,
+                color=(150, 255, 150),
+                parent=self.container_tag
+            )
+
     def hide_loading(self):
         """Hide loading."""
         pass
