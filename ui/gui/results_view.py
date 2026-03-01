@@ -242,9 +242,9 @@ class ResultsView:
                 song_text += f" ({year})"
             
             # Truncate if needed (approximate)
-            max_chars = int(self._w_song / 7)
-            if len(song_text) > max_chars:
-                song_text = song_text[:max_chars-3] + "..."
+            # max_chars = int(self._w_song / 7)
+            # if len(song_text) > max_chars:
+            #     song_text = song_text[:max_chars-3] + "..."
             
             song_color = self._get_song_color(similarity)
             detail_tag = dpg.generate_uuid()
