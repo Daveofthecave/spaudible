@@ -190,12 +190,13 @@ class MainWindow:
         dpg.set_primary_window(self.window_tag, True)
 
     def _load_hidpi_font(self):
-        """Load Open Sans fonts with DPI-aware sizing."""
-        font_dir = Path(__file__).parent.parent.parent / "data" / "fonts"
-        regular_path = font_dir / "OpenSans-Regular.ttf"
-        semibold_path = font_dir / "OpenSans-SemiBold.ttf"
+        """Load Spaudible Sans and Instrument Sans fonts with DPI-aware sizing."""
+        # Updated path: data/gui/fonts/ instead of data/fonts/
+        font_dir = Path(__file__).parent.parent.parent / "data" / "gui" / "fonts"
+        regular_path = font_dir / "SpaudibleSans-Regular.ttf"
+        semibold_path = font_dir / "InstrumentSans-SemiBold.ttf"
         
-        # Calculate font size based on DPI (base 16pt * scale)
+        # Calculate font size based on DPI (base 18pt * scale)
         font_size = int(18 * self.dpi_scale)
         
         with dpg.font_registry():
@@ -203,17 +204,19 @@ class MainWindow:
             if regular_path.exists():
                 default_font = dpg.add_font(str(regular_path), font_size)
                 dpg.bind_font(default_font)
-                print(f"DEBUG: Loaded Open Sans Regular at {font_size}px")
+                print(f"DEBUG: Loaded Spaudible Sans Regular at {font_size}px")
             else:
                 # Fallback to default font with scale
                 dpg.set_global_font_scale(self.dpi_scale)
-                print("DEBUG: Open Sans not found, using default font")
+                print("DEBUG: Spaudible Sans Regular not found; using default font")
             
             # Load SemiBold for headers
             if semibold_path.exists():
                 self.header_font = dpg.add_font(str(semibold_path), font_size)
+                print(f"DEBUG: Loaded Instrument Sans SemiBold at {font_size}px")
             else:
                 self.header_font = None
+                print(f"DEBUG: Instrument Sans SemiBold not found; using default font")
 
     def _build_ui(self):
         """Build the main application UI."""

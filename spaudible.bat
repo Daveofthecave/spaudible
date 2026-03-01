@@ -5,27 +5,31 @@ setlocal enabledelayedexpansion
 :: Ensure we run from the batch file's directory
 cd /d "%~dp0"
 
-:: Download Open Sans font for the GUI if not yet present
-if exist "data\fonts\OpenSans-Regular.ttf" goto :font_done
-echo Downloading Open Sans font...
-mkdir "data\fonts" 2>nul
+:: Create GUI directories if needed
+if not exist "data\gui\fonts" mkdir "data\gui\fonts" 2>nul
 
-:: Primary: .ttf from GitHub
-curl -L -o "data\fonts\OpenSans-Regular.ttf" "https://github.com/googlefonts/opensans/raw/refs/heads/main/fonts/ttf/OpenSans-Regular.ttf" --silent --fail 2>nul
-curl -L -o "data\fonts\OpenSans-SemiBold.ttf" "https://github.com/googlefonts/opensans/raw/refs/heads/main/fonts/ttf/OpenSans-SemiBold.ttf" --silent --fail 2>nul
+:: Download background.png if not present
+if not exist "data\gui\background.png" (
+    echo Downloading GUI background image...
+    curl -L -o "data\gui\background.png" "https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/gui/background.png" --silent --fail 2>nul
+    if exist "data\gui\background.png" (
+        echo background.png downloaded.
+    ) else (
+        echo [Warning] Could not download background.png
+    )
+)
 
-if exist "data\fonts\OpenSans-Regular.ttf" goto :font_success
-
-:: Fallback: Query Google Fonts API for direct .ttf URLs
-echo Downloading font from fallback URL...
-powershell -Command "$css = Invoke-WebRequest -Uri 'https://fonts.googleapis.com/css2?family=Open+Sans:wght@400' -UseBasicParsing -ErrorAction SilentlyContinue; if ($css) { $url = [regex]::Match($css.Content, 'https://fonts\.gstatic\.com/s/opensans/[^)]+?\.ttf').Value; if ($url) { Invoke-WebRequest -Uri $url -OutFile 'data\fonts\OpenSans-Regular.ttf' -UseBasicParsing } }" 2>nul
-powershell -Command "$css = Invoke-WebRequest -Uri 'https://fonts.googleapis.com/css2?family=Open+Sans:wght@600' -UseBasicParsing -ErrorAction SilentlyContinue; if ($css) { $url = [regex]::Match($css.Content, 'https://fonts\.gstatic\.com/s/opensans/[^)]+?\.ttf').Value; if ($url) { Invoke-WebRequest -Uri $url -OutFile 'data\fonts\OpenSans-SemiBold.ttf' -UseBasicParsing } }" 2>nul
-
-:font_success
-if exist "data\fonts\OpenSans-Regular.ttf" (
-    echo Font downloaded.
-) else (
-    echo [Warning] Could not download font; will use system default.
+:: Download Spaudible Sans + Instrument Sans fonts if not present
+if not exist "data\gui\fonts\SpaudibleSans-Regular.ttf" (
+    echo Downloading fonts...
+    curl -L -o "data\gui\fonts\SpaudibleSans-Regular.ttf" "https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/gui/fonts/SpaudibleSans-Regular.ttf" --silent --fail 2>nul
+    curl -L -o "data\gui\fonts\InstrumentSans-SemiBold.ttf" "https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/gui/fonts/InstrumentSans-SemiBold.ttf" --silent --fail 2>nul
+    
+    if exist "data\gui\fonts\SpaudibleSans-Regular.ttf" (
+        echo Fonts downloaded.
+    ) else (
+        echo [Warning] Could not download Spaudible Sans fonts; UI text may not render correctly.
+    )
 )
 :font_done
 

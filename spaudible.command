@@ -21,45 +21,33 @@ if [ ! -t 0 ] && [ "$(uname -s)" = "Linux" ]; then
     fi
 fi
 
+# Ensure we run from the batch file's directory
 cd "$(dirname "$0")"
 
-# Download Open Sans font for the GUI if not yet present
-if [ -f "data/fonts/OpenSans-Regular.ttf" ]; then
-    : # Font exists, skip
-else
-    echo "Downloading Open Sans font..."
-    mkdir -p data/fonts 2>/dev/null
+# Create GUI directories
+mkdir -p data/gui/fonts 2>/dev/null
 
-    # Primary: .ttf from GitHub
-    curl -L -o "data/fonts/OpenSans-Regular.ttf" "https://github.com/googlefonts/opensans/raw/refs/heads/main/fonts/ttf/OpenSans-Regular.ttf" --silent --fail 2>/dev/null
-    # Also grab SemiBold style for headers
-    curl -L -o "data/fonts/OpenSans-SemiBold.ttf" "https://github.com/googlefonts/opensans/raw/refs/heads/main/fonts/ttf/OpenSans-SemiBold.ttf" --silent --fail 2>/dev/null
-
-    # Fallback: Query Google Fonts API for direct .ttf URLs
-    if [ ! -f "data/fonts/OpenSans-Regular.ttf" ]; then
-        echo "Downloading font from fallback URL..."
-        
-        download_weight() {
-            local weight=$1
-            local name=$2
-            local css_url="https://fonts.googleapis.com/css2?family=Open+Sans:wght@${weight}"
-            
-            # Extract .ttf URL from CSS response
-            url=$(curl -s "$css_url" | grep -o 'https://fonts\.gstatic\.com/s/opensans/[^)]*\.ttf' | head -1)
-            if [ -n "$url" ]; then
-                curl -L -o "data/fonts/${name}.ttf" "$url" --silent --fail 2>/dev/null
-            fi
-        }
-        
-        # Download Regular (400) and SemiBold (600)
-        download_weight 400 "OpenSans-Regular"
-        download_weight 600 "OpenSans-SemiBold"
-    fi
-
-    if [ -f "data/fonts/OpenSans-Regular.ttf" ]; then
-        echo "Font downloaded."
+# Download background.png if not present
+if [ ! -f "data/gui/background.png" ]; then
+    echo "Downloading GUI background image..."
+    curl -L -o "data/gui/background.png" "https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/gui/background.png" --silent --fail 2>/dev/null
+    if [ -f "data/gui/background.png" ]; then
+        echo "background.png downloaded."
     else
-        echo "[Warning] Could not download font; will use system default."
+        echo "[Warning] Could not download background.png"
+    fi
+fi
+
+# Download Spaudible Sans + Instrument Sans fonts if not present
+if [ ! -f "data/gui/fonts/SpaudibleSans-Regular.ttf" ]; then
+    echo "Downloading GUI fonts..."
+    curl -L -o "data/gui/fonts/SpaudibleSans-Regular.ttf" "https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/gui/fonts/SpaudibleSans-Regular.ttf" --silent --fail 2>/dev/null
+    curl -L -o "data/gui/fonts/InstrumentSans-SemiBold.ttf" "https://raw.githubusercontent.com/wiki/Daveofthecave/spaudible/gui/fonts/InstrumentSans-SemiBold.ttf" --silent --fail 2>/dev/null
+    
+    if [ -f "data/gui/fonts/SpaudibleSans-Regular.ttf" ]; then
+        echo "Fonts downloaded."
+    else
+        echo "[Warning] Could not download SpaudibleSans fonts; UI may not render correctly."
     fi
 fi
 

@@ -62,7 +62,7 @@ class BackgroundManager:
             bg_path = Path(__file__).parent.parent.parent / "data" / "gui" / "background.png"
             
             if not bg_path.exists():
-                print(f"[Theme] Background not found at {bg_path}, using solid color")
+                print(f"[Theme] Background not found at {bg_path}; using solid color")
                 return False
                 
             width, height, channels, data = dpg.load_image(str(bg_path))
@@ -247,7 +247,7 @@ class GradientButtonFactory:
     
     def __init__(self):
         self._texture_cache = {}
-        self._font_path = Path(__file__).parent.parent.parent / "data" / "fonts" / "OpenSans-Regular.ttf"
+        self._font_path = Path(__file__).parent.parent.parent / "data" / "gui" / "fonts" / "SpaudibleSans-Regular.ttf"
         self._debug_mode = False  # Set to True for debugging hover/click events
         self._button_states = {}
         
