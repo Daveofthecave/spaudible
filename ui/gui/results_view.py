@@ -207,7 +207,7 @@ class ResultsView:
         fixed_content_width = (
             col_rank_w + sep_w + col_score_w + sep_w + sep_w + col_arrow_w
         )
-        new_song_width = max(self._s(200), inner_width - fixed_content_width)
+        new_song_width = max(self._s(200), inner_width - fixed_content_width - self._s(32))
 
         # Update header song button width
         if self._header_song_tag and dpg.does_item_exist(self._header_song_tag):
