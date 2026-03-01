@@ -114,7 +114,7 @@ def _init_genre_lut():
         print(f"❗️ Error loading genre mapping: {e}")
         return
     
-    print(f"✅ Loaded {len(genre_map)} unique genres from CSV")
+    # print(f"✅ Loaded {len(genre_map)} unique genres from CSV")
     
     # Populate LUT with open-addressing (linear probing)
     GENRE_LUT.fill(-1)
